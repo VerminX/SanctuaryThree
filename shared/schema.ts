@@ -118,18 +118,58 @@ export const eligibilityChecks = pgTable("eligibility_checks", {
   createdAt: timestamp("created_at").defaultNow(),
 });
 
-// Documents (Pre-Determination Letters, LMNs)
+// Documents (Pre-Determination Letters, LMNs) - Main document record
 export const documents = pgTable("documents", {
   id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
   patientId: uuid("patient_id").notNull().references(() => patients.id, { onDelete: "cascade" }),
   type: varchar("type", { length: 50 }).notNull(), // PreDetermination, LMN
-  version: integer("version").notNull().default(1),
+  currentVersion: integer("current_version").notNull().default(1),
   title: varchar("title", { length: 255 }).notNull(),
+  status: varchar("status", { length: 20 }).notNull().default("draft"), // draft, pending_approval, approved, signed, rejected
+  createdBy: varchar("created_by").notNull(),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+// Document Versions - Track all versions of each document
+export const documentVersions = pgTable("document_versions", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  documentId: uuid("document_id").notNull().references(() => documents.id, { onDelete: "cascade" }),
+  version: integer("version").notNull(),
   content: text("content").notNull(),
   pdfUrl: varchar("pdf_url", { length: 500 }),
   docxUrl: varchar("docx_url", { length: 500 }),
   citations: jsonb("citations").notNull(),
+  changeLog: text("change_log"), // Description of changes made
+  createdBy: varchar("created_by").notNull(),
   createdAt: timestamp("created_at").defaultNow(),
+});
+
+// Document Approvals - Track approval workflow
+export const documentApprovals = pgTable("document_approvals", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  documentId: uuid("document_id").notNull().references(() => documents.id, { onDelete: "cascade" }),
+  versionId: uuid("version_id").notNull().references(() => documentVersions.id, { onDelete: "cascade" }),
+  approverRole: varchar("approver_role", { length: 50 }).notNull(), // Physician, Admin, Reviewer
+  approverUserId: varchar("approver_user_id"),
+  status: varchar("status", { length: 20 }).notNull().default("pending"), // pending, approved, rejected
+  comments: text("comments"),
+  reviewedAt: timestamp("reviewed_at"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+// Electronic Signatures - Track digital signatures
+export const documentSignatures = pgTable("document_signatures", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  documentId: uuid("document_id").notNull().references(() => documents.id, { onDelete: "cascade" }),
+  versionId: uuid("version_id").notNull().references(() => documentVersions.id, { onDelete: "cascade" }),
+  signerUserId: varchar("signer_user_id").notNull(),
+  signerName: varchar("signer_name", { length: 255 }).notNull(),
+  signerRole: varchar("signer_role", { length: 100 }).notNull(),
+  signatureData: text("signature_data"), // Base64 encoded signature image
+  ipAddress: varchar("ip_address", { length: 45 }),
+  userAgent: text("user_agent"),
+  signedAt: timestamp("signed_at").defaultNow(),
 });
 
 // Audit Logs
@@ -179,8 +219,27 @@ export const eligibilityChecksRelations = relations(eligibilityChecks, ({ one })
   encounter: one(encounters, { fields: [eligibilityChecks.encounterId], references: [encounters.id] }),
 }));
 
-export const documentsRelations = relations(documents, ({ one }) => ({
+export const documentsRelations = relations(documents, ({ one, many }) => ({
   patient: one(patients, { fields: [documents.patientId], references: [patients.id] }),
+  versions: many(documentVersions),
+  approvals: many(documentApprovals),
+  signatures: many(documentSignatures),
+}));
+
+export const documentVersionsRelations = relations(documentVersions, ({ one, many }) => ({
+  document: one(documents, { fields: [documentVersions.documentId], references: [documents.id] }),
+  approvals: many(documentApprovals),
+  signatures: many(documentSignatures),
+}));
+
+export const documentApprovalsRelations = relations(documentApprovals, ({ one }) => ({
+  document: one(documents, { fields: [documentApprovals.documentId], references: [documents.id] }),
+  version: one(documentVersions, { fields: [documentApprovals.versionId], references: [documentVersions.id] }),
+}));
+
+export const documentSignaturesRelations = relations(documentSignatures, ({ one }) => ({
+  document: one(documents, { fields: [documentSignatures.documentId], references: [documents.id] }),
+  version: one(documentVersions, { fields: [documentSignatures.versionId], references: [documentVersions.id] }),
 }));
 
 export const auditLogsRelations = relations(auditLogs, ({ one }) => ({
@@ -195,7 +254,10 @@ export const insertPatientSchema = createInsertSchema(patients).omit({ id: true,
 export const insertEncounterSchema = createInsertSchema(encounters).omit({ id: true, createdAt: true, updatedAt: true });
 export const insertPolicySourceSchema = createInsertSchema(policySources).omit({ id: true, createdAt: true, updatedAt: true });
 export const insertEligibilityCheckSchema = createInsertSchema(eligibilityChecks).omit({ id: true, createdAt: true });
-export const insertDocumentSchema = createInsertSchema(documents).omit({ id: true, createdAt: true });
+export const insertDocumentSchema = createInsertSchema(documents).omit({ id: true, createdAt: true, updatedAt: true });
+export const insertDocumentVersionSchema = createInsertSchema(documentVersions).omit({ id: true, createdAt: true });
+export const insertDocumentApprovalSchema = createInsertSchema(documentApprovals).omit({ id: true, createdAt: true });
+export const insertDocumentSignatureSchema = createInsertSchema(documentSignatures).omit({ id: true, signedAt: true });
 export const insertAuditLogSchema = createInsertSchema(auditLogs).omit({ id: true, timestamp: true, currentHash: true });
 
 // Types
@@ -215,5 +277,11 @@ export type InsertEligibilityCheck = z.infer<typeof insertEligibilityCheckSchema
 export type EligibilityCheck = typeof eligibilityChecks.$inferSelect;
 export type InsertDocument = z.infer<typeof insertDocumentSchema>;
 export type Document = typeof documents.$inferSelect;
+export type InsertDocumentVersion = z.infer<typeof insertDocumentVersionSchema>;
+export type DocumentVersion = typeof documentVersions.$inferSelect;
+export type InsertDocumentApproval = z.infer<typeof insertDocumentApprovalSchema>;
+export type DocumentApproval = typeof documentApprovals.$inferSelect;
+export type InsertDocumentSignature = z.infer<typeof insertDocumentSignatureSchema>;
+export type DocumentSignature = typeof documentSignatures.$inferSelect;
 export type InsertAuditLog = z.infer<typeof insertAuditLogSchema>;
 export type AuditLog = typeof auditLogs.$inferSelect;

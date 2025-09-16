@@ -42,8 +42,7 @@ export async function generateDocument(request: DocumentGenerationRequest): Prom
       patientId,
       type,
       title: `${type} - ${patientData.firstName} ${patientData.lastName} - ${new Date().toLocaleDateString()}`,
-      content,
-      citations: eligibilityCheck.citations as any,
+      createdBy: 'system',
     });
 
     // Generate file paths
@@ -74,14 +73,20 @@ export async function generateDocument(request: DocumentGenerationRequest): Prom
       eligibilityCheck
     });
 
-    // Update document record with file paths
-    const updatedDocument = await storage.updateDocument(document.id, {
+    // Create document version with content and file paths
+    const documentVersion = await storage.createDocumentVersion({
+      documentId: document.id,
+      version: 1,
+      content,
       pdfUrl: pdfPath,
       docxUrl: docxPath,
+      citations: eligibilityCheck.citations as any,
+      changeLog: 'Initial version',
+      createdBy: 'system',
     });
 
     return {
-      id: updatedDocument.id,
+      id: document.id,
       pdfPath,
       docxPath,
       content,

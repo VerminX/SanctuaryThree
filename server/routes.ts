@@ -7,7 +7,9 @@ import {
   insertPatientSchema, 
   insertEncounterSchema,
   insertEligibilityCheckSchema,
-  insertDocumentSchema 
+  insertDocumentSchema,
+  insertDocumentVersionSchema,
+  insertDocumentSignatureSchema
 } from "@shared/schema";
 import { encryptPatientData, decryptPatientData, encryptEncounterNotes, decryptEncounterNotes } from "./services/encryption";
 import { analyzeEligibility, generateLetterContent } from "./services/openai";
@@ -116,23 +118,26 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(403).json({ message: "Access denied" });
       }
 
-      const patientDataSchema = insertPatientSchema.extend({
-        firstName: z.string(),
-        lastName: z.string(),
+      // Schema for validating request data (plain text from frontend)
+      const patientRequestSchema = z.object({
+        firstName: z.string().min(1, "First name is required"),
+        lastName: z.string().min(1, "Last name is required"),
+        mrn: z.string().min(1, "MRN is required"),
         dob: z.string().optional(),
+        payerType: z.enum(["Original Medicare", "Medicare Advantage"]),
+        planName: z.string().optional(),
+        macRegion: z.string().optional(),
       });
       
-      const { firstName, lastName, dob, ...patientData } = patientDataSchema.parse({
-        ...req.body,
-        tenantId
-      });
+      const { firstName, lastName, dob, ...otherData } = patientRequestSchema.parse(req.body);
 
       // Encrypt PHI
       const encryptedData = encryptPatientData(firstName, lastName, dob);
       
       const patient = await storage.createPatient({
-        ...patientData,
+        ...otherData,
         ...encryptedData,
+        tenantId,
       });
 
       // Log audit event
@@ -476,10 +481,230 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const documents = await storage.getDocumentsByPatient(patientId);
+
+      // AUDIT LOGGING: Track document access for regulatory compliance
+      await storage.createAuditLog({
+        tenantId: patient.tenantId,
+        userId,
+        action: 'VIEW_DOCUMENTS',
+        entity: 'Document',
+        entityId: patientId,
+        ipAddress: req.ip,
+        userAgent: req.get('User-Agent'),
+        previousHash: '',
+      });
+
       res.json(documents);
     } catch (error) {
       console.error("Error fetching documents:", error);
       res.status(500).json({ message: "Failed to fetch documents" });
+    }
+  });
+
+  // Advanced Document Version Control routes
+  
+  // Get document versions
+  app.get('/api/documents/:documentId/versions', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const { documentId } = req.params;
+      
+      const document = await storage.getDocument(documentId);
+      if (!document) {
+        return res.status(404).json({ message: "Document not found" });
+      }
+
+      const patient = await storage.getPatient(document.patientId);
+      if (!patient) {
+        return res.status(404).json({ message: "Patient not found" });
+      }
+
+      // Verify user has access to tenant
+      const userTenantRole = await storage.getUserTenantRole(userId, patient.tenantId);
+      if (!userTenantRole) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+
+      const versions = await storage.getDocumentVersions(documentId);
+
+      // AUDIT LOGGING: Track document version access for regulatory compliance
+      await storage.createAuditLog({
+        tenantId: patient.tenantId,
+        userId,
+        action: 'VIEW_DOCUMENT_VERSIONS',
+        entity: 'DocumentVersion',
+        entityId: documentId,
+        ipAddress: req.ip,
+        userAgent: req.get('User-Agent'),
+        previousHash: '',
+      });
+
+      res.json(versions);
+    } catch (error) {
+      console.error("Error fetching document versions:", error);
+      res.status(500).json({ message: "Failed to fetch document versions" });
+    }
+  });
+
+  // Create new document version
+  app.post('/api/documents/:documentId/versions', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const { documentId } = req.params;
+      
+      // SECURITY FIX: Comprehensive Zod validation for version creation
+      const versionRequestSchema = z.object({
+        content: z.string().min(1, "Document content is required"),
+        changeLog: z.string().min(1, "Change log is required").max(1000),
+      });
+      
+      const { content, changeLog } = versionRequestSchema.parse(req.body);
+      
+      const document = await storage.getDocument(documentId);
+      if (!document) {
+        return res.status(404).json({ message: "Document not found" });
+      }
+
+      const patient = await storage.getPatient(document.patientId);
+      if (!patient) {
+        return res.status(404).json({ message: "Patient not found" });
+      }
+
+      // Verify user has access to tenant
+      const userTenantRole = await storage.getUserTenantRole(userId, patient.tenantId);
+      if (!userTenantRole) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+
+      const newVersionNumber = document.currentVersion + 1;
+      
+      // Create new version
+      const newVersion = await storage.createDocumentVersion({
+        documentId,
+        version: newVersionNumber,
+        content,
+        citations: [], // Will be populated by document generation
+        changeLog,
+        createdBy: userId,
+      });
+
+      // Update document current version
+      await storage.updateDocument(documentId, {
+        currentVersion: newVersionNumber,
+        status: 'draft', // Reset to draft when new version created
+      });
+
+      // Log audit event
+      await storage.createAuditLog({
+        tenantId: patient.tenantId,
+        userId,
+        action: 'CREATE_DOCUMENT_VERSION',
+        entity: 'DocumentVersion',
+        entityId: newVersion.id,
+        ipAddress: req.ip,
+        userAgent: req.get('User-Agent'),
+        previousHash: '',
+      });
+
+      res.json(newVersion);
+    } catch (error) {
+      console.error("Error creating document version:", error);
+      res.status(500).json({ message: "Failed to create document version" });
+    }
+  });
+
+  // Submit document for approval
+  app.post('/api/documents/:documentId/submit-approval', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const { documentId } = req.params;
+      const { approverRole } = req.body;
+      
+      const document = await storage.getDocument(documentId);
+      if (!document) {
+        return res.status(404).json({ message: "Document not found" });
+      }
+
+      const patient = await storage.getPatient(document.patientId);
+      if (!patient) {
+        return res.status(404).json({ message: "Patient not found" });
+      }
+
+      // Verify user has access to tenant
+      const userTenantRole = await storage.getUserTenantRole(userId, patient.tenantId);
+      if (!userTenantRole) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+
+      const currentVersion = await storage.getCurrentDocumentVersion(documentId);
+      if (!currentVersion) {
+        return res.status(400).json({ message: "No current version found" });
+      }
+
+      // Create approval request
+      const approval = await storage.createDocumentApproval({
+        documentId,
+        versionId: currentVersion.id,
+        approverRole,
+        status: 'pending',
+      });
+
+      // STATE MACHINE: Update document status to pending approval
+      try {
+        await storage.updateDocument(documentId, {
+          status: 'pending_approval',
+        });
+      } catch (error: any) {
+        if (error.message.includes('STATE_TRANSITION_ERROR')) {
+          return res.status(409).json({
+            message: "Invalid state transition for approval submission",
+            error: error.message,
+            currentStatus: document.status,
+            attemptedStatus: 'pending_approval'
+          });
+        }
+        throw error;
+      }
+
+      // Log audit event
+      await storage.createAuditLog({
+        tenantId: patient.tenantId,
+        userId,
+        action: 'SUBMIT_DOCUMENT_APPROVAL',
+        entity: 'DocumentApproval',
+        entityId: approval.id,
+        ipAddress: req.ip,
+        userAgent: req.get('User-Agent'),
+        previousHash: '',
+      });
+
+      res.json({ message: "Document submitted for approval", approval });
+    } catch (error) {
+      console.error("Error submitting document for approval:", error);
+      res.status(500).json({ message: "Failed to submit document for approval" });
+    }
+  });
+
+
+
+  // Get pending approvals for user
+  app.get('/api/tenants/:tenantId/pending-approvals', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const { tenantId } = req.params;
+      
+      // Verify user has access to tenant
+      const userTenantRole = await storage.getUserTenantRole(userId, tenantId);
+      if (!userTenantRole) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+
+      // SECURITY FIX: Pass tenantId to enforce tenant isolation
+      const pendingApprovals = await storage.getPendingApprovals(userId, tenantId, userTenantRole.role);
+      res.json(pendingApprovals);
+    } catch (error) {
+      console.error("Error fetching pending approvals:", error);
+      res.status(500).json({ message: "Failed to fetch pending approvals" });
     }
   });
 
@@ -584,6 +809,175 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // CRITICAL MISSING ENDPOINT: Document approval processing
+  app.put('/api/documents/approvals/:approvalId', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const { approvalId } = req.params;
+      
+      // SECURITY FIX: Comprehensive Zod validation for approval processing
+      const approvalSchema = z.object({
+        status: z.enum(['approved', 'rejected']),
+        comments: z.string().optional(),
+        expectedVersion: z.number().min(1).optional(), // VERSION VALIDATION
+      });
+      
+      const { status, comments, expectedVersion } = approvalSchema.parse(req.body);
+      
+      const approval = await storage.getDocumentApproval(approvalId);
+      if (!approval) {
+        return res.status(404).json({ message: "Approval not found" });
+      }
+
+      const document = await storage.getDocument(approval.documentId);
+      if (!document) {
+        return res.status(404).json({ message: "Document not found" });
+      }
+
+      const patient = await storage.getPatient(document.patientId);
+      if (!patient) {
+        return res.status(404).json({ message: "Patient not found" });
+      }
+
+      // Verify user has access to tenant
+      const userTenantRole = await storage.getUserTenantRole(userId, patient.tenantId);
+      if (!userTenantRole) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+
+      // VERSION ALIGNMENT PROTECTION: Check If-Match style precondition
+      if (expectedVersion && document.currentVersion !== expectedVersion) {
+        return res.status(412).json({ 
+          message: "Precondition Failed - Document version mismatch",
+          currentVersion: document.currentVersion,
+          expectedVersion
+        });
+      }
+
+      // Process approval atomically with audit logging
+      const updatedApproval = await storage.processDocumentApproval(approvalId, {
+        status,
+        comments,
+        approverUserId: userId,
+        tenantId: patient.tenantId,
+        ipAddress: req.ip,
+        userAgent: req.get('User-Agent'),
+      });
+
+      res.json(updatedApproval);
+    } catch (error: any) {
+      if (error.message.includes('STATE_TRANSITION_ERROR')) {
+        return res.status(409).json({
+          message: "Invalid state transition for document approval",
+          error: error.message
+        });
+      }
+      console.error("Error processing document approval:", error);
+      res.status(500).json({ message: "Failed to process document approval" });
+    }
+  });
+
+  // CRITICAL MISSING ENDPOINT: Electronic signature
+  app.post('/api/documents/:documentId/sign', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const { documentId } = req.params;
+      
+      // SECURITY FIX: Comprehensive Zod validation for signature data
+      const signatureSchema = z.object({
+        signatureData: z.string().min(1, "Signature data is required"),
+        signerName: z.string().min(1, "Signer name is required"),
+        signerRole: z.string().min(1, "Signer role is required"),
+        expectedVersion: z.number().min(1).optional(), // VERSION VALIDATION
+      });
+      
+      const { signatureData, signerName, signerRole, expectedVersion } = signatureSchema.parse(req.body);
+      
+      const document = await storage.getDocument(documentId);
+      if (!document) {
+        return res.status(404).json({ message: "Document not found" });
+      }
+
+      // STATE MACHINE: Only approved documents can be signed
+      if (document.status !== 'approved') {
+        return res.status(409).json({
+          message: "Document must be approved before signing",
+          currentStatus: document.status,
+          requiredStatus: 'approved'
+        });
+      }
+
+      const patient = await storage.getPatient(document.patientId);
+      if (!patient) {
+        return res.status(404).json({ message: "Patient not found" });
+      }
+
+      // Verify user has access to tenant
+      const userTenantRole = await storage.getUserTenantRole(userId, patient.tenantId);
+      if (!userTenantRole) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+
+      // VERSION ALIGNMENT PROTECTION: Check If-Match style precondition
+      if (expectedVersion && document.currentVersion !== expectedVersion) {
+        return res.status(412).json({ 
+          message: "Precondition Failed - Document version mismatch",
+          currentVersion: document.currentVersion,
+          expectedVersion
+        });
+      }
+
+      // Create encrypted signature
+      const signature = await storage.createDocumentSignature({
+        documentId,
+        signerUserId: userId,
+        signerName,
+        signerRole,
+        signatureData, // This will be encrypted in storage layer
+      });
+
+      // STATE MACHINE: Update document status to signed atomically
+      try {
+        await storage.updateDocument(documentId, {
+          status: 'signed',
+        });
+      } catch (error: any) {
+        if (error.message.includes('STATE_TRANSITION_ERROR')) {
+          return res.status(409).json({
+            message: "Invalid state transition for document signing",
+            error: error.message,
+            currentStatus: document.status,
+            attemptedStatus: 'signed'
+          });
+        }
+        throw error;
+      }
+
+      // Log audit event for signature
+      await storage.createAuditLog({
+        tenantId: patient.tenantId,
+        userId,
+        action: 'SIGN_DOCUMENT',
+        entity: 'DocumentSignature',
+        entityId: signature.id,
+        ipAddress: req.ip,
+        userAgent: req.get('User-Agent'),
+        previousHash: '',
+      });
+
+      res.json(signature);
+    } catch (error: any) {
+      if (error.message.includes('STATE_TRANSITION_ERROR')) {
+        return res.status(409).json({
+          message: "Invalid state transition for document signing",
+          error: error.message
+        });
+      }
+      console.error("Error signing document:", error);
+      res.status(500).json({ message: "Failed to sign document" });
+    }
+  });
+
   // Audit log routes
   app.get('/api/tenants/:tenantId/audit-logs', isAuthenticated, async (req: any, res) => {
     try {
@@ -606,36 +1000,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Dashboard stats route
-  app.get('/api/tenants/:tenantId/dashboard-stats', isAuthenticated, async (req: any, res) => {
-    try {
-      const userId = req.user.claims.sub;
-      const { tenantId } = req.params;
-      
-      // Verify user has access to tenant
-      const userTenantRole = await storage.getUserTenantRole(userId, tenantId);
-      if (!userTenantRole) {
-        return res.status(403).json({ message: "Access denied" });
-      }
-
-      const patients = await storage.getPatientsByTenant(tenantId);
-      const recentAuditLogs = await storage.getAuditLogsByTenant(tenantId, 10);
-      
-      // Calculate basic stats
-      const stats = {
-        activePatients: patients.length,
-        pendingEligibility: 0, // Would calculate based on eligibility checks
-        generatedLetters: 0,   // Would calculate based on documents
-        policyUpdates: 0,      // Would calculate based on recent policy changes
-        recentActivity: recentAuditLogs.slice(0, 5),
-      };
-
-      res.json(stats);
-    } catch (error) {
-      console.error("Error fetching dashboard stats:", error);
-      res.status(500).json({ message: "Failed to fetch dashboard stats" });
-    }
-  });
 
   const httpServer = createServer(app);
   return httpServer;

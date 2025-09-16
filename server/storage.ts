@@ -7,6 +7,9 @@ import {
   policySources,
   eligibilityChecks,
   documents,
+  documentVersions,
+  documentApprovals,
+  documentSignatures,
   auditLogs,
   type User,
   type UpsertUser,
@@ -24,12 +27,24 @@ import {
   type EligibilityCheck,
   type InsertDocument,
   type Document,
+  type InsertDocumentVersion,
+  type DocumentVersion,
+  type InsertDocumentApproval,
+  type DocumentApproval,
+  type InsertDocumentSignature,
+  type DocumentSignature,
   type InsertAuditLog,
   type AuditLog,
 } from "@shared/schema";
 import { db } from "./db";
 import { eq, and, desc, asc } from "drizzle-orm";
 import crypto from "crypto";
+import { 
+  encryptSignatureData, 
+  decryptSignatureData, 
+  encryptDocumentContent, 
+  decryptDocumentContent 
+} from "./services/encryption";
 
 // Interface for storage operations
 export interface IStorage {
@@ -77,7 +92,33 @@ export interface IStorage {
   createDocument(document: InsertDocument): Promise<Document>;
   getDocument(id: string): Promise<Document | undefined>;
   getDocumentsByPatient(patientId: string): Promise<Document[]>;
-  updateDocument(id: string, document: Partial<InsertDocument>): Promise<Document>;
+  updateDocument(id: string, document: Partial<Document>): Promise<Document>;
+  
+  // Document Version Control operations
+  createDocumentVersion(version: InsertDocumentVersion): Promise<DocumentVersion>;
+  getDocumentVersions(documentId: string): Promise<DocumentVersion[]>;
+  getDocumentVersion(versionId: string): Promise<DocumentVersion | undefined>;
+  getCurrentDocumentVersion(documentId: string): Promise<DocumentVersion | undefined>;
+  
+  // Document Approval operations
+  createDocumentApproval(approval: InsertDocumentApproval): Promise<DocumentApproval>;
+  getDocumentApprovals(documentId: string): Promise<DocumentApproval[]>;
+  getDocumentApproval(approvalId: string): Promise<DocumentApproval | undefined>;
+  updateDocumentApproval(approvalId: string, updates: Partial<DocumentApproval>): Promise<DocumentApproval>;
+  processDocumentApproval(approvalId: string, updates: {
+    status: 'approved' | 'rejected';
+    comments?: string;
+    approverUserId: string;
+    tenantId: string;
+    ipAddress?: string;
+    userAgent?: string;
+  }): Promise<DocumentApproval>;
+  getPendingApprovals(userId: string, tenantId: string, role?: string): Promise<DocumentApproval[]>;
+  
+  // Electronic Signature operations
+  createDocumentSignature(signature: InsertDocumentSignature): Promise<DocumentSignature>;
+  getDocumentSignatures(documentId: string): Promise<DocumentSignature[]>;
+  getDocumentSignature(signatureId: string): Promise<DocumentSignature | undefined>;
   
   // Audit operations
   createAuditLog(log: InsertAuditLog): Promise<AuditLog>;
@@ -85,6 +126,29 @@ export interface IStorage {
 }
 
 export class DatabaseStorage implements IStorage {
+
+  // ENHANCED STATE MACHINE: Define valid document state transitions
+  private readonly validStateTransitions: Record<string, string[]> = {
+    'draft': ['pending_approval'],
+    'pending_approval': ['approved', 'rejected'],
+    'approved': ['signed'],
+    'rejected': [], // Terminal state
+    'signed': [] // Terminal state
+  };
+
+  // ENHANCED STATE MACHINE: Validate state transition
+  private validateStateTransition(currentStatus: string, newStatus: string): { isValid: boolean; error?: string } {
+    const allowedTransitions = this.validStateTransitions[currentStatus] || [];
+    
+    if (!allowedTransitions.includes(newStatus)) {
+      return {
+        isValid: false,
+        error: `Invalid state transition from '${currentStatus}' to '${newStatus}'. Allowed transitions: [${allowedTransitions.join(', ')}]`
+      };
+    }
+    
+    return { isValid: true };
+  }
   // User operations (IMPORTANT) these user operations are mandatory for Replit Auth.
   async getUser(id: string): Promise<User | undefined> {
     const [user] = await db.select().from(users).where(eq(users.id, id));
@@ -280,7 +344,7 @@ export class DatabaseStorage implements IStorage {
       .orderBy(desc(eligibilityChecks.createdAt));
   }
 
-  // Document operations
+  // Enhanced Document operations with version control
   async createDocument(document: InsertDocument): Promise<Document> {
     const [newDocument] = await db.insert(documents).values(document).returning();
     return newDocument;
@@ -299,13 +363,247 @@ export class DatabaseStorage implements IStorage {
       .orderBy(desc(documents.createdAt));
   }
 
-  async updateDocument(id: string, document: Partial<InsertDocument>): Promise<Document> {
+  async updateDocument(id: string, updates: Partial<Document>): Promise<Document> {
+    // STATE MACHINE ENFORCEMENT: Validate status transitions if status is being updated
+    if (updates.status) {
+      const currentDocument = await this.getDocument(id);
+      if (!currentDocument) {
+        throw new Error('Document not found');
+      }
+      
+      const validation = this.validateStateTransition(currentDocument.status, updates.status);
+      if (!validation.isValid) {
+        throw new Error(`STATE_TRANSITION_ERROR: ${validation.error}`);
+      }
+    }
+
     const [updatedDocument] = await db
       .update(documents)
-      .set(document)
+      .set({ ...updates, updatedAt: new Date() })
       .where(eq(documents.id, id))
       .returning();
     return updatedDocument;
+  }
+
+  // Document Version operations
+  async createDocumentVersion(version: InsertDocumentVersion): Promise<DocumentVersion> {
+    // CRITICAL HIPAA FIX: Encrypt document content before storage (may contain PHI)
+    const encryptedVersion = {
+      ...version,
+      content: encryptDocumentContent(version.content),
+    };
+    
+    const [newVersion] = await db.insert(documentVersions).values(encryptedVersion).returning();
+    
+    // Return decrypted content to caller (for API response)
+    return {
+      ...newVersion,
+      content: decryptDocumentContent(newVersion.content),
+    };
+  }
+
+  async getDocumentVersions(documentId: string): Promise<DocumentVersion[]> {
+    const versions = await db
+      .select()
+      .from(documentVersions)
+      .where(eq(documentVersions.documentId, documentId))
+      .orderBy(desc(documentVersions.version));
+    
+    // CRITICAL HIPAA FIX: Decrypt document content for authorized users
+    return versions.map(version => ({
+      ...version,
+      content: decryptDocumentContent(version.content),
+    }));
+  }
+
+  async getDocumentVersion(versionId: string): Promise<DocumentVersion | undefined> {
+    const [version] = await db.select().from(documentVersions).where(eq(documentVersions.id, versionId));
+    
+    if (!version) return undefined;
+    
+    // CRITICAL HIPAA FIX: Decrypt document content for authorized users
+    return {
+      ...version,
+      content: decryptDocumentContent(version.content),
+    };
+  }
+
+  async getCurrentDocumentVersion(documentId: string): Promise<DocumentVersion | undefined> {
+    // Get the document's current version number
+    const document = await this.getDocument(documentId);
+    if (!document) return undefined;
+
+    const [currentVersion] = await db
+      .select()
+      .from(documentVersions)
+      .where(
+        and(
+          eq(documentVersions.documentId, documentId),
+          eq(documentVersions.version, document.currentVersion)
+        )
+      );
+    
+    if (!currentVersion) return undefined;
+    
+    // CRITICAL HIPAA FIX: Decrypt document content for authorized users
+    return {
+      ...currentVersion,
+      content: decryptDocumentContent(currentVersion.content),
+    };
+  }
+
+  // Document Approval operations
+  async createDocumentApproval(approval: InsertDocumentApproval): Promise<DocumentApproval> {
+    const [newApproval] = await db.insert(documentApprovals).values(approval).returning();
+    return newApproval;
+  }
+
+  async getDocumentApprovals(documentId: string): Promise<DocumentApproval[]> {
+    return await db
+      .select()
+      .from(documentApprovals)
+      .where(eq(documentApprovals.documentId, documentId))
+      .orderBy(desc(documentApprovals.createdAt));
+  }
+
+  async getDocumentApproval(approvalId: string): Promise<DocumentApproval | undefined> {
+    const [approval] = await db.select().from(documentApprovals).where(eq(documentApprovals.id, approvalId));
+    return approval;
+  }
+
+  async updateDocumentApproval(approvalId: string, updates: Partial<DocumentApproval>): Promise<DocumentApproval> {
+    const [updatedApproval] = await db
+      .update(documentApprovals)
+      .set({ ...updates, reviewedAt: new Date() })
+      .where(eq(documentApprovals.id, approvalId))
+      .returning();
+    return updatedApproval;
+  }
+
+  // SECURITY FIX: Atomic approval processing with transaction and audit logging
+  async processDocumentApproval(approvalId: string, updates: {
+    status: 'approved' | 'rejected';
+    comments?: string;
+    approverUserId: string;
+    tenantId: string;
+    ipAddress?: string;
+    userAgent?: string;
+  }): Promise<DocumentApproval> {
+    return await db.transaction(async (tx) => {
+      // Update the approval record
+      const [updatedApproval] = await tx
+        .update(documentApprovals)
+        .set({
+          status: updates.status,
+          comments: updates.comments,
+          approverUserId: updates.approverUserId,
+          reviewedAt: new Date(),
+        })
+        .where(eq(documentApprovals.id, approvalId))
+        .returning();
+
+      if (!updatedApproval) {
+        throw new Error('Approval not found');
+      }
+
+      // Update document status atomically
+      await tx
+        .update(documents)
+        .set({
+          status: updates.status === 'approved' ? 'approved' : 'rejected',
+          updatedAt: new Date(),
+        })
+        .where(eq(documents.id, updatedApproval.documentId));
+
+      // Create audit log atomically
+      const auditData = {
+        tenantId: updates.tenantId,
+        userId: updates.approverUserId,
+        action: updates.status === 'approved' ? 'APPROVE_DOCUMENT' : 'REJECT_DOCUMENT',
+        entity: 'DocumentApproval',
+        entityId: updatedApproval.id,
+        ipAddress: updates.ipAddress || '',
+        userAgent: updates.userAgent || '',
+        previousHash: '',
+      };
+      
+      const currentHash = this.generateAuditHash(auditData);
+      await tx.insert(auditLogs).values({ ...auditData, currentHash });
+
+      return updatedApproval;
+    });
+  }
+
+  async getPendingApprovals(userId: string, tenantId: string, role?: string): Promise<DocumentApproval[]> {
+    // SECURITY FIX: Enforce tenant isolation by joining through documents->patients
+    const conditions = [
+      eq(documentApprovals.status, 'pending'),
+      eq(patients.tenantId, tenantId) // Critical: filter by tenant
+    ];
+    
+    if (role) {
+      conditions.push(eq(documentApprovals.approverRole, role));
+    }
+    
+    return await db
+      .select({
+        id: documentApprovals.id,
+        documentId: documentApprovals.documentId,
+        versionId: documentApprovals.versionId,
+        approverRole: documentApprovals.approverRole,
+        approverUserId: documentApprovals.approverUserId,
+        status: documentApprovals.status,
+        comments: documentApprovals.comments,
+        reviewedAt: documentApprovals.reviewedAt,
+        createdAt: documentApprovals.createdAt,
+      })
+      .from(documentApprovals)
+      .innerJoin(documents, eq(documentApprovals.documentId, documents.id))
+      .innerJoin(patients, eq(documents.patientId, patients.id))
+      .where(and(...conditions))
+      .orderBy(desc(documentApprovals.createdAt));
+  }
+
+  // Electronic Signature operations
+  async createDocumentSignature(signature: InsertDocumentSignature): Promise<DocumentSignature> {
+    // CRITICAL HIPAA FIX: Encrypt signature data before storage
+    const encryptedSignature = signature.signatureData 
+      ? { ...signature, signatureData: encryptSignatureData(signature.signatureData) }
+      : signature;
+    
+    const [newSignature] = await db.insert(documentSignatures).values(encryptedSignature).returning();
+    
+    // Return decrypted signature data to caller (for API response)
+    return {
+      ...newSignature,
+      signatureData: newSignature.signatureData ? decryptSignatureData(newSignature.signatureData) : null,
+    };
+  }
+
+  async getDocumentSignatures(documentId: string): Promise<DocumentSignature[]> {
+    const signatures = await db
+      .select()
+      .from(documentSignatures)
+      .where(eq(documentSignatures.documentId, documentId))
+      .orderBy(desc(documentSignatures.signedAt));
+    
+    // CRITICAL HIPAA FIX: Decrypt signature data for authorized users
+    return signatures.map(signature => ({
+      ...signature,
+      signatureData: signature.signatureData ? decryptSignatureData(signature.signatureData) : null,
+    }));
+  }
+
+  async getDocumentSignature(signatureId: string): Promise<DocumentSignature | undefined> {
+    const [signature] = await db.select().from(documentSignatures).where(eq(documentSignatures.id, signatureId));
+    
+    if (!signature) return undefined;
+    
+    // CRITICAL HIPAA FIX: Decrypt signature data for authorized users
+    return {
+      ...signature,
+      signatureData: signature.signatureData ? decryptSignatureData(signature.signatureData) : null,
+    };
   }
 
   // Audit operations
