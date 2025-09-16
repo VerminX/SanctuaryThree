@@ -63,7 +63,10 @@ export interface IStorage {
   getPolicySource(id: string): Promise<PolicySource | undefined>;
   getPolicySourcesByMAC(mac: string): Promise<PolicySource[]>;
   getActivePolicySourcesByMAC(mac: string): Promise<PolicySource[]>;
+  getPolicySourceByLCD(lcdId: string): Promise<PolicySource[]>;
+  getAllPolicySources(): Promise<PolicySource[]>;
   updatePolicySource(id: string, policy: Partial<InsertPolicySource>): Promise<PolicySource>;
+  updatePolicySourceStatus(id: string, status: string): Promise<PolicySource>;
   
   // Eligibility operations
   createEligibilityCheck(check: InsertEligibilityCheck): Promise<EligibilityCheck>;
@@ -229,6 +232,30 @@ export class DatabaseStorage implements IStorage {
     const [updatedPolicy] = await db
       .update(policySources)
       .set({ ...policy, updatedAt: new Date() })
+      .where(eq(policySources.id, id))
+      .returning();
+    return updatedPolicy;
+  }
+
+  async getPolicySourceByLCD(lcdId: string): Promise<PolicySource[]> {
+    return await db
+      .select()
+      .from(policySources)
+      .where(eq(policySources.lcdId, lcdId))
+      .orderBy(desc(policySources.effectiveDate));
+  }
+
+  async getAllPolicySources(): Promise<PolicySource[]> {
+    return await db
+      .select()
+      .from(policySources)
+      .orderBy(desc(policySources.effectiveDate));
+  }
+
+  async updatePolicySourceStatus(id: string, status: string): Promise<PolicySource> {
+    const [updatedPolicy] = await db
+      .update(policySources)
+      .set({ status, updatedAt: new Date() })
       .where(eq(policySources.id, id))
       .returning();
     return updatedPolicy;

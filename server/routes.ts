@@ -13,6 +13,7 @@ import { encryptPatientData, decryptPatientData, encryptEncounterNotes, decryptE
 import { analyzeEligibility, generateLetterContent } from "./services/openai";
 import { buildRAGContext, initializePolicyDatabase } from "./services/ragService";
 import { generateDocument } from "./services/documentGenerator";
+import { performPolicyUpdate, scheduledPolicyUpdate, getPolicyUpdateStatus } from "./services/policyUpdater";
 import { z } from "zod";
 
 export async function registerRoutes(app: Express): Promise<Server> {
@@ -504,6 +505,82 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error("Error fetching policies:", error);
       res.status(500).json({ message: "Failed to fetch policies" });
+    }
+  });
+
+  // Policy update management routes
+  app.post('/api/admin/policies/update', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      
+      // For now, allow any authenticated user to trigger policy updates
+      // In production, this should be restricted to admin users
+      console.log(`Policy update triggered by user: ${userId}`);
+      
+      const result = await performPolicyUpdate();
+      
+      // Log audit event  
+      await storage.createAuditLog({
+        tenantId: null, // System-level audit log
+        userId,
+        action: 'TRIGGER_POLICY_UPDATE',
+        entity: 'PolicySource',
+        entityId: 'system',
+        ipAddress: req.ip,
+        userAgent: req.get('User-Agent'),
+        previousHash: '',
+      });
+
+      res.json({
+        message: 'Policy update completed successfully',
+        result
+      });
+    } catch (error) {
+      console.error("Error performing policy update:", error);
+      res.status(500).json({ message: "Failed to update policies" });
+    }
+  });
+
+  app.get('/api/admin/policies/status', isAuthenticated, async (req: any, res) => {
+    try {
+      const status = await getPolicyUpdateStatus();
+      res.json(status);
+    } catch (error) {
+      console.error("Error getting policy update status:", error);
+      res.status(500).json({ message: "Failed to get policy status" });
+    }
+  });
+
+  app.get('/api/tenants/:tenantId/dashboard-stats', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const { tenantId } = req.params;
+      
+      // Verify user has access to tenant
+      const userTenantRole = await storage.getUserTenantRole(userId, tenantId);
+      if (!userTenantRole) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+
+      // Get stats for dashboard
+      const patients = await storage.getPatientsByTenant(tenantId);
+      const activePatients = patients.length;
+      
+      // Count pending eligibility checks (simplified for now)
+      const pendingEligibility = 0; // Would need to implement across all patients
+      const generatedLetters = 0; // Would need to implement document count
+      const policyUpdates = 1; // Placeholder
+
+      res.json({
+        activePatients,
+        pendingEligibility, 
+        generatedLetters,
+        policyUpdates,
+        recentActivity: []
+      });
+    } catch (error) {
+      console.error("Error fetching dashboard stats:", error);
+      res.status(500).json({ message: "Failed to fetch dashboard stats" });
     }
   });
 

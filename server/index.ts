@@ -1,6 +1,7 @@
 import express, { type Request, Response, NextFunction } from "express";
 import { registerRoutes } from "./routes";
 import { setupVite, serveStatic, log } from "./vite";
+import { scheduledPolicyUpdate } from "./services/policyUpdater";
 
 const app = express();
 app.use(express.json());
@@ -67,5 +68,38 @@ app.use((req, res, next) => {
     reusePort: true,
   }, () => {
     log(`serving on port ${port}`);
+    
+    // Start nightly policy update scheduler
+    setupPolicyUpdateScheduler();
   });
+
+  // Simple scheduler for nightly policy updates
+  function setupPolicyUpdateScheduler() {
+    const scheduleNextUpdate = () => {
+      const now = new Date();
+      const tomorrow = new Date(now);
+      tomorrow.setDate(now.getDate() + 1);
+      tomorrow.setHours(2, 0, 0, 0); // Run at 2:00 AM
+
+      const msUntilNextRun = tomorrow.getTime() - now.getTime();
+      
+      log(`Next policy update scheduled for: ${tomorrow.toISOString()}`);
+      
+      setTimeout(async () => {
+        try {
+          log('Starting scheduled policy update...');
+          await scheduledPolicyUpdate();
+          log('Scheduled policy update completed successfully');
+        } catch (error) {
+          log(`Scheduled policy update failed: ${error}`);
+        }
+        
+        // Schedule the next update
+        scheduleNextUpdate();
+      }, msUntilNextRun);
+    };
+
+    // Start the scheduler
+    scheduleNextUpdate();
+  }
 })();
