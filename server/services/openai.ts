@@ -1,6 +1,6 @@
 import OpenAI from "openai";
 
-// the newest OpenAI model is "gpt-5" which was released August 7, 2025. do not change this unless explicitly requested by the user
+// Using GPT-4o-mini for AI-powered medical eligibility analysis with JSON mode support
 const openai = new OpenAI({ 
   apiKey: process.env.OPENAI_API_KEY || process.env.AZURE_OPENAI_API_KEY 
 });
@@ -67,7 +67,7 @@ Respond with JSON in this exact format:
 
   try {
     const response = await openai.chat.completions.create({
-      model: "gpt-5",
+      model: "gpt-4o-mini",
       messages: [
         {
           role: "system",
@@ -121,7 +121,7 @@ Return the letter content as plain text.`;
 
   try {
     const response = await openai.chat.completions.create({
-      model: "gpt-5",
+      model: "gpt-4o-mini",
       messages: [
         {
           role: "system",

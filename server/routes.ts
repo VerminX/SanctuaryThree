@@ -409,7 +409,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         encounterId: encounter.id,
         result: analysisResult,
         citations: [...ragContext.citations, ...analysisResult.citations],
-        llmModel: 'gpt-5',
+        llmModel: 'gpt-4o-mini',
       });
 
       // Log audit event

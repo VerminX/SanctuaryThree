@@ -1,17 +1,9 @@
-import { Pool, neonConfig } from '@neondatabase/serverless';
-import ws from "ws";
 import { encryptEncounterNotes } from '../server/services/encryption.js';
+import { DatabaseStorage } from '../server/storage.js';
+import { db } from '../server/db.js';
+import { patients } from '../shared/schema.js';
 
-// Database connection setup for Neon
-neonConfig.webSocketConstructor = ws;
-
-if (!process.env.DATABASE_URL) {
-  throw new Error(
-    "DATABASE_URL must be set. Did you forget to provision a database?",
-  );
-}
-
-const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+const storage = new DatabaseStorage();
 
 // Sample encounter data templates for different scenarios
 const encounterTemplates = [
@@ -195,15 +187,14 @@ async function generateTestEncounters() {
   try {
     console.log('Starting test encounter generation...');
     
-    // Get all existing patients
-    const patientsResult = await pool.query('SELECT id, mrn, mac_region, payer_type FROM patients');
-    const patients = patientsResult.rows;
+    // Get all existing patients using direct DB query for test data generation
+    const allPatients = await db.select().from(patients);
     
-    console.log(`Found ${patients.length} patients`);
+    console.log(`Found ${allPatients.length} patients`);
     
     let encounterCount = 0;
     
-    for (const patient of patients) {
+    for (const patient of allPatients) {
       // Generate 1-2 encounters per patient with different scenarios
       const numEncounters = Math.floor(Math.random() * 2) + 1;
       
@@ -225,28 +216,16 @@ async function generateTestEncounters() {
           duration: template.duration
         };
         
-        // Insert encounter
-        await pool.query(`
-          INSERT INTO encounters (
-            patient_id, 
-            date, 
-            encrypted_notes, 
-            wound_details, 
-            conservative_care, 
-            infection_status,
-            comorbidities,
-            created_at,
-            updated_at
-          ) VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), NOW())
-        `, [
-          patient.id,
-          encounterDate,
-          JSON.stringify(encryptedNotes),
-          JSON.stringify(woundDetails),
-          JSON.stringify(template.conservativeCare),
-          template.infectionStatus,
-          JSON.stringify(template.comorbidities)
-        ]);
+        // Create encounter using storage interface
+        await storage.createEncounter({
+          patientId: patient.id,
+          date: encounterDate,
+          encryptedNotes,
+          woundDetails: woundDetails,
+          conservativeCare: template.conservativeCare,
+          infectionStatus: template.infectionStatus,
+          comorbidities: template.comorbidities
+        });
         
         encounterCount++;
         console.log(`Created encounter ${encounterCount} for patient ${patient.mrn} (${template.woundType})`);
@@ -257,8 +236,6 @@ async function generateTestEncounters() {
     
   } catch (error) {
     console.error('Error generating test encounters:', error);
-  } finally {
-    await pool.end();
   }
 }
 
