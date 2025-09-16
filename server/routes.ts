@@ -11,7 +11,7 @@ import {
   insertDocumentVersionSchema,
   insertDocumentSignatureSchema
 } from "@shared/schema";
-import { encryptPatientData, decryptPatientData, encryptEncounterNotes, decryptEncounterNotes } from "./services/encryption";
+import { encryptPatientData, decryptPatientData, safeDecryptPatientData, encryptEncounterNotes, decryptEncounterNotes } from "./services/encryption";
 import { analyzeEligibility, generateLetterContent } from "./services/openai";
 import { buildRAGContext, initializePolicyDatabase } from "./services/ragService";
 import { generateDocument } from "./services/documentGenerator";
@@ -24,6 +24,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // Initialize policy database on startup
   await initializePolicyDatabase();
+
 
   // Auth routes
   app.get('/api/auth/user', isAuthenticated, async (req: any, res) => {
@@ -177,11 +178,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const patients = await storage.getPatientsByTenant(tenantId);
       
-      // Decrypt patient data for display
-      const decryptedPatients = patients.map(patient => ({
-        ...patient,
-        ...decryptPatientData(patient),
-      }));
+      // RESILIENT DECRYPTION: Handle corrupted patient records gracefully
+      const decryptionResults = patients.map(patient => safeDecryptPatientData(patient));
+      const decryptedPatients = decryptionResults.map(result => result.patientData);
+      const failedDecryptions = decryptionResults.filter(result => result.decryptionError);
+      
+      // Log summary of decryption issues for admin review
+      if (failedDecryptions.length > 0) {
+        console.warn(`PATIENT DECRYPTION WARNING: ${failedDecryptions.length} out of ${patients.length} patients have corrupted encrypted data:`, 
+          failedDecryptions.map(r => ({ id: r.patientData.id }))
+        );
+      }
 
       // Log audit event
       await storage.createAuditLog({
@@ -230,12 +237,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
         previousHash: '',
       });
 
-      // Return patient data with decrypted info
-      const decryptedData = decryptPatientData(patient);
-      res.json({
-        ...patient,
-        ...decryptedData,
-      });
+      // RESILIENT DECRYPTION: Handle corrupted patient data gracefully  
+      const decryptionResult = safeDecryptPatientData(patient);
+      
+      if (decryptionResult.decryptionError) {
+        console.error(`Individual patient access failed for patient ${patientId}: corrupted encrypted data`);
+        return res.status(422).json({ 
+          message: "Patient data is corrupted and cannot be decrypted. Please contact support.", 
+          patientId,
+          corruptedData: true 
+        });
+      }
+      
+      res.json(decryptionResult.patientData);
     } catch (error) {
       console.error("Error fetching patient:", error);
       res.status(500).json({ message: "Failed to fetch patient" });
@@ -259,21 +273,39 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(403).json({ message: "Access denied" });
       }
 
-      const encounterDataSchema = insertEncounterSchema.extend({
+      // Custom validation schema that handles string dates and plain notes
+      const encounterRequestSchema = z.object({
+        date: z.string().or(z.date()).transform((val) => {
+          return typeof val === 'string' ? new Date(val) : val;
+        }),
         notes: z.array(z.string()),
+        woundDetails: z.any(), // JSONB field
+        conservativeCare: z.any(), // JSONB field
+        infectionStatus: z.string().optional(),
+        comorbidities: z.any().optional(), // JSONB field
+        attachmentMetadata: z.any().optional(), // JSONB field
       });
       
-      const { notes, ...encounterData } = encounterDataSchema.parse({
-        ...req.body,
+      const { notes, ...encounterData } = encounterRequestSchema.parse(req.body);
+      
+      // Add patientId to the validated data
+      const completeEncounterData = {
+        ...encounterData,
         patientId
-      });
+      };
 
       // Encrypt encounter notes
       const encryptedNotes = encryptEncounterNotes(notes);
       
       const encounter = await storage.createEncounter({
-        ...encounterData,
+        patientId: completeEncounterData.patientId,
+        date: completeEncounterData.date,
         encryptedNotes,
+        woundDetails: completeEncounterData.woundDetails || {},
+        conservativeCare: completeEncounterData.conservativeCare || {},
+        infectionStatus: completeEncounterData.infectionStatus,
+        comorbidities: completeEncounterData.comorbidities,
+        attachmentMetadata: completeEncounterData.attachmentMetadata,
       });
 
       // Log audit event
@@ -927,9 +959,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
         });
       }
 
+      // Get current version for signature
+      const currentVersion = await storage.getCurrentDocumentVersion(documentId);
+      if (!currentVersion) {
+        return res.status(400).json({ message: "No current version found for document" });
+      }
+
       // Create encrypted signature
       const signature = await storage.createDocumentSignature({
         documentId,
+        versionId: currentVersion.id,
         signerUserId: userId,
         signerName,
         signerRole,

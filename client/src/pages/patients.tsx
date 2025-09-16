@@ -4,6 +4,7 @@ import { useToast } from "@/hooks/use-toast";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { isUnauthorizedError } from "@/lib/authUtils";
 import { apiRequest } from "@/lib/queryClient";
+import { useLocation } from "wouter";
 import Sidebar from "@/components/layout/sidebar";
 import Header from "@/components/layout/header";
 import PatientForm from "@/components/patients/patient-form";
@@ -15,10 +16,26 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Users, Plus, Search, Filter } from "lucide-react";
 
+// Type for decrypted patient data returned from API
+type DecryptedPatient = {
+  id: string;
+  tenantId: string;
+  mrn: string;
+  firstName: string;
+  lastName: string;
+  dob?: string;
+  payerType: string;
+  planName?: string;
+  macRegion?: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
 export default function Patients() {
   const { toast } = useToast();
   const { isAuthenticated, isLoading, user } = useAuth();
   const queryClient = useQueryClient();
+  const [, setLocation] = useLocation();
   const [searchTerm, setSearchTerm] = useState("");
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
 
@@ -40,7 +57,7 @@ export default function Patients() {
   // Get current tenant (first tenant for now)
   const currentTenant = user?.tenants?.[0];
 
-  const { data: patients, isLoading: patientsLoading, error } = useQuery({
+  const { data: patients, isLoading: patientsLoading, error } = useQuery<DecryptedPatient[]>({
     queryKey: ["/api/tenants", currentTenant?.id, "patients"],
     enabled: !!currentTenant?.id,
     retry: false,
@@ -90,11 +107,11 @@ export default function Patients() {
   }
 
   // Filter patients based on search term
-  const filteredPatients = patients?.filter((patient: any) =>
+  const filteredPatients = (patients || []).filter((patient) =>
     patient.firstName.toLowerCase().includes(searchTerm.toLowerCase()) ||
     patient.lastName.toLowerCase().includes(searchTerm.toLowerCase()) ||
     patient.mrn.toLowerCase().includes(searchTerm.toLowerCase())
-  ) || [];
+  );
 
   return (
     <div className="min-h-screen flex bg-background" data-testid="page-patients">
@@ -166,7 +183,7 @@ export default function Patients() {
                   <div>
                     <p className="text-sm text-muted-foreground">Original Medicare</p>
                     <p className="text-3xl font-bold text-foreground">
-                      {patientsLoading ? "--" : patients?.filter((p: any) => p.payerType === 'Original Medicare').length || 0}
+                      {patientsLoading ? "--" : (patients || []).filter((p) => p.payerType === 'Original Medicare').length}
                     </p>
                   </div>
                   <div className="w-12 h-12 bg-chart-2/10 rounded-lg flex items-center justify-center">
@@ -182,7 +199,7 @@ export default function Patients() {
                   <div>
                     <p className="text-sm text-muted-foreground">Medicare Advantage</p>
                     <p className="text-3xl font-bold text-foreground">
-                      {patientsLoading ? "--" : patients?.filter((p: any) => p.payerType === 'Medicare Advantage').length || 0}
+                      {patientsLoading ? "--" : (patients || []).filter((p) => p.payerType === 'Medicare Advantage').length}
                     </p>
                   </div>
                   <div className="w-12 h-12 bg-chart-3/10 rounded-lg flex items-center justify-center">
@@ -234,7 +251,7 @@ export default function Patients() {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {filteredPatients.map((patient: any) => (
+                    {filteredPatients.map((patient) => (
                       <TableRow key={patient.id} data-testid={`row-patient-${patient.id}`}>
                         <TableCell>
                           <div>
@@ -265,7 +282,12 @@ export default function Patients() {
                           {new Date(patient.createdAt).toLocaleDateString()}
                         </TableCell>
                         <TableCell>
-                          <Button variant="outline" size="sm" data-testid={`button-view-patient-${patient.id}`}>
+                          <Button 
+                            variant="outline" 
+                            size="sm" 
+                            data-testid={`button-view-patient-${patient.id}`}
+                            onClick={() => setLocation(`/patients/${patient.id}`)}
+                          >
                             View
                           </Button>
                         </TableCell>

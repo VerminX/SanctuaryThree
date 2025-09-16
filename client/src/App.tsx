@@ -8,6 +8,7 @@ import NotFound from "@/pages/not-found";
 import Landing from "@/pages/landing";
 import Dashboard from "@/pages/dashboard";
 import Patients from "@/pages/patients";
+import PatientDetail from "@/components/patients/patient-detail";
 import Encounters from "@/pages/encounters";
 import Eligibility from "@/pages/eligibility";
 import Documents from "@/pages/documents";
@@ -27,6 +28,7 @@ function Router() {
         <>
           <Route path="/" component={Dashboard} />
           <Route path="/tenant-setup" component={TenantSetup} />
+          <Route path="/patients/:patientId" component={PatientDetail} />
           <Route path="/patients" component={Patients} />
           <Route path="/encounters" component={Encounters} />
           <Route path="/eligibility" component={Eligibility} />

@@ -5,15 +5,49 @@ const KEY_LENGTH = 32;
 const IV_LENGTH = 16;
 const TAG_LENGTH = 16;
 
-// Get encryption key from environment or generate a default (should be in production env)
+// Get encryption key from environment (ENCRYPTION_KEY only)
 const getEncryptionKey = (): Buffer => {
-  const key = process.env.ENCRYPTION_KEY || process.env.SESSION_SECRET;
+  const key = process.env.ENCRYPTION_KEY;
   if (!key) {
-    throw new Error('ENCRYPTION_KEY or SESSION_SECRET must be set for PHI encryption');
+    throw new Error('ENCRYPTION_KEY environment variable must be set for PHI encryption. Do not use SESSION_SECRET for encryption.');
   }
   
   // Derive a consistent key from the provided secret
   return crypto.scryptSync(key, 'woundcare-phi-salt', KEY_LENGTH);
+};
+
+// Legacy key derivation methods for backward compatibility
+const getLegacyKeys = (): Buffer[] => {
+  const encryptionKey = process.env.ENCRYPTION_KEY;
+  const sessionSecret = process.env.SESSION_SECRET;
+  
+  const keys: Buffer[] = [];
+  
+  // Try ENCRYPTION_KEY with various salt methods (preferred)
+  if (encryptionKey) {
+    keys.push(
+      // Current method
+      crypto.scryptSync(encryptionKey, 'woundcare-phi-salt', KEY_LENGTH),
+      // Alternative salt that might have been used
+      crypto.scryptSync(encryptionKey, 'woundcare-phi', KEY_LENGTH),
+      // Alternative salt format
+      crypto.scryptSync(encryptionKey, 'phi-salt', KEY_LENGTH),
+      // Direct key without salt (if original implementation was different)
+      Buffer.from(crypto.createHash('sha256').update(encryptionKey).digest().subarray(0, KEY_LENGTH))
+    );
+  }
+  
+  // Legacy fallback for SESSION_SECRET (only for decrypting old data)
+  if (sessionSecret && encryptionKey !== sessionSecret) {
+    keys.push(
+      crypto.scryptSync(sessionSecret, 'woundcare-phi-salt', KEY_LENGTH),
+      crypto.scryptSync(sessionSecret, 'woundcare-phi', KEY_LENGTH),
+      crypto.scryptSync(sessionSecret, 'phi-salt', KEY_LENGTH),
+      Buffer.from(crypto.createHash('sha256').update(sessionSecret).digest().subarray(0, KEY_LENGTH))
+    );
+  }
+  
+  return keys;
 };
 
 export function encryptPHI(plaintext: string): string {
@@ -33,7 +67,6 @@ export function encryptPHI(plaintext: string): string {
 }
 
 export function decryptPHI(encryptedData: string): string {
-  const key = getEncryptionKey();
   const combined = Buffer.from(encryptedData, 'base64');
   
   // Basic validation
@@ -45,52 +78,48 @@ export function decryptPHI(encryptedData: string): string {
   const tag = combined.subarray(IV_LENGTH, IV_LENGTH + TAG_LENGTH);
   const encrypted = combined.subarray(IV_LENGTH + TAG_LENGTH);
   
-  // Try current decryption method first
-  try {
-    const decipher = crypto.createDecipheriv(ALGORITHM, key, iv);
-    decipher.setAuthTag(tag);
-    decipher.setAAD(Buffer.from('PHI-AAD'));
+  // Get all possible keys to try (current + legacy methods)
+  const keysToTry = getLegacyKeys();
+  
+  if (keysToTry.length === 0) {
+    throw new Error('No encryption keys available. ENCRYPTION_KEY must be set.');
+  }
+  const aadsToTry = [
+    Buffer.from('PHI-AAD'),        // Current standard
+    null,                          // No AAD (legacy)
+    Buffer.from('woundcare-phi'),  // Alternative AAD
+    Buffer.from(''),               // Empty AAD
+  ];
+  
+  let lastError: Error | null = null;
+  
+  // Try all combinations of keys and AADs
+  for (let keyIndex = 0; keyIndex < keysToTry.length; keyIndex++) {
+    const key = keysToTry[keyIndex];
     
-    let decrypted = decipher.update(encrypted, undefined, 'utf8');
-    decrypted += decipher.final('utf8');
-    
-    return decrypted;
-  } catch (error) {
-    // If current method fails, try without AAD (legacy compatibility)
-    try {
-      const decipher = crypto.createDecipheriv(ALGORITHM, key, iv);
-      decipher.setAuthTag(tag);
-      // Don't set AAD for legacy data
+    for (let aadIndex = 0; aadIndex < aadsToTry.length; aadIndex++) {
+      const aad = aadsToTry[aadIndex];
       
-      let decrypted = decipher.update(encrypted, undefined, 'utf8');
-      decrypted += decipher.final('utf8');
-      
-      return decrypted;
-    } catch (legacyError) {
-      // Try with different AAD
       try {
         const decipher = crypto.createDecipheriv(ALGORITHM, key, iv);
         decipher.setAuthTag(tag);
-        decipher.setAAD(Buffer.from('woundcare-phi')); // Alternative AAD
+        
+        if (aad !== null) {
+          decipher.setAAD(aad);
+        }
         
         let decrypted = decipher.update(encrypted, undefined, 'utf8');
         decrypted += decipher.final('utf8');
         
         return decrypted;
-      } catch (altError) {
-        console.error('Failed to decrypt PHI with all methods:', {
-          originalError: error.message,
-          legacyError: legacyError.message,
-          altError: altError.message,
-          dataLength: combined.length,
-          ivLength: iv.length,
-          tagLength: tag.length,
-          encryptedLength: encrypted.length
-        });
-        throw new Error(`Failed to decrypt PHI data. Original error: ${error.message}`);
+      } catch (error: any) {
+        lastError = error;
+        // Continue trying other combinations
       }
     }
   }
+  
+  throw new Error(`Failed to decrypt PHI data after trying all methods. Last error: ${lastError?.message}`);
 }
 
 // Helper functions for patient data
@@ -102,12 +131,52 @@ export function encryptPatientData(firstName: string, lastName: string, dob?: st
   };
 }
 
+
 export function decryptPatientData(patient: { encryptedFirstName: string; encryptedLastName: string; encryptedDob: string | null }) {
   return {
     firstName: decryptPHI(patient.encryptedFirstName),
     lastName: decryptPHI(patient.encryptedLastName),
     dob: patient.encryptedDob ? decryptPHI(patient.encryptedDob) : null,
   };
+}
+
+// RESILIENT DECRYPTION: Safely decrypt patient data with error handling
+export function safeDecryptPatientData(patient: { id: string; encryptedFirstName: string; encryptedLastName: string; encryptedDob: string | null; [key: string]: any }): { patientData: any; decryptionError: boolean } {
+  try {
+    const decryptedData = {
+      firstName: decryptPHI(patient.encryptedFirstName),
+      lastName: decryptPHI(patient.encryptedLastName),  
+      dob: patient.encryptedDob ? decryptPHI(patient.encryptedDob) : null,
+    };
+    
+    return {
+      patientData: {
+        ...patient,
+        ...decryptedData,
+      },
+      decryptionError: false
+    };
+  } catch (error) {
+    console.error(`DECRYPTION FAILURE for patient ${patient.id}:`, {
+      patientId: patient.id,
+      error: error instanceof Error ? error.message : 'Unknown error',
+      hasFirstName: !!patient.encryptedFirstName,
+      hasLastName: !!patient.encryptedLastName,
+      hasDob: !!patient.encryptedDob
+    });
+    
+    // Return patient with placeholder data to indicate decryption failure
+    return {
+      patientData: {
+        ...patient,
+        firstName: '[DECRYPTION_ERROR]',
+        lastName: '[DECRYPTION_ERROR]', 
+        dob: null,
+        _decryptionFailed: true
+      },
+      decryptionError: true
+    };
+  }
 }
 
 // Helper for encounter notes
