@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
 import { useQuery } from "@tanstack/react-query";
+import { useLocation } from "wouter";
 import { isUnauthorizedError } from "@/lib/authUtils";
 import Sidebar from "@/components/layout/sidebar";
 import Header from "@/components/layout/header";
@@ -21,6 +22,7 @@ interface DashboardStats {
 export default function Dashboard() {
   const { toast } = useToast();
   const { isAuthenticated, isLoading, user } = useAuth();
+  const [, setLocation] = useLocation();
 
   // Redirect to home if not authenticated
   useEffect(() => {
@@ -79,8 +81,7 @@ export default function Dashboard() {
               <Button 
                 className="w-full" 
                 onClick={() => {
-                  // TODO: Navigate to tenant creation flow
-                  alert("Tenant setup will be implemented in the next phase");
+                  setLocation("/tenant-setup");
                 }}
                 data-testid="button-setup-clinic"
               >

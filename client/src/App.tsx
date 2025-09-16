@@ -14,6 +14,7 @@ import Documents from "@/pages/documents";
 import Policies from "@/pages/policies";
 import Audit from "@/pages/audit";
 import Settings from "@/pages/settings";
+import TenantSetup from "@/pages/tenant-setup";
 
 function Router() {
   const { isAuthenticated, isLoading } = useAuth();
@@ -25,6 +26,7 @@ function Router() {
       ) : (
         <>
           <Route path="/" component={Dashboard} />
+          <Route path="/tenant-setup" component={TenantSetup} />
           <Route path="/patients" component={Patients} />
           <Route path="/encounters" component={Encounters} />
           <Route path="/eligibility" component={Eligibility} />
