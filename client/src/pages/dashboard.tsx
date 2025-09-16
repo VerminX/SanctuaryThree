@@ -6,7 +6,17 @@ import { isUnauthorizedError } from "@/lib/authUtils";
 import Sidebar from "@/components/layout/sidebar";
 import Header from "@/components/layout/header";
 import { Card, CardContent } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
 import { Users, Search, FileText, RefreshCw, CheckCircle, AlertTriangle, Clock } from "lucide-react";
+import { User } from "@shared/schema";
+
+interface DashboardStats {
+  activePatients: number;
+  pendingEligibility: number;
+  generatedLetters: number;
+  policyUpdates: number;
+  recentActivity: any[];
+}
 
 export default function Dashboard() {
   const { toast } = useToast();
@@ -30,18 +40,54 @@ export default function Dashboard() {
   // Get current tenant (first tenant for now)
   const currentTenant = user?.tenants?.[0];
 
-  const { data: stats, isLoading: statsLoading } = useQuery({
+  const { data: stats, isLoading: statsLoading } = useQuery<DashboardStats>({
     queryKey: ["/api/tenants", currentTenant?.id, "dashboard-stats"],
     enabled: !!currentTenant?.id,
     retry: false,
   });
 
-  if (isLoading || !isAuthenticated || !currentTenant) {
+  if (isLoading || !isAuthenticated) {
     return (
       <div className="min-h-screen bg-background flex items-center justify-center">
         <div className="text-center">
           <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary mx-auto mb-4"></div>
           <p className="text-muted-foreground">Loading...</p>
+        </div>
+      </div>
+    );
+  }
+
+  // Show onboarding if user has no tenants
+  if (!currentTenant) {
+    return (
+      <div className="min-h-screen bg-background flex items-center justify-center">
+        <div className="max-w-md mx-auto text-center">
+          <div className="w-16 h-16 bg-primary rounded-xl flex items-center justify-center mx-auto mb-6">
+            <Users className="w-8 h-8 text-primary-foreground" />
+          </div>
+          <h1 className="text-2xl font-bold text-foreground mb-4">Welcome to WoundCare Portal!</h1>
+          <p className="text-muted-foreground mb-6">
+            To get started, you'll need to set up your first clinic or practice. This will create your secure, 
+            HIPAA-compliant workspace for managing wound care pre-determinations.
+          </p>
+          <Card>
+            <CardContent className="p-6">
+              <h2 className="text-lg font-semibold mb-4">Create Your First Clinic</h2>
+              <p className="text-sm text-muted-foreground mb-4">
+                You'll be able to add your clinic details, NPI/TIN numbers, MAC region, and invite team members.
+              </p>
+              <Button 
+                className="w-full" 
+                onClick={() => {
+                  // TODO: Navigate to tenant creation flow
+                  alert("Tenant setup will be implemented in the next phase");
+                }}
+                data-testid="button-setup-clinic"
+              >
+                Set Up My Clinic
+              </Button>
+            </CardContent>
+          </Card>
         </div>
       </div>
     );
