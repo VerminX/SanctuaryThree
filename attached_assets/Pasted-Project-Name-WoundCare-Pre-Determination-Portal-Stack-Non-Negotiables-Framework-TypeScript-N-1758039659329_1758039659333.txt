@@ -1,0 +1,190 @@
+Project Name: WoundCare Pre-Determination Portal
+
+Stack & Non-Negotiables
+
+Framework: TypeScript + Next.js 14 (App Router), Prisma ORM, PostgreSQL.
+
+Auth: NextAuth with email/password + SSO (OIDC/OAuth2). Enforce per-tenant RBAC: Admin, Physician, Staff.
+
+PHI: Encrypt at rest (pgcrypto or application-layer AES-256-GCM), TLS in transit, signed audit logs. Do not log PHI. Provide .env placeholders only.
+
+Hosting abstraction: Keep cloud-agnostic; allow Postgres via Docker. Provide minimal docker-compose.
+
+LLM: Provider-switchable abstraction:
+
+Option A (preferred for compliance): Azure OpenAI (HIPAA-eligible) with data logging disabled.
+
+Option B (local): Ollama (e.g., llama3.1-70b-instruct) with a retrieval step.
+
+Retrieval: Lightweight policy store + nightly updater job to keep Medicare LCDs for Skin Substitutes/CTPs and MAC documentation current; index with embeddings (pgvector) + citation metadata (source URL, MAC, effective date). RAG must ground the LLM output and include inline citations.
+
+PDF/Doc: Generate physician-editable PDFs for the Pre-Determination letter and LMN using a template system (React-PDF or server-side PDFKit). Include a DOCX export via docx package.
+
+Core Features
+
+Multi-Tenant Clinic Accounts
+
+Tenant onboarding wizard (clinic name, NPI/TIN, MAC region, payer contracts).
+
+Invite users; enforce 2FA (TOTP) and session timeouts; automatic logout after inactivity.
+
+Patient & Encounter Management
+
+Patient CRUD (minimal PHI: MRN, initials or full name, DOB (optional), payer, plan type (Original Medicare vs MA), MAC region).
+
+Encounter form: at least 4+ encounter notes; wound details (type, location, measurements, duration), prior conservative care (offloading, compression, debridement), infection status, comorbidities, photos metadata (store images as encrypted blobs, not in logs).
+
+Eligibility Analysis (LLM + RAG)
+
+Button: “Analyze Eligibility for Non-Analogous Skin Substitute/CTP.”
+
+The LLM must:
+
+Summarize encounter notes,
+
+Check coverage criteria from the local MAC LCD and related articles (DFU/VLU focus),
+
+Identify documentation gaps,
+
+Output Yes/No/Unclear + rationale,
+
+Return machine-readable citations with MAC name, LCD ID, effective date, and URL.
+
+Document Drafting
+
+Buttons: “Draft Pre-Determination Letter” and “Draft Letter of Medical Necessity.”
+
+Letters include: patient identifiers (minimal), physician credentials, diagnosis (ICD-10), failed conservative measures, wound metrics over time, product class (CTP/skin substitute, non-analogous), medical necessity rationale, and policy-specific language with inline citations.
+
+Export: PDF and DOCX; store signed copy + version history.
+
+Audit & Compliance
+
+Immutable audit log: who did what, when, from where (IP), record IDs—no PHI in the log message body; store PHI references as surrogate keys.
+
+Access reports per tenant; CSV export for compliance.
+
+Plan-Type Workflow
+
+If Medicare Advantage (MA): Surface plan-specific prior auth checklist fields (generic schema now; admins can customize).
+
+If Original Medicare: Use LCD coverage checklist and (where applicable) pre-claim review; warn that broad pre-determination is limited in FFS Medicare and varies by program/demo (see policy notes).
+
+Data Model (Prisma sketch)
+
+Tenant(id, name, macRegion, createdAt,…)
+
+User(id, tenantId, role, email, hashedPassword, mfaEnabled,…)
+
+Patient(id, tenantId, mrn, firstName, lastName, dob, payerType, planName, macRegion,… encrypted fields)
+
+Encounter(id, patientId, date, notes[text[]], woundJson, conservativeCareJson, attachments,…)
+
+PolicySource(id, mac, lcdId, title, url, effectiveDate, status, content, embeddedVector,…)
+
+EligibilityCheck(id, encounterId, result{status, rationale, gaps}, citations[], createdAt)
+
+Document(id, patientId, type{PreDetermination|LMN}, version, pdfUrl, docxUrl, citations[], createdAt)
+
+AuditLog(id, tenantId, userId, action, entity, entityId, timestamp, ip)
+
+RAG Pipeline
+
+Nightly job: fetch/update the following (store content + metadata):
+
+CMS LCD(s) for Skin Substitute/CTP for DFU/VLU (e.g., LCD L39764 or successor/region-specific IDs), associated Billing/Coding Articles, and MAC documentation pages (Noridian/CGS/Novitas/etc.).
+
+General CMS coverage determination guidance and medical record documentation requirements.
+
+Track effective and postponed dates; prefer the most recent effective policy for the patient’s MAC.
+
+Embed content with chunked sections, keep URL + section anchors for precise citations.
+
+At run time: query by wound type (DFU, VLU), MAC region, encounter metadata; assemble a grounded context window with strict token budget; include a “Do not hallucinate—cite only from provided context” instruction.
+
+LLM System Prompt (use verbatim, but parameterize {mac}, {lcdId}, {effectiveDate})
+
+You are a compliance-focused clinical coverage assistant. Task: assess eligibility for non-analogous skin substitute/CTP use for DFU/VLU and draft payer-facing letters.
+
+Rules:
+- Use ONLY the provided policy context (LCDs, Articles, MAC pages, CMS documentation). Don’t infer beyond context. If unclear, say “Insufficient evidence” and list gaps.
+- Align to the patient’s MAC: {mac}, policy {lcdId}, effective {effectiveDate}. Prefer the latest effective policy; if a policy is postponed, flag it.
+- Return structured JSON:
+  {
+    "eligibility": "Yes" | "No" | "Unclear",
+    "rationale": "...",
+    "requiredDocumentationGaps": ["..."],
+    "citations": [{"title": "...","url": "...","section": "...","effectiveDate": "YYYY-MM-DD"}],
+    "letterBullets": ["..."] // concise points for Pre-Determination and LMN
+  }
+- Safety: No legal advice. If plan type is Medicare Advantage, note prior authorization is plan-specific; include plan checklist placeholders.
+
+
+Letter Templates
+
+Pre-Determination: clinic letterhead, payer address, subject, beneficiary ID, concise medical necessity narrative aligned to LCD criteria, failure of conservative measures, requested CTP class, frequency/units, expected outcomes, citations list.
+
+LMN: diagnosis history, prior treatments, wound measurements trend, risk factors, contraindications ruled out, practitioner signature block.
+
+Key UI
+
+Patient table with filters.
+
+Encounter editor with 4+ notes fields + wound metrics.
+
+“Run Eligibility” callout returning a traffic-light card + expandable rationale + citations.
+
+“Draft Letters” panel: edit inline then export PDF/DOCX.
+
+Admin: policy status dashboard (per MAC/LCD), re-index, webhook to refresh.
+
+Security & Ops
+
+Rate limit LLM calls, queue long jobs.
+
+Backups: daily Postgres dumps, encrypted; restore docs.
+
+Secrets via .env; provide a compliance checklist README.
+
+Deliverables from Replit
+
+Full Next.js app with the above models, API routes, pages, and components.
+
+One seed script to insert sample policies (stubbed) and a fetcher job template.
+
+Unit tests for RAG selector (choose latest effective policy by MAC).
+
+E2E tests for eligibility JSON schema and letter generation.
+
+
+---
+
+## Policy anchors your app must ingest (what the RAG updater should fetch and cite)
+
+- **CMS/MAC LCDs for Skin Substitutes/CTPs (DFU/VLU)**—e.g., LCD L39764 and region-specific equivalents; these define coverage criteria and documentation expectations. :contentReference[oaicite:0]{index=0}  
+- **MAC documentation requirements for skin substitutes** (example: Noridian checklist) clarify wound notes, measurements, prior conservative therapy, wastage handling, and signatures. :contentReference[oaicite:1]{index=1}  
+- **CMS medical record documentation requirements**—general expectations the letters should reflect. :contentReference[oaicite:2]{index=2}  
+- **Coverage determination process (NCD/LCD context)**—for grounding the “reasonable and necessary” standard. :contentReference[oaicite:3]{index=3}
+
+### Prior authorization / “pre-determination” reality you should reflect in UX copy
+- In **Traditional Medicare (FFS)**, prior auth is limited to certain services or demonstrations (pre-claim review/prior auth initiatives run through MACs). Your portal should surface when a relevant pre-claim/prior auth pathway exists and otherwise emphasize LCD-aligned documentation + post-payment review readiness. :contentReference[oaicite:4]{index=4}
+- **Medicare Advantage (MA)** often requires prior authorization; workflows are plan-specific. Provide a configurable checklist and warn users when they select MA. :contentReference[oaicite:5]{index=5}
+- LCD harmonization for skin substitutes was finalized by MACs with effective dates and later adjustments (e.g., deferments). Your updater should track **effective** vs **postponed** dates (example: CGS postponement for an LCD to **Jan 1, 2026**). :contentReference[oaicite:6]{index=6}
+
+> Optional context for your internal notes: industry coverage summarized that MACs aligned skin substitute LCDs with an implementation originally targeted for Feb 2025; some timelines shifted regionally—hence the need for live effective-date checks in your RAG fetcher. :contentReference[oaicite:7]{index=7}
+
+---
+
+## Implementation notes tailored to your MSP/healthcare ops
+
+- **HIPAA**: Prefer Azure OpenAI with a BAA; disable data retention and logging. Keep PHI out of prompts where possible (use minimal identifiers). Encrypt encounter notes at write time; mask in UI by default.  
+- **MAC-aware logic**: Resolve MAC by clinic location/NPI; map to correct LCD ID; if none found, require manual selection and log a compliance warning.  
+- **Eligibility gating**: Require structured inputs the LCDs expect (e.g., DFU/VLU, wound duration, measurement history, conservative measures ≥ required timeframe, infection control, offloading/compression). The analyzer should return “Unclear” with gap list if any critical field is blank.  
+- **Citations**: Letters must embed LCD title, ID, section anchor, and effective date; store alongside the document record for audit.  
+- **DR/Backup**: Daily encrypted DB snapshots; test restore quarterly. PDF/DOCX artifacts are content-addressed in object storage with server-side encryption.  
+- **Audit**: Append-only audit table with cryptographic chaining (hash of previous record) to detect tampering.
+
+---
+
+## Want me to turn this into a ready-to-run repo (Next.js + Prisma + RAG fetcher + PDF templates + test stubs) you can drop into Replit? I can generate the full code and seed scripts here.
+::contentReference[oaicite:8]{index=8}
