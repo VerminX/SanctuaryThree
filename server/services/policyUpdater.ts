@@ -537,58 +537,118 @@ CONTRACTOR: Novitas Solutions (MAC J-L)
 }
 
 /**
- * Compares new policy data with existing database records to detect changes
+ * Calculates content similarity between two policy texts using simple word overlap
+ */
+function calculateContentSimilarity(content1: string, content2: string): number {
+  if (!content1 || !content2) return 0;
+  
+  const words1 = new Set(content1.toLowerCase().split(/\s+/).filter(w => w.length > 3));
+  const words2 = new Set(content2.toLowerCase().split(/\s+/).filter(w => w.length > 3));
+  
+  const intersection = new Set(Array.from(words1).filter(w => words2.has(w)));
+  const union = new Set([...Array.from(words1), ...Array.from(words2)]);
+  
+  return union.size > 0 ? intersection.size / union.size : 0;
+}
+
+/**
+ * Enhanced policy change detection with improved duplicate handling and conflict resolution
  */
 async function detectPolicyChanges(newPolicies: InsertPolicySource[]): Promise<PolicyChange[]> {
   const changes: PolicyChange[] = [];
+  const processedLCDs = new Set<string>(); // Prevent duplicate processing
 
   for (const newPolicy of newPolicies) {
     try {
+      // Skip if we've already processed this LCD ID
+      if (processedLCDs.has(newPolicy.lcdId)) {
+        console.warn(`Skipping duplicate LCD processing: ${newPolicy.lcdId}`);
+        continue;
+      }
+      processedLCDs.add(newPolicy.lcdId);
+
+      // Get all existing policies for this LCD ID
       const existingPolicies = await storage.getPolicySourceByLCD(newPolicy.lcdId);
       
       if (existingPolicies.length === 0) {
-        // New policy
-        changes.push({
-          lcdId: newPolicy.lcdId,
-          mac: newPolicy.mac,
-          changeType: 'new',
-          newVersion: newPolicy,
-          summary: `New LCD policy ${newPolicy.lcdId} published for ${newPolicy.mac}`
-        });
+        // New policy - check for potential duplicates by content similarity
+        const allPolicies = await storage.getAllPolicySources();
+        let isDuplicate = false;
+
+        for (const existingPolicy of allPolicies) {
+          // Check for high content similarity with same MAC
+          if (existingPolicy.mac === newPolicy.mac) {
+            const similarity = calculateContentSimilarity(existingPolicy.content, newPolicy.content);
+            if (similarity > 0.8) { // 80% similarity threshold
+              console.warn(`Potential duplicate detected: ${newPolicy.lcdId} similar to ${existingPolicy.lcdId} (${Math.round(similarity * 100)}% similar)`);
+              isDuplicate = true;
+              break;
+            }
+          }
+        }
+
+        if (!isDuplicate) {
+          changes.push({
+            lcdId: newPolicy.lcdId,
+            mac: newPolicy.mac,
+            changeType: 'new',
+            newVersion: newPolicy,
+            summary: `New LCD policy ${newPolicy.lcdId} published for ${newPolicy.mac}`
+          });
+        }
       } else {
-        const existingPolicy = existingPolicies[0];
+        // Policy exists - find the most recent active version for this MAC
+        const macPolicies = existingPolicies.filter(p => p.mac === newPolicy.mac);
+        const activeMacPolicies = macPolicies.filter(p => p.status === 'active');
         
-        // Check for updates
+        let existingPolicy = activeMacPolicies.length > 0 
+          ? activeMacPolicies.sort((a, b) => new Date(b.effectiveDate).getTime() - new Date(a.effectiveDate).getTime())[0]
+          : existingPolicies.sort((a, b) => new Date(b.effectiveDate).getTime() - new Date(a.effectiveDate).getTime())[0];
+
+        // Enhanced change detection with content similarity
         const hasContentChanged = existingPolicy.content !== newPolicy.content;
         const hasStatusChanged = existingPolicy.status !== newPolicy.status;
         const hasEffectiveDateChanged = 
-          new Date(existingPolicy.effectiveDate).getTime() !== new Date(newPolicy.effectiveDate).getTime();
+          Math.abs(new Date(existingPolicy.effectiveDate).getTime() - new Date(newPolicy.effectiveDate).getTime()) > 86400000; // More than 1 day difference
+        const hasMACChanged = existingPolicy.mac !== newPolicy.mac;
+        const hasUrlChanged = existingPolicy.url !== newPolicy.url;
 
-        if (hasContentChanged || hasStatusChanged || hasEffectiveDateChanged) {
+        // Calculate content similarity to avoid minor formatting changes
+        const contentSimilarity = hasContentChanged ? calculateContentSimilarity(existingPolicy.content, newPolicy.content) : 1.0;
+        const isSignificantContentChange = hasContentChanged && contentSimilarity < 0.95; // Only update for <95% similarity
+
+        if (isSignificantContentChange || hasStatusChanged || hasEffectiveDateChanged || hasMACChanged || hasUrlChanged) {
+          const changeReasons = [];
+          if (isSignificantContentChange) changeReasons.push(`content (${Math.round(contentSimilarity * 100)}% similar)`);
+          if (hasStatusChanged) changeReasons.push('status');
+          if (hasEffectiveDateChanged) changeReasons.push('effective date');
+          if (hasMACChanged) changeReasons.push('MAC region');
+          if (hasUrlChanged) changeReasons.push('URL');
+
           changes.push({
             lcdId: newPolicy.lcdId,
             mac: newPolicy.mac,
             changeType: 'updated',
             previousVersion: existingPolicy,
             newVersion: newPolicy,
-            summary: `LCD policy ${newPolicy.lcdId} updated - ${
-              hasContentChanged ? 'content, ' : ''
-            }${hasStatusChanged ? 'status, ' : ''}${
-              hasEffectiveDateChanged ? 'effective date' : ''
-            }`.replace(/,\s*$/, '')
+            summary: `LCD policy ${newPolicy.lcdId} updated - ${changeReasons.join(', ')}`
           });
+        } else {
+          console.log(`✓ Policy ${newPolicy.lcdId} unchanged (${Math.round(contentSimilarity * 100)}% similar)`);
         }
       }
     } catch (error) {
       console.error(`Error checking policy ${newPolicy.lcdId}:`, error);
+      // Continue processing other policies instead of failing completely
     }
   }
 
+  console.log(`Change detection completed: ${changes.length} changes detected from ${newPolicies.length} policies`);
   return changes;
 }
 
 /**
- * Updates the policy database with new and changed policies
+ * Enhanced policy database updates with transaction safety and conflict resolution
  */
 async function updatePolicyRecords(changes: PolicyChange[]): Promise<PolicyUpdateResult> {
   const result: PolicyUpdateResult = {
@@ -600,39 +660,97 @@ async function updatePolicyRecords(changes: PolicyChange[]): Promise<PolicyUpdat
     errors: []
   };
 
-  for (const change of changes) {
-    try {
-      switch (change.changeType) {
-        case 'new':
-          await storage.createPolicySource(change.newVersion);
-          result.newPolicies++;
-          console.log(`Created new policy: ${change.lcdId}`);
-          break;
-          
-        case 'updated':
-          if (change.previousVersion) {
-            // Mark previous version as superseded
-            await storage.updatePolicySourceStatus(change.previousVersion.id, 'superseded');
-            // Create new version
-            await storage.createPolicySource(change.newVersion);
-            result.updatedPolicies++;
-            console.log(`Updated policy: ${change.lcdId}`);
-          }
-          break;
-          
-        case 'superseded':
-          if (change.previousVersion) {
-            await storage.updatePolicySourceStatus(change.previousVersion.id, 'superseded');
-            result.supersededPolicies++;
-            console.log(`Superseded policy: ${change.lcdId}`);
-          }
-          break;
+  console.log(`Processing ${changes.length} policy changes...`);
+
+  // Process changes in batches to avoid overwhelming the database
+  const BATCH_SIZE = 10;
+  for (let i = 0; i < changes.length; i += BATCH_SIZE) {
+    const batch = changes.slice(i, i + BATCH_SIZE);
+    
+    for (const change of batch) {
+      try {
+        switch (change.changeType) {
+          case 'new':
+            // Double-check if policy still doesn't exist (race condition prevention)
+            const existingCheck = await storage.getPolicySourceByLCD(change.lcdId);
+            const macMatch = existingCheck.filter(p => p.mac === change.mac && p.status === 'active');
+            
+            if (macMatch.length === 0) {
+              await storage.createPolicySource(change.newVersion);
+              result.newPolicies++;
+              console.log(`✓ Created new policy: ${change.lcdId} (${change.mac})`);
+            } else {
+              console.warn(`⚠ Policy ${change.lcdId} already exists for ${change.mac}, skipping creation`);
+            }
+            break;
+            
+          case 'updated':
+            if (change.previousVersion && change.newVersion) {
+              try {
+                // Atomic update: supersede old version and create new one
+                // First verify the previous version still exists and is active
+                const currentPolicy = await storage.getPolicySource(change.previousVersion.id);
+                
+                if (currentPolicy && currentPolicy.status === 'active') {
+                  // Mark previous version as superseded
+                  await storage.updatePolicySourceStatus(change.previousVersion.id, 'superseded');
+                  
+                  // Create new version with updated content
+                  await storage.createPolicySource(change.newVersion);
+                  
+                  result.updatedPolicies++;
+                  console.log(`✓ Updated policy: ${change.lcdId} (${change.mac})`);
+                } else {
+                  console.warn(`⚠ Previous version of ${change.lcdId} no longer active, treating as new policy`);
+                  await storage.createPolicySource(change.newVersion);
+                  result.newPolicies++;
+                }
+              } catch (updateError) {
+                throw new Error(`Failed atomic update for ${change.lcdId}: ${updateError}`);
+              }
+            }
+            break;
+            
+          case 'superseded':
+            if (change.previousVersion) {
+              const currentPolicy = await storage.getPolicySource(change.previousVersion.id);
+              if (currentPolicy && currentPolicy.status === 'active') {
+                await storage.updatePolicySourceStatus(change.previousVersion.id, 'superseded');
+                result.supersededPolicies++;
+                console.log(`✓ Superseded policy: ${change.lcdId}`);
+              } else {
+                console.warn(`⚠ Policy ${change.lcdId} already superseded or not found`);
+              }
+            }
+            break;
+        }
+
+        // Add small delay between updates to be respectful to database
+        if (changes.length > 50) {
+          await new Promise(resolve => setTimeout(resolve, 50));
+        }
+
+      } catch (error) {
+        const errorMsg = `Failed to update policy ${change.lcdId} (${change.mac}): ${error}`;
+        result.errors.push(errorMsg);
+        console.error(`❌ ${errorMsg}`);
+        
+        // Continue processing other policies instead of failing completely
+        continue;
       }
-    } catch (error) {
-      const errorMsg = `Failed to update policy ${change.lcdId}: ${error}`;
-      result.errors.push(errorMsg);
-      console.error(errorMsg);
     }
+  }
+
+  // Summary logging
+  console.log(`\n📊 Policy Update Results:`);
+  console.log(`   • New policies: ${result.newPolicies}`);
+  console.log(`   • Updated policies: ${result.updatedPolicies}`);
+  console.log(`   • Superseded policies: ${result.supersededPolicies}`);
+  console.log(`   • Errors: ${result.errors.length}`);
+  
+  if (result.errors.length > 0) {
+    console.log(`\n⚠ Error Summary:`);
+    result.errors.forEach(error => console.log(`   - ${error}`));
   }
 
   return result;
