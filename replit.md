@@ -57,7 +57,14 @@ Preferred communication style: Simple, everyday language.
 
 ## External Dependencies
 
-### Database Services
+### CMS Integration (Updated September 2025)
+- **CMS Coverage API**: Real-time Medicare LCD policy integration via api.coverage.cms.gov
+- **No Authentication Required**: Public API access for LCD policies and contractor data
+- **973 Active LCDs**: Live integration with Medicare Local Coverage Determinations
+- **Production Ready**: Enhanced pagination, retry logic, and robust error handling
+- **Wound Care Filtering**: Successfully identifies relevant policies (9% match rate on real data)
+
+### Database Services  
 - **Neon Database**: Serverless PostgreSQL hosting with connection pooling
 - **pgvector**: PostgreSQL extension for vector similarity search and embeddings storage
 

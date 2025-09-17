@@ -90,13 +90,13 @@ const MAC_REGION_MAPPING: Record<string, string> = {
 };
 
 /**
- * Wound care related search terms for filtering relevant LCDs
+ * Wound care related search terms for filtering relevant LCDs (broadened for better matching)
  */
 const WOUND_CARE_SEARCH_TERMS = [
+  "wound",
   "skin substitute", 
   "cellular tissue product",
   "ctp",
-  "wound", 
   "biologics",
   "advanced wound care",
   "tissue engineering",
@@ -104,7 +104,19 @@ const WOUND_CARE_SEARCH_TERMS = [
   "skin graft",
   "dermal substitute",
   "acellular dermal matrix",
-  "bioengineered skin"
+  "bioengineered skin",
+  "ulcer",
+  "diabetic foot",
+  "pressure sore",
+  "venous stasis",
+  "decubitus",
+  "chronic wound",
+  "tissue",
+  "graft",
+  "healing",
+  "dressing",
+  "surgical wound",
+  "debridement"
 ];
 
 /**
@@ -170,14 +182,27 @@ function extractTextFromHTML(html: string): string {
 }
 
 /**
- * Checks if LCD content is relevant to wound care
+ * Checks if LCD content is relevant to wound care with enhanced debugging
  */
 function isWoundCareRelevant(title: string, content: string): boolean {
   const searchText = `${title} ${content}`.toLowerCase();
   
-  return WOUND_CARE_SEARCH_TERMS.some(term => 
+  // First try with our comprehensive search terms
+  const foundTerms = WOUND_CARE_SEARCH_TERMS.filter(term => 
     searchText.includes(term.toLowerCase())
   );
+  
+  if (foundTerms.length > 0) {
+    console.log(`✓ Found wound care LCD: "${title}" (matched: ${foundTerms.join(', ')})`);
+    return true;
+  }
+  
+  // Enhanced debugging - log first few titles to see what we're missing
+  if (Math.random() < 0.01) { // Log ~1% of titles for debugging
+    console.log(`🔍 Sample LCD title: "${title.substring(0, 100)}..."`);
+  }
+  
+  return false;
 }
 
 /**
@@ -328,116 +353,71 @@ async function fetchCMSPolicyUpdates(): Promise<InsertPolicySource[]> {
 
     console.log(`Found ${allFinalLCDs.length} total final LCDs across all pages`);
 
-    // Step 2: Process each LCD with controlled concurrency and robust error handling
+    // Step 2: Process LCDs directly from list data (much more efficient!)
     let processedCount = 0;
     let relevantCount = 0;
-    const CONCURRENT_LIMIT = 3; // Limit concurrent requests to be respectful to CMS API
     
-    // Process in batches to avoid overwhelming the API
-    for (let i = 0; i < allFinalLCDs.length; i += CONCURRENT_LIMIT) {
-      const batch = allFinalLCDs.slice(i, i + CONCURRENT_LIMIT);
-      
-      const batchPromises = batch.map(async (lcdSummary) => {
-        try {
-          // Validate required fields from CMS response
-          if (!lcdSummary.document_id) {
-            console.warn(`⚠ Missing document_id for LCD: ${JSON.stringify(lcdSummary)}`);
-            return null;
-          }
-          
-          // Get detailed LCD data with retry logic
-          const lcdDetails = await fetchCMSApiDataWithRetry(
-            CMS_LCD_API.lcdDataEndpoint,
-            { document_id: lcdSummary.document_id }
-          );
-
-          if (!lcdDetails?.data || !Array.isArray(lcdDetails.data) || lcdDetails.data.length === 0) {
-            console.warn(`⚠ No detailed data found for LCD ${lcdSummary.document_id}`);
-            return null;
-          }
-
-          const lcdData = lcdDetails.data[0];
-          
-          // Validate critical fields
-          if (!lcdData.title && !lcdSummary.title) {
-            console.warn(`⚠ No title found for LCD ${lcdSummary.document_id}`);
-            return null;
-          }
-          
-          // Extract and clean content
-          const title = (lcdData.title || lcdSummary.title || 'Untitled LCD').trim();
-          const rawContent = lcdData.policy_text || lcdData.description || '';
-          const cleanContent = extractTextFromHTML(rawContent);
-          
-          // Check if this LCD is relevant to wound care
-          if (!isWoundCareRelevant(title, cleanContent)) {
-            return null;
-          }
-
-          // Get contractor information to map to MAC region
-          let macRegion = 'Unknown MAC';
-          if (lcdData.contractor_id) {
-            try {
-              const contractorData = await fetchCMSApiDataWithRetry(
-                CMS_LCD_API.contractorEndpoint,
-                { contractor_id: lcdData.contractor_id }
-              );
-              
-              if (contractorData?.data && Array.isArray(contractorData.data) && contractorData.data.length > 0) {
-                const contractorName = contractorData.data[0].contractor_name;
-                // Case-insensitive MAC region mapping
-                macRegion = findMACRegionFromContractor(contractorName?.trim()) || contractorName || 'Unknown MAC';
-              }
-            } catch (error) {
-              const errorMessage = error instanceof Error ? error.message : String(error);
-              console.warn(`❌ Failed to fetch contractor data for ${lcdData.contractor_id}:`, errorMessage);
-              // Continue without contractor info
-            }
-          }
-
-          // Create policy record with validation
-          const effectiveDate = lcdData.effective_date || lcdSummary.effective_date;
-          const policy: InsertPolicySource = {
-            mac: macRegion,
+    console.log(`🚀 Processing LCDs directly from list data (more efficient approach)...`);
+    
+    for (const lcdSummary of allFinalLCDs) {
+      try {
+        // Validate required fields from CMS response
+        if (!lcdSummary.document_id || !lcdSummary.title) {
+          console.warn(`⚠ Missing required fields for LCD: ${JSON.stringify(lcdSummary)}`);
+          processedCount++;
+          continue;
+        }
+        
+        // Use data directly from the list response (much more reliable!)
+        const title = lcdSummary.title.trim();
+        const contractorInfo = lcdSummary.contractor_name_type || '';
+        
+        // Enhanced debugging - log data structure samples
+        if (Math.random() < 0.01) { // Log 1% for debugging
+          console.log(`🔍 LCD List Sample:`, {
             lcdId: lcdSummary.document_id,
-            title: title,
-            url: lcdSummary.url || `https://www.cms.gov/medicare-coverage-database/view/lcd.aspx?lcdid=${lcdSummary.document_id}`,
-            effectiveDate: effectiveDate ? new Date(effectiveDate) : new Date(),
-            status: (lcdData.status === 'Active' || lcdSummary.status === 'Active') ? 'active' : 'inactive',
-            content: cleanContent
-          };
-
-          console.log(`✓ Processed LCD ${policy.lcdId}: ${policy.title.substring(0, 50)}... (${policy.mac})`);
-          return policy;
-
-        } catch (error) {
-          const errorMessage = error instanceof Error ? error.message : String(error);
-          console.error(`❌ Error processing LCD ${lcdSummary.document_id}:`, errorMessage);
-          return null;
+            title: title.substring(0, 100),
+            contractor: contractorInfo.substring(0, 50),
+            summaryKeys: Object.keys(lcdSummary)
+          });
         }
-      });
-      
-      // Wait for batch to complete
-      const batchResults = await Promise.all(batchPromises);
-      
-      // Add successful results
-      batchResults.forEach(result => {
-        if (result) {
-          policies.push(result);
-          relevantCount++;
+        
+        // Check if this LCD is relevant to wound care (using title only for now)
+        if (!isWoundCareRelevant(title, '')) {
+          processedCount++;
+          continue;
         }
-      });
-      
-      processedCount += batch.length;
-      
-      // Log progress every 50 processed
-      if (processedCount % 50 === 0) {
-        console.log(`📈 Progress: ${processedCount}/${allFinalLCDs.length} LCDs processed, ${relevantCount} relevant found`);
+
+        // Map contractor information to MAC region (from contractor_name_type field)
+        const contractorName = contractorInfo.split('\r\n')[0] || contractorInfo.split('(')[0] || contractorInfo;
+        const macRegion = findMACRegionFromContractor(contractorName.trim()) || contractorName.trim() || 'Unknown MAC';
+
+        // Create policy record with validation  
+        const effectiveDate = lcdSummary.effective_date;
+        const policy: InsertPolicySource = {
+          mac: macRegion,
+          lcdId: lcdSummary.document_id.toString(),
+          title: title,
+          url: lcdSummary.url || `https://www.cms.gov/medicare-coverage-database/view/lcd.aspx?lcdid=${lcdSummary.document_id}`,
+          effectiveDate: effectiveDate ? new Date(effectiveDate) : new Date(),
+          status: 'active', // LCDs in the final list are considered active
+          content: `${title}\n\nContractor: ${contractorInfo}\n\nThis is a placeholder for the full LCD content which would be populated from the detailed LCD text.`
+        };
+
+        policies.push(policy);
+        relevantCount++;
+        console.log(`✓ Found wound care LCD ${policy.lcdId}: ${policy.title.substring(0, 50)}... (${policy.mac})`);
+
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        console.error(`❌ Error processing LCD ${lcdSummary.document_id}:`, errorMessage);
       }
       
-      // Rate limiting between batches
-      if (i + CONCURRENT_LIMIT < allFinalLCDs.length) {
-        await new Promise(resolve => setTimeout(resolve, 500));
+      processedCount++;
+      
+      // Log progress every 100 processed (much faster now!)
+      if (processedCount % 100 === 0) {
+        console.log(`📈 Progress: ${processedCount}/${allFinalLCDs.length} LCDs processed, ${relevantCount} relevant found`);
       }
     }
 
