@@ -1,5 +1,7 @@
 import type { Express } from "express";
 import { createServer, type Server } from "http";
+import fs from "fs";
+import path from "path";
 import { storage } from "./storage";
 import { setupAuth, isAuthenticated } from "./replitAuth";
 import { 
@@ -598,7 +600,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Get file path based on format
       const filePath = format === 'PDF' ? currentVersion.pdfUrl : currentVersion.docxUrl;
       
-      if (!filePath || !require('fs').existsSync(filePath)) {
+      if (!filePath || !fs.existsSync(filePath)) {
         return res.status(404).json({ message: `${format} file not found. Please regenerate the document.` });
       }
 
@@ -620,7 +622,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       res.setHeader('Content-Type', mimeType);
       res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
-      res.sendFile(require('path').resolve(filePath));
+      res.sendFile(path.resolve(filePath));
 
     } catch (error) {
       console.error("Error exporting document:", error);
