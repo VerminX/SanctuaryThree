@@ -52,28 +52,22 @@ export default function Eligibility() {
   const { data: encounters, isLoading: encountersLoading, error: encountersError } = useQuery({
     queryKey: ["/api/encounters-with-patients", currentTenant?.id],
     queryFn: async () => {
-      console.log('Fetching encounters, patients data:', patients);
       if (!patients || !Array.isArray(patients) || patients.length === 0) {
-        console.log('No patients data available for encounters query');
         return [];
       }
       
-      console.log('Processing', patients.length, 'patients for encounters');
       const encounterPromises = patients.map(async (patient: any) => {
         try {
           // Skip patients with decryption failures
           if (!patient.firstName || !patient.lastName) {
-            console.log('Skipping patient with missing name data:', patient.id);
             return [];
           }
           
-          console.log('Fetching encounters for patient:', patient.id, patient.firstName, patient.lastName);
           const response = await fetch(`/api/patients/${patient.id}/encounters`, {
             credentials: "include",
           });
           if (response.ok) {
             const encounters = await response.json();
-            console.log('Found', encounters.length, 'encounters for patient', patient.id);
             return encounters.map((encounter: any) => ({
               id: encounter.id,
               patientId: patient.id,
@@ -82,18 +76,14 @@ export default function Eligibility() {
               date: encounter.date,
             }));
           }
-          console.log('Failed to fetch encounters for patient', patient.id, response.status);
           return [];
         } catch (error) {
-          console.error('Error fetching encounters for patient', patient.id, error);
           return [];
         }
       });
       
       const encountersArrays = await Promise.all(encounterPromises);
-      const flattenedEncounters = encountersArrays.flat().sort((a: any, b: any) => new Date(b.date).getTime() - new Date(a.date).getTime());
-      console.log('Total encounters found:', flattenedEncounters.length);
-      return flattenedEncounters;
+      return encountersArrays.flat().sort((a: any, b: any) => new Date(b.date).getTime() - new Date(a.date).getTime());
     },
     enabled: !!patients && Array.isArray(patients) && patients.length > 0,
     retry: false,
