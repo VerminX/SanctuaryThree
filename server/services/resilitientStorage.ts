@@ -20,6 +20,13 @@ export class ResilientStorage implements IStorage {
     );
   }
 
+  async getUserByEmail(email: string) {
+    return databaseResilience.executeWithResilience(
+      () => this.storage.getUserByEmail(email),
+      'getUserByEmail'
+    );
+  }
+
   async upsertUser(user: any) {
     return databaseResilience.executeWithResilience(
       () => this.storage.upsertUser(user),
