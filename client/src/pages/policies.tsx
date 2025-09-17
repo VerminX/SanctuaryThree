@@ -38,11 +38,21 @@ export default function Policies() {
 
   const currentTenant = user?.tenants?.[0];
 
-  const { data: policies = [], isLoading: policiesLoading, error } = useQuery<PolicySource[]>({
+  // Helper function for safe date formatting
+  const formatDate = (date: string | Date | null | undefined): string => {
+    if (!date) return 'N/A';
+    const parsedDate = new Date(date);
+    return isNaN(parsedDate.getTime()) ? 'N/A' : parsedDate.toLocaleDateString();
+  };
+
+  const { data: policiesData = [], isLoading: policiesLoading, error } = useQuery<PolicySource[]>({
     queryKey: ["/api/tenants", currentTenant?.id, "policies"],
     enabled: !!currentTenant?.id,
     retry: false,
   });
+
+  // Runtime safety: ensure policies is always an array
+  const policies = Array.isArray(policiesData) ? policiesData : [];
 
   const refreshPoliciesMutation = useMutation({
     mutationFn: async () => {
@@ -88,9 +98,9 @@ export default function Policies() {
 
   // Filter policies based on search term and status
   const filteredPolicies = policies.filter((policy: PolicySource) => {
-    const matchesSearch = policy.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                         policy.mac.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                         policy.lcdId.toLowerCase().includes(searchTerm.toLowerCase());
+    const matchesSearch = policy.title?.toLowerCase()?.includes(searchTerm.toLowerCase()) ||
+                         policy.mac?.toLowerCase()?.includes(searchTerm.toLowerCase()) ||
+                         policy.lcdId?.toLowerCase()?.includes(searchTerm.toLowerCase());
     const matchesStatus = filterStatus === "all" || policy.status === filterStatus;
     return matchesSearch && matchesStatus;
   });
@@ -126,7 +136,14 @@ export default function Policies() {
   const activePolicies = policies.filter((p: PolicySource) => p.status === 'active').length;
   const postponedPolicies = policies.filter((p: PolicySource) => p.status === 'postponed').length;
   const recentUpdates = policies.filter((p: PolicySource) => {
-    const updateDate = new Date(p.updatedAt!);
+    // Use updatedAt if available, fallback to effectiveDate, skip if neither
+    const dateToCheck = p.updatedAt ?? p.effectiveDate;
+    if (!dateToCheck) return false;
+    
+    const updateDate = new Date(dateToCheck);
+    // Skip if date is invalid
+    if (isNaN(updateDate.getTime())) return false;
+    
     const oneWeekAgo = new Date();
     oneWeekAgo.setDate(oneWeekAgo.getDate() - 7);
     return updateDate >= oneWeekAgo;
@@ -293,7 +310,7 @@ export default function Policies() {
                         <p className="text-sm text-muted-foreground mt-2 line-clamp-2">{policy.title}</p>
                         <div className="flex items-center justify-between mt-3">
                           <span className="text-xs text-muted-foreground">
-                            Effective: {new Date(policy.effectiveDate).toLocaleDateString()}
+                            Effective: {formatDate(policy.effectiveDate)}
                           </span>
                           <a
                             href={policy.url}
@@ -377,7 +394,11 @@ export default function Policies() {
                 </div>
               ) : error ? (
                 <div className="p-6 text-center">
-                  <p className="text-destructive">Failed to load policies</p>
+                  <div className="mx-auto h-12 w-12 text-destructive mb-4">
+                    <AlertCircle className="h-12 w-12" />
+                  </div>
+                  <h3 className="text-sm font-medium text-foreground mb-2">Failed to load policies</h3>
+                  <p className="text-sm text-muted-foreground">Please try refreshing the policy database or contact support if the issue persists.</p>
                 </div>
               ) : filteredPolicies.length === 0 ? (
                 <div className="p-6 text-center">
@@ -426,10 +447,10 @@ export default function Policies() {
                           </div>
                         </TableCell>
                         <TableCell className="text-sm text-muted-foreground">
-                          {new Date(policy.effectiveDate).toLocaleDateString()}
+                          {formatDate(policy.effectiveDate)}
                           {policy.postponedDate && (
                             <div className="text-xs text-chart-3">
-                              Postponed to: {new Date(policy.postponedDate).toLocaleDateString()}
+                              Postponed to: {formatDate(policy.postponedDate)}
                             </div>
                           )}
                         </TableCell>
