@@ -19,8 +19,6 @@ import { buildRAGContext } from "./services/ragService";
 import { generateDocument } from "./services/documentGenerator";
 import { performPolicyUpdate, performPolicyUpdateForMAC, scheduledPolicyUpdate, getPolicyUpdateStatus } from "./services/policyUpdater";
 import { z } from "zod";
-import { asyncHandler, createError, sendSuccess } from "./middleware/errorMiddleware";
-import { AuthenticationError, AuthorizationError, ValidationError, DatabaseError } from "./services/errorManager";
 
 // Helper function to track user activity (HIPAA-compliant, no PHI in descriptions)
 async function trackActivity(
@@ -54,70 +52,85 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
 
   // Auth routes
-  app.get('/api/auth/user', isAuthenticated, asyncHandler(async (req: any, res) => {
-    const userId = req.user.claims.sub;
-    const user = await storage.getUser(userId);
-    
-    if (!user) {
-      throw createError.notFound('User', req.correlationId);
-    }
+  app.get('/api/auth/user', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const user = await storage.getUser(userId);
+      
+      if (!user) {
+        return res.status(404).json({ message: "User not found" });
+      }
 
-    // Get user's tenants and roles
-    const tenants = await storage.getTenantsByUser(userId);
-    
-    sendSuccess(res, {
-      ...user,
-      tenants: tenants
-    }, 'User data retrieved successfully');
-  }));
+      // Get user's tenants and roles
+      const tenants = await storage.getTenantsByUser(userId);
+      
+      res.json({
+        ...user,
+        tenants: tenants
+      });
+    } catch (error) {
+      console.error("Error fetching user:", error);
+      res.status(500).json({ message: "Failed to fetch user" });
+    }
+  });
 
   // Tenant routes
-  app.post('/api/tenants', isAuthenticated, asyncHandler(async (req: any, res) => {
-    const userId = req.user.claims.sub;
-    const tenantData = insertTenantSchema.parse(req.body);
-    
-    const tenant = await storage.createTenant(tenantData);
-    
-    // Add user as admin of the new tenant
-    await storage.addUserToTenant({
-      userId,
-      tenantId: tenant.id,
-      role: 'Admin',
-      isActive: true,
-    });
+  app.post('/api/tenants', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const tenantData = insertTenantSchema.parse(req.body);
+      
+      const tenant = await storage.createTenant(tenantData);
+      
+      // Add user as admin of the new tenant
+      await storage.addUserToTenant({
+        userId,
+        tenantId: tenant.id,
+        role: 'Admin',
+        isActive: true,
+      });
 
-    // Log audit event
-    await storage.createAuditLog({
-      tenantId: tenant.id,
-      userId,
-      action: 'CREATE_TENANT',
-      entity: 'Tenant',
-      entityId: tenant.id,
-      ipAddress: req.ip,
-      userAgent: req.get('User-Agent'),
-      previousHash: '',
-    });
+      // Log audit event
+      await storage.createAuditLog({
+        tenantId: tenant.id,
+        userId,
+        action: 'CREATE_TENANT',
+        entity: 'Tenant',
+        entityId: tenant.id,
+        ipAddress: req.ip,
+        userAgent: req.get('User-Agent'),
+        previousHash: '',
+      });
 
-    sendSuccess(res, tenant, 'Tenant created successfully', 201);
-  }));
-
-  app.get('/api/tenants/:tenantId', isAuthenticated, asyncHandler(async (req: any, res) => {
-    const userId = req.user.claims.sub;
-    const { tenantId } = req.params;
-    
-    // Verify user has access to tenant
-    const userTenantRole = await storage.getUserTenantRole(userId, tenantId);
-    if (!userTenantRole) {
-      throw createError.forbidden('access this tenant', req.correlationId);
+      res.json(tenant);
+    } catch (error) {
+      console.error("Error creating tenant:", error);
+      res.status(500).json({ message: "Failed to create tenant" });
     }
+  });
 
-    const tenant = await storage.getTenant(tenantId);
-    if (!tenant) {
-      throw createError.notFound('Tenant', req.correlationId);
+  app.get('/api/tenants/:tenantId', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const { tenantId } = req.params;
+      
+      // Verify user has access to tenant
+      const userTenantRole = await storage.getUserTenantRole(userId, tenantId);
+      if (!userTenantRole) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+
+      const tenant = await storage.getTenant(tenantId);
+      if (!tenant) {
+        return res.status(404).json({ message: "Tenant not found" });
+      }
+
+      res.json(tenant);
+    } catch (error) {
+      console.error("Error fetching tenant:", error);
+      res.status(500).json({ message: "Failed to fetch tenant" });
     }
-
-    sendSuccess(res, tenant, 'Tenant retrieved successfully');
-  }));
+  });
 
   // Patient routes
   app.post('/api/tenants/:tenantId/patients', isAuthenticated, async (req: any, res) => {
