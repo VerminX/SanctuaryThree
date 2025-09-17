@@ -181,126 +181,322 @@ function isWoundCareRelevant(title: string, content: string): boolean {
 }
 
 /**
- * Fetches policy updates from real CMS LCD database for wound care related policies
+ * Enhanced HTTP client with retry logic and rate limiting for CMS API
+ */
+async function fetchCMSApiDataWithRetry(endpoint: string, params?: Record<string, any>, maxRetries: number = 3): Promise<any> {
+  let lastError: Error;
+  
+  // Build full URL from base URL and endpoint
+  const fullUrl = endpoint.startsWith('http') ? endpoint : `${CMS_LCD_API.baseUrl}${endpoint}`;
+  const urlObj = new URL(fullUrl);
+  if (params) {
+    Object.entries(params).forEach(([key, value]) => {
+      urlObj.searchParams.append(key, value.toString());
+    });
+  }
+  
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      const response = await fetch(urlObj.toString(), {
+        headers: {
+          'User-Agent': 'WoundCare-Portal/1.0',
+          'Accept': 'application/json'
+        },
+        // 30 second timeout
+        signal: AbortSignal.timeout(30000)
+      });
+
+      // Handle rate limiting
+      if (response.status === 429) {
+        const retryAfter = response.headers.get('Retry-After');
+        const waitTime = retryAfter ? parseInt(retryAfter) * 1000 : Math.pow(2, attempt) * 1000;
+        console.warn(`🚫 Rate limited (attempt ${attempt}/${maxRetries}), waiting ${waitTime}ms...`);
+        await new Promise(resolve => setTimeout(resolve, waitTime));
+        continue;
+      }
+
+      if (response.status >= 500) {
+        throw new Error(`Server error: ${response.status} ${response.statusText}`);
+      }
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      }
+
+      const data = await response.json();
+      
+      // Basic schema validation
+      if (!data || typeof data !== 'object') {
+        throw new Error('Invalid response format from CMS API');
+      }
+
+      return data;
+
+    } catch (error) {
+      lastError = error as Error;
+      
+      // Proper error message extraction
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      
+      // Don't retry on client errors (except 429)
+      if (errorMessage.includes('HTTP 4') && !errorMessage.includes('429')) {
+        throw error;
+      }
+      
+      if (attempt < maxRetries) {
+        // Exponential backoff with jitter
+        const baseDelay = Math.pow(2, attempt) * 1000;
+        const jitter = Math.random() * 1000;
+        const delay = baseDelay + jitter;
+        
+        console.warn(`⚠ Request failed (attempt ${attempt}/${maxRetries}): ${errorMessage}, retrying in ${delay}ms...`);
+        await new Promise(resolve => setTimeout(resolve, delay));
+      }
+    }
+  }
+
+  throw lastError!;
+}
+
+/**
+ * Fetches all pages from a paginated CMS endpoint
+ */
+async function fetchAllPagesFromCMS(endpoint: string): Promise<any[]> {
+  const allData: any[] = [];
+  let currentPage = 1;
+  let hasMorePages = true;
+  
+  console.log(`📄 Starting paginated fetch from: ${endpoint}`);
+  
+  while (hasMorePages) {
+    try {
+      const response = await fetchCMSApiDataWithRetry(endpoint, { 
+        page: currentPage, 
+        per_page: 100  // CMS API uses per_page, not limit
+      });
+      
+      if (!response.data || !Array.isArray(response.data)) {
+        console.warn(`⚠ No data array found in page ${currentPage}, stopping pagination`);
+        break;
+      }
+      
+      allData.push(...response.data);
+      console.log(`✓ Fetched page ${currentPage}: ${response.data.length} items (total: ${allData.length})`);
+      
+      // Check if there are more pages based on CMS API response structure
+      hasMorePages = response.data.length === 100; // Simple check: if we got a full page, there might be more
+      currentPage++;
+      
+      // Rate limiting between pages
+      if (hasMorePages) {
+        await new Promise(resolve => setTimeout(resolve, 200));
+      }
+      
+    } catch (error) {
+      console.error(`❌ Failed to fetch page ${currentPage}: ${error}`);
+      
+      // If we got some data, return what we have
+      if (allData.length > 0) {
+        console.warn(`⚠ Continuing with ${allData.length} items from successful pages`);
+        break;
+      }
+      
+      throw error;
+    }
+  }
+  
+  console.log(`📄 Pagination completed: ${allData.length} total items from ${currentPage - 1} pages`);
+  return allData;
+}
+
+/**
+ * Enhanced production-ready CMS policy fetcher with full pagination and robust error handling
  */
 async function fetchCMSPolicyUpdates(): Promise<InsertPolicySource[]> {
   const policies: InsertPolicySource[] = [];
   
   try {
-    console.log('Fetching real CMS LCD policies...');
+    console.log('🔄 Fetching real CMS LCD policies with enhanced production client...');
 
-    // Step 1: Fetch all final LCDs 
-    const finalLCDs = await fetchCMSApiData(CMS_LCD_API.finalLCDsEndpoint);
+    // Step 1: Fetch ALL final LCDs using pagination
+    const allFinalLCDs = await fetchAllPagesFromCMS(CMS_LCD_API.finalLCDsEndpoint);
     
-    if (!finalLCDs?.data || !Array.isArray(finalLCDs.data)) {
+    if (allFinalLCDs.length === 0) {
       console.warn('No LCD data received from CMS API');
-      return policies;
+      throw new Error('No LCDs available from CMS API');
     }
 
-    console.log(`Found ${finalLCDs.data.length} LCDs from CMS API`);
+    console.log(`Found ${allFinalLCDs.length} total final LCDs across all pages`);
 
-    // Step 2: Process each LCD and filter for wound care relevance
+    // Step 2: Process each LCD with controlled concurrency and robust error handling
     let processedCount = 0;
     let relevantCount = 0;
-
-    for (const lcdSummary of finalLCDs.data) {
-      try {
-        processedCount++;
-        
-        // Get detailed LCD data
-        const lcdDetails = await fetchCMSApiData(
-          CMS_LCD_API.lcdDataEndpoint,
-          { document_id: lcdSummary.document_id }
-        );
-
-        if (!lcdDetails?.data || lcdDetails.data.length === 0) {
-          continue;
-        }
-
-        const lcdData = lcdDetails.data[0];
-        
-        // Extract and clean content
-        const title = lcdData.title || lcdSummary.title || 'Untitled LCD';
-        const rawContent = lcdData.policy_text || lcdData.description || '';
-        const cleanContent = extractTextFromHTML(rawContent);
-        
-        // Check if this LCD is relevant to wound care
-        if (!isWoundCareRelevant(title, cleanContent)) {
-          continue;
-        }
-
-        relevantCount++;
-
-        // Get contractor information to map to MAC region
-        let macRegion = 'Unknown MAC';
-        if (lcdData.contractor_id) {
-          try {
-            const contractorData = await fetchCMSApiData(
-              CMS_LCD_API.contractorEndpoint,
-              { contractor_id: lcdData.contractor_id }
-            );
-            
-            if (contractorData?.data && contractorData.data.length > 0) {
-              const contractorName = contractorData.data[0].contractor_name;
-              // Map contractor name to our display format
-              macRegion = findMACRegionFromContractor(contractorName) || contractorName;
-            }
-          } catch (error) {
-            console.warn(`Failed to fetch contractor data for ${lcdData.contractor_id}:`, error);
+    const CONCURRENT_LIMIT = 3; // Limit concurrent requests to be respectful to CMS API
+    
+    // Process in batches to avoid overwhelming the API
+    for (let i = 0; i < allFinalLCDs.length; i += CONCURRENT_LIMIT) {
+      const batch = allFinalLCDs.slice(i, i + CONCURRENT_LIMIT);
+      
+      const batchPromises = batch.map(async (lcdSummary) => {
+        try {
+          // Validate required fields from CMS response
+          if (!lcdSummary.document_id) {
+            console.warn(`⚠ Missing document_id for LCD: ${JSON.stringify(lcdSummary)}`);
+            return null;
           }
+          
+          // Get detailed LCD data with retry logic
+          const lcdDetails = await fetchCMSApiDataWithRetry(
+            CMS_LCD_API.lcdDataEndpoint,
+            { document_id: lcdSummary.document_id }
+          );
+
+          if (!lcdDetails?.data || !Array.isArray(lcdDetails.data) || lcdDetails.data.length === 0) {
+            console.warn(`⚠ No detailed data found for LCD ${lcdSummary.document_id}`);
+            return null;
+          }
+
+          const lcdData = lcdDetails.data[0];
+          
+          // Validate critical fields
+          if (!lcdData.title && !lcdSummary.title) {
+            console.warn(`⚠ No title found for LCD ${lcdSummary.document_id}`);
+            return null;
+          }
+          
+          // Extract and clean content
+          const title = (lcdData.title || lcdSummary.title || 'Untitled LCD').trim();
+          const rawContent = lcdData.policy_text || lcdData.description || '';
+          const cleanContent = extractTextFromHTML(rawContent);
+          
+          // Check if this LCD is relevant to wound care
+          if (!isWoundCareRelevant(title, cleanContent)) {
+            return null;
+          }
+
+          // Get contractor information to map to MAC region
+          let macRegion = 'Unknown MAC';
+          if (lcdData.contractor_id) {
+            try {
+              const contractorData = await fetchCMSApiDataWithRetry(
+                CMS_LCD_API.contractorEndpoint,
+                { contractor_id: lcdData.contractor_id }
+              );
+              
+              if (contractorData?.data && Array.isArray(contractorData.data) && contractorData.data.length > 0) {
+                const contractorName = contractorData.data[0].contractor_name;
+                // Case-insensitive MAC region mapping
+                macRegion = findMACRegionFromContractor(contractorName?.trim()) || contractorName || 'Unknown MAC';
+              }
+            } catch (error) {
+              const errorMessage = error instanceof Error ? error.message : String(error);
+              console.warn(`❌ Failed to fetch contractor data for ${lcdData.contractor_id}:`, errorMessage);
+              // Continue without contractor info
+            }
+          }
+
+          // Create policy record with validation
+          const effectiveDate = lcdData.effective_date || lcdSummary.effective_date;
+          const policy: InsertPolicySource = {
+            mac: macRegion,
+            lcdId: lcdSummary.document_id,
+            title: title,
+            url: lcdSummary.url || `https://www.cms.gov/medicare-coverage-database/view/lcd.aspx?lcdid=${lcdSummary.document_id}`,
+            effectiveDate: effectiveDate ? new Date(effectiveDate) : new Date(),
+            status: (lcdData.status === 'Active' || lcdSummary.status === 'Active') ? 'active' : 'inactive',
+            content: cleanContent
+          };
+
+          console.log(`✓ Processed LCD ${policy.lcdId}: ${policy.title.substring(0, 50)}... (${policy.mac})`);
+          return policy;
+
+        } catch (error) {
+          const errorMessage = error instanceof Error ? error.message : String(error);
+          console.error(`❌ Error processing LCD ${lcdSummary.document_id}:`, errorMessage);
+          return null;
         }
-
-        // Create policy record
-        const policy: InsertPolicySource = {
-          mac: macRegion,
-          lcdId: lcdSummary.document_id || lcdData.document_id,
-          title: title,
-          url: lcdSummary.url || `https://www.cms.gov/medicare-coverage-database/view/lcd.aspx?lcdid=${lcdSummary.document_id}`,
-          effectiveDate: new Date(lcdData.effective_date || lcdSummary.effective_date || new Date()),
-          status: lcdData.status === 'Active' ? 'active' : 'inactive',
-          content: cleanContent
-        };
-
-        policies.push(policy);
-        
-        console.log(`✓ Added LCD ${policy.lcdId}: ${policy.title.substring(0, 60)}...`);
-
-        // Add small delay to avoid overwhelming the API
-        if (processedCount % 10 === 0) {
-          await new Promise(resolve => setTimeout(resolve, 100));
+      });
+      
+      // Wait for batch to complete
+      const batchResults = await Promise.all(batchPromises);
+      
+      // Add successful results
+      batchResults.forEach(result => {
+        if (result) {
+          policies.push(result);
+          relevantCount++;
         }
-
-      } catch (error) {
-        console.error(`Error processing LCD ${lcdSummary.document_id}:`, error);
-        continue;
+      });
+      
+      processedCount += batch.length;
+      
+      // Log progress every 50 processed
+      if (processedCount % 50 === 0) {
+        console.log(`📈 Progress: ${processedCount}/${allFinalLCDs.length} LCDs processed, ${relevantCount} relevant found`);
+      }
+      
+      // Rate limiting between batches
+      if (i + CONCURRENT_LIMIT < allFinalLCDs.length) {
+        await new Promise(resolve => setTimeout(resolve, 500));
       }
     }
 
-    console.log(`CMS API Integration Results:`);
-    console.log(`- Total LCDs processed: ${processedCount}`);
-    console.log(`- Wound care relevant LCDs found: ${relevantCount}`);
-    console.log(`- Policies ready for database: ${policies.length}`);
+    console.log(`✅ Enhanced CMS API Integration Results:`);
+    console.log(`   • Total LCDs processed: ${processedCount}`);
+    console.log(`   • Wound care relevant LCDs found: ${relevantCount}`);
+    console.log(`   • Policies ready for database: ${policies.length}`);
+
+    if (policies.length === 0) {
+      console.warn('⚠ No relevant policies found, falling back to simulated data');
+      throw new Error('No relevant policies found from CMS API');
+    }
 
     return policies;
 
   } catch (error) {
-    console.error('Critical error in CMS API integration:', error);
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    console.error('❌ Critical error in enhanced CMS API integration:', errorMessage);
     
-    // Fallback to limited simulated data if API fails
-    console.warn('Falling back to simulated data due to API error');
+    // Fallback to simulated data with clear warning
+    console.warn('🔄 Falling back to simulated data due to CMS API error');
     return await fetchFallbackPolicyData();
   }
 }
 
 /**
- * Maps CMS contractor names to our MAC region display names
+ * Maps CMS contractor names to our MAC region display names with case-insensitive matching
  */
 function findMACRegionFromContractor(contractorName: string): string | null {
+  if (!contractorName) return null;
+  
+  // Normalize input: trim whitespace, convert to lowercase, remove extra spaces
+  const normalizedInput = contractorName.trim().toLowerCase().replace(/\s+/g, ' ');
+  
   for (const [macRegion, cmsName] of Object.entries(MAC_REGION_MAPPING)) {
-    if (contractorName.includes(cmsName) || cmsName.includes(contractorName)) {
+    // Normalize the mapping value for comparison
+    const normalizedCmsName = cmsName.toLowerCase().replace(/\s+/g, ' ');
+    
+    // Check for bidirectional substring matching (case-insensitive)
+    if (normalizedInput.includes(normalizedCmsName) || normalizedCmsName.includes(normalizedInput)) {
       return macRegion;
     }
   }
+  
+  // If no exact match, try partial matching on key terms
+  const keyTerms = normalizedInput.split(' ').filter(term => term.length > 3);
+  
+  for (const [macRegion, cmsName] of Object.entries(MAC_REGION_MAPPING)) {
+    const normalizedCmsName = cmsName.toLowerCase();
+    
+    // Check if at least 2 key terms match
+    const matchingTerms = keyTerms.filter(term => normalizedCmsName.includes(term));
+    if (matchingTerms.length >= 2) {
+      console.log(`📍 Partial match found: "${contractorName}" -> "${macRegion}" (matched: ${matchingTerms.join(', ')})`);
+      return macRegion;
+    }
+  }
+  
+  console.warn(`⚠ No MAC region mapping found for contractor: "${contractorName}"`);
   return null;
 }
 
