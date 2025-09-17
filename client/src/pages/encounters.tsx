@@ -22,6 +22,8 @@ export default function Encounters() {
   const [searchTerm, setSearchTerm] = useState("");
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
   const [selectedPatientId, setSelectedPatientId] = useState<string>("");
+  const [isEditDialogOpen, setIsEditDialogOpen] = useState(false);
+  const [selectedEncounter, setSelectedEncounter] = useState<any>(null);
 
   // Redirect to home if not authenticated
   useEffect(() => {
@@ -111,6 +113,45 @@ export default function Encounters() {
       });
     },
   });
+
+  const updateEncounterMutation = useMutation({
+    mutationFn: async (encounterData: any) => {
+      await apiRequest("PUT", `/api/encounters/${selectedEncounter.id}`, encounterData);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/encounters"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/patients"] });
+      setIsEditDialogOpen(false);
+      setSelectedEncounter(null);
+      toast({
+        title: "Success",
+        description: "Encounter updated successfully",
+      });
+    },
+    onError: (error) => {
+      if (isUnauthorizedError(error)) {
+        toast({
+          title: "Unauthorized",
+          description: "You are logged out. Logging in again...",
+          variant: "destructive",
+        });
+        setTimeout(() => {
+          window.location.href = "/api/login";
+        }, 500);
+        return;
+      }
+      toast({
+        title: "Error",
+        description: "Failed to update encounter",
+        variant: "destructive",
+      });
+    },
+  });
+
+  const handleViewEncounter = (encounter: any) => {
+    setSelectedEncounter(encounter);
+    setIsEditDialogOpen(true);
+  };
 
   if (isLoading || !isAuthenticated || !currentTenant) {
     return (
@@ -202,6 +243,24 @@ export default function Encounters() {
                     patientId={selectedPatientId}
                     onSubmit={(data) => createEncounterMutation.mutate(data)}
                     isLoading={createEncounterMutation.isPending}
+                  />
+                )}
+              </DialogContent>
+            </Dialog>
+
+            {/* Edit Encounter Dialog */}
+            <Dialog open={isEditDialogOpen} onOpenChange={setIsEditDialogOpen}>
+              <DialogContent className="sm:max-w-4xl max-h-[90vh] overflow-y-auto">
+                <DialogHeader>
+                  <DialogTitle>Edit Encounter</DialogTitle>
+                </DialogHeader>
+                {selectedEncounter && (
+                  <EncounterForm
+                    patientId={selectedEncounter.patientId}
+                    encounter={selectedEncounter}
+                    mode="edit"
+                    onSubmit={(data) => updateEncounterMutation.mutate(data)}
+                    isLoading={updateEncounterMutation.isPending}
                   />
                 )}
               </DialogContent>
@@ -355,8 +414,13 @@ export default function Encounters() {
                           {encounter.woundDetails?.duration || 'Not specified'}
                         </TableCell>
                         <TableCell>
-                          <Button variant="outline" size="sm" data-testid={`button-view-encounter-${encounter.id}`}>
-                            View
+                          <Button 
+                            variant="outline" 
+                            size="sm" 
+                            onClick={() => handleViewEncounter(encounter)}
+                            data-testid={`button-view-encounter-${encounter.id}`}
+                          >
+                            View Details
                           </Button>
                         </TableCell>
                       </TableRow>

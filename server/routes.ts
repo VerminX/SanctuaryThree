@@ -393,6 +393,77 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Update encounter
+  app.put('/api/encounters/:encounterId', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const { encounterId } = req.params;
+      
+      const encounter = await storage.getEncounter(encounterId);
+      if (!encounter) {
+        return res.status(404).json({ message: "Encounter not found" });
+      }
+
+      const patient = await storage.getPatient(encounter.patientId);
+      if (!patient) {
+        return res.status(404).json({ message: "Patient not found" });
+      }
+
+      // Verify user has access to tenant
+      const userTenantRole = await storage.getUserTenantRole(userId, patient.tenantId);
+      if (!userTenantRole) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+
+      // Custom validation schema that handles string dates and plain notes
+      const encounterRequestSchema = z.object({
+        date: z.string().or(z.date()).transform((val) => {
+          return typeof val === 'string' ? new Date(val) : val;
+        }),
+        notes: z.array(z.string()),
+        woundDetails: z.any(), // JSONB field
+        conservativeCare: z.any(), // JSONB field
+        infectionStatus: z.string().optional(),
+        comorbidities: z.any().optional(), // JSONB field
+        attachmentMetadata: z.any().optional(), // JSONB field
+      });
+      
+      const { notes, ...encounterData } = encounterRequestSchema.parse(req.body);
+      
+      // Encrypt encounter notes
+      const encryptedNotes = encryptEncounterNotes(notes);
+      
+      // Update encounter
+      const updatedEncounter = await storage.updateEncounter(encounterId, {
+        ...encounterData,
+        encryptedNotes,
+      });
+
+      // Log audit event
+      await storage.createAuditLog({
+        tenantId: patient.tenantId,
+        userId,
+        action: 'UPDATE_ENCOUNTER',
+        entity: 'Encounter',
+        entityId: encounterId,
+        ipAddress: req.ip,
+        userAgent: req.get('User-Agent'),
+        previousHash: '',
+      });
+
+      // Track recent activity
+      await trackActivity(patient.tenantId, userId, 'Updated encounter', 'Encounter', encounterId, 'Patient Encounter');
+
+      res.json({
+        ...updatedEncounter,
+        notes: decryptEncounterNotes(updatedEncounter.encryptedNotes as string[]),
+      });
+    } catch (error) {
+      console.error("Error updating encounter:", error);
+      res.status(500).json({ message: "Failed to update encounter" });
+    }
+  });
+
   // Eligibility analysis routes
   app.post('/api/encounters/:encounterId/analyze-eligibility', isAuthenticated, async (req: any, res) => {
     try {

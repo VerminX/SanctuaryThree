@@ -9,7 +9,7 @@ import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Plus, X } from "lucide-react";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 
 const encounterFormSchema = z.object({
   date: z.string().min(1, "Encounter date is required"),
@@ -45,15 +45,48 @@ interface EncounterFormProps {
   onSubmit: (data: EncounterFormData) => void;
   isLoading: boolean;
   patientId: string;
+  encounter?: any; // For editing mode
+  mode?: 'create' | 'edit';
 }
 
-export default function EncounterForm({ onSubmit, isLoading, patientId }: EncounterFormProps) {
-  const [notes, setNotes] = useState<string[]>([""]);
-  const [comorbidities, setComorbidities] = useState<string[]>([]);
+export default function EncounterForm({ onSubmit, isLoading, patientId, encounter, mode = 'create' }: EncounterFormProps) {
+  const isEditing = mode === 'edit' && encounter;
+  
+  // Initialize notes and comorbidities from encounter data if editing
+  const [notes, setNotes] = useState<string[]>(
+    isEditing && encounter.notes ? encounter.notes : [""]
+  );
+  const [comorbidities, setComorbidities] = useState<string[]>(
+    isEditing && encounter.comorbidities ? encounter.comorbidities : []
+  );
 
   const form = useForm<EncounterFormData>({
     resolver: zodResolver(encounterFormSchema),
-    defaultValues: {
+    defaultValues: isEditing ? {
+      date: new Date(encounter.date).toISOString().split('T')[0],
+      notes: encounter.notes || [""],
+      woundDetails: encounter.woundDetails || {
+        type: undefined,
+        location: "",
+        measurements: {
+          length: "",
+          width: "",
+          depth: "",
+        },
+        duration: "",
+      },
+      conservativeCare: encounter.conservativeCare || {
+        offloading: false,
+        compression: false,
+        debridement: false,
+        moistureBalance: false,
+        infectionControl: false,
+        duration: "",
+        details: "",
+      },
+      infectionStatus: encounter.infectionStatus || "",
+      comorbidities: encounter.comorbidities || [],
+    } : {
       date: new Date().toISOString().split('T')[0],
       notes: [""],
       woundDetails: {
@@ -79,6 +112,26 @@ export default function EncounterForm({ onSubmit, isLoading, patientId }: Encoun
       comorbidities: [],
     },
   });
+
+  // Update form when encounter data changes (for editing mode)
+  useEffect(() => {
+    if (isEditing && encounter) {
+      const encounterNotes = encounter.notes || [""];
+      const encounterComorbidities = encounter.comorbidities || [];
+      
+      setNotes(encounterNotes);
+      setComorbidities(encounterComorbidities);
+      
+      form.reset({
+        date: new Date(encounter.date).toISOString().split('T')[0],
+        notes: encounterNotes,
+        woundDetails: encounter.woundDetails,
+        conservativeCare: encounter.conservativeCare,
+        infectionStatus: encounter.infectionStatus || "",
+        comorbidities: encounterComorbidities,
+      });
+    }
+  }, [encounter, isEditing, form]);
 
   const addNote = () => {
     const newNotes = [...notes, ""];
@@ -399,7 +452,7 @@ export default function EncounterForm({ onSubmit, isLoading, patientId }: Encoun
             disabled={isLoading}
             data-testid="button-submit-encounter"
           >
-            {isLoading ? "Creating..." : "Create Encounter"}
+            {isLoading ? (isEditing ? "Updating..." : "Creating...") : (isEditing ? "Update Encounter" : "Create Encounter")}
           </Button>
         </div>
       </form>
