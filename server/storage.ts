@@ -10,6 +10,7 @@ import {
   documentVersions,
   documentApprovals,
   documentSignatures,
+  recentActivities,
   auditLogs,
   type User,
   type UpsertUser,
@@ -33,6 +34,8 @@ import {
   type DocumentApproval,
   type InsertDocumentSignature,
   type DocumentSignature,
+  type InsertRecentActivity,
+  type RecentActivity,
   type InsertAuditLog,
   type AuditLog,
 } from "@shared/schema";
@@ -119,6 +122,10 @@ export interface IStorage {
   createDocumentSignature(signature: InsertDocumentSignature): Promise<DocumentSignature>;
   getDocumentSignatures(documentId: string): Promise<DocumentSignature[]>;
   getDocumentSignature(signatureId: string): Promise<DocumentSignature | undefined>;
+  
+  // Recent Activity operations
+  createRecentActivity(activity: InsertRecentActivity): Promise<RecentActivity>;
+  getRecentActivitiesByTenant(tenantId: string, limit?: number): Promise<RecentActivity[]>;
   
   // Audit operations
   createAuditLog(log: InsertAuditLog): Promise<AuditLog>;
@@ -604,6 +611,21 @@ export class DatabaseStorage implements IStorage {
       ...signature,
       signatureData: signature.signatureData ? decryptSignatureData(signature.signatureData) : null,
     };
+  }
+
+  // Recent Activity operations
+  async createRecentActivity(activity: InsertRecentActivity): Promise<RecentActivity> {
+    const [newActivity] = await db.insert(recentActivities).values(activity).returning();
+    return newActivity;
+  }
+
+  async getRecentActivitiesByTenant(tenantId: string, limit: number = 10): Promise<RecentActivity[]> {
+    return await db
+      .select()
+      .from(recentActivities)
+      .where(eq(recentActivities.tenantId, tenantId))
+      .orderBy(desc(recentActivities.createdAt))
+      .limit(limit);
   }
 
   // Audit operations

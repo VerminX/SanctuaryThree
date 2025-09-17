@@ -20,6 +20,30 @@ import { generateDocument } from "./services/documentGenerator";
 import { performPolicyUpdate, scheduledPolicyUpdate, getPolicyUpdateStatus } from "./services/policyUpdater";
 import { z } from "zod";
 
+// Helper function to track user activity (HIPAA-compliant, no PHI in descriptions)
+async function trackActivity(
+  tenantId: string,
+  userId: string,
+  action: string,
+  entityType: string,
+  entityId: string,
+  entityName?: string
+): Promise<void> {
+  try {
+    await storage.createRecentActivity({
+      tenantId,
+      userId,
+      action,
+      entityType,
+      entityId,
+      entityName: entityName || `${entityType} ${entityId.substring(0, 8)}...`
+    });
+  } catch (error) {
+    console.error('Failed to track activity:', error);
+    // Don't throw - activity tracking shouldn't break main functionality
+  }
+}
+
 export async function registerRoutes(app: Express): Promise<Server> {
   // Auth middleware
   await setupAuth(app);
@@ -154,6 +178,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         userAgent: req.get('User-Agent'),
         previousHash: '',
       });
+
+      // Track recent activity
+      await trackActivity(tenantId, userId, 'Created new patient', 'Patient', patient.id, 'New Patient');
 
       // Return patient data with decrypted info for display
       const decryptedData = decryptPatientData(patient);
@@ -321,6 +348,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         userAgent: req.get('User-Agent'),
         previousHash: '',
       });
+
+      // Track recent activity
+      await trackActivity(patient.tenantId, userId, 'Created new encounter', 'Encounter', encounter.id, 'Patient Encounter');
 
       res.json({
         ...encounter,
@@ -520,6 +550,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         userAgent: req.get('User-Agent'),
         previousHash: '',
       });
+
+      // Track recent activity
+      await trackActivity(patient.tenantId, userId, `Generated ${type} document`, 'Document', generatedDocument.id, `${type} Document`);
 
       res.json(generatedDocument);
     } catch (error) {
@@ -925,12 +958,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const generatedLetters = 0; // Would need to implement document count
       const policyUpdates = 1; // Placeholder
 
+      // Get recent activities for this tenant
+      const recentActivitiesData = await storage.getRecentActivitiesByTenant(tenantId, 10);
+      const recentActivity = recentActivitiesData.map(activity => ({
+        action: activity.action,
+        timestamp: activity.createdAt
+      }));
+
       res.json({
         activePatients,
         pendingEligibility, 
         generatedLetters,
         policyUpdates,
-        recentActivity: []
+        recentActivity
       });
     } catch (error) {
       console.error("Error fetching dashboard stats:", error);

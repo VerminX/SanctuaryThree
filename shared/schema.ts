@@ -172,6 +172,20 @@ export const documentSignatures = pgTable("document_signatures", {
   signedAt: timestamp("signed_at").defaultNow(),
 });
 
+// Recent Activities
+export const recentActivities = pgTable("recent_activities", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: uuid("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
+  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  action: varchar("action", { length: 255 }).notNull(),
+  entityType: varchar("entity_type", { length: 100 }).notNull(), // Patient, Document, Encounter, etc.
+  entityId: varchar("entity_id", { length: 100 }).notNull(),
+  entityName: varchar("entity_name", { length: 255 }), // Safe, non-PHI description for display
+  createdAt: timestamp("created_at").defaultNow(),
+}, (table) => [
+  index("idx_recent_activities_tenant_created").on(table.tenantId, table.createdAt)
+]);
+
 // Audit Logs
 export const auditLogs = pgTable("audit_logs", {
   id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
@@ -242,6 +256,11 @@ export const documentSignaturesRelations = relations(documentSignatures, ({ one 
   version: one(documentVersions, { fields: [documentSignatures.versionId], references: [documentVersions.id] }),
 }));
 
+export const recentActivitiesRelations = relations(recentActivities, ({ one }) => ({
+  tenant: one(tenants, { fields: [recentActivities.tenantId], references: [tenants.id] }),
+  user: one(users, { fields: [recentActivities.userId], references: [users.id] }),
+}));
+
 export const auditLogsRelations = relations(auditLogs, ({ one }) => ({
   tenant: one(tenants, { fields: [auditLogs.tenantId], references: [tenants.id] }),
   user: one(users, { fields: [auditLogs.userId], references: [users.id] }),
@@ -258,6 +277,7 @@ export const insertDocumentSchema = createInsertSchema(documents).omit({ id: tru
 export const insertDocumentVersionSchema = createInsertSchema(documentVersions).omit({ id: true, createdAt: true });
 export const insertDocumentApprovalSchema = createInsertSchema(documentApprovals).omit({ id: true, createdAt: true });
 export const insertDocumentSignatureSchema = createInsertSchema(documentSignatures).omit({ id: true, signedAt: true });
+export const insertRecentActivitySchema = createInsertSchema(recentActivities).omit({ id: true, createdAt: true });
 export const insertAuditLogSchema = createInsertSchema(auditLogs).omit({ id: true, timestamp: true, currentHash: true });
 
 // Types
@@ -283,5 +303,7 @@ export type InsertDocumentApproval = z.infer<typeof insertDocumentApprovalSchema
 export type DocumentApproval = typeof documentApprovals.$inferSelect;
 export type InsertDocumentSignature = z.infer<typeof insertDocumentSignatureSchema>;
 export type DocumentSignature = typeof documentSignatures.$inferSelect;
+export type InsertRecentActivity = z.infer<typeof insertRecentActivitySchema>;
+export type RecentActivity = typeof recentActivities.$inferSelect;
 export type InsertAuditLog = z.infer<typeof insertAuditLogSchema>;
 export type AuditLog = typeof auditLogs.$inferSelect;
