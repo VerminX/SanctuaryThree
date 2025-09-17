@@ -1,5 +1,6 @@
 import { storage } from '../storage';
 import { InsertPolicySource, PolicySource } from '@shared/schema';
+import * as cheerio from 'cheerio';
 
 interface PolicyChange {
   lcdId: string;
@@ -59,32 +60,257 @@ const MAC_DATA_SOURCES = [
   }
 ];
 
-// CMS LCD Database API endpoints  
+// CMS LCD Database API endpoints - Real API  
 const CMS_LCD_API = {
-  baseUrl: "https://www.cms.gov/medicare-coverage-database/api",
-  searchEndpoint: "/search/lcds",
-  detailEndpoint: "/lcd"
+  baseUrl: "https://api.coverage.cms.gov",
+  finalLCDsEndpoint: "/v1/reports/local-coverage-final-lcds",
+  proposedLCDsEndpoint: "/v1/reports/local-coverage-proposed-lcds", 
+  articlesEndpoint: "/v1/reports/local-coverage-articles",
+  lcdDataEndpoint: "/v1/data/lcd",
+  contractorEndpoint: "/v1/data/contractor",
+  statesEndpoint: "/v1/metadata/states"
 };
 
 /**
- * Fetches policy updates from CMS LCD database for wound care related policies
+ * MAC region normalization map - maps display names to canonical CMS contractor names
+ */
+const MAC_REGION_MAPPING: Record<string, string> = {
+  "Noridian Healthcare Solutions (MAC J-E)": "Noridian Healthcare Solutions LLC",
+  "Noridian Healthcare Solutions (MAC J-F)": "Noridian Healthcare Solutions LLC",
+  "CGS Administrators (MAC J-H)": "CGS Administrators, LLC",
+  "CGS Administrators (MAC J-15)": "CGS Administrators, LLC", 
+  "Novitas Solutions (MAC J-L)": "Novitas Solutions, Inc.",
+  "Novitas Solutions (MAC J-12)": "Novitas Solutions, Inc.",
+  "Palmetto GBA (MAC J-M)": "Palmetto GBA",
+  "First Coast Service Options (MAC J-N)": "First Coast Service Options Inc.",
+  "WPS Health Solutions (MAC J-5)": "WPS Health Solutions",
+  "WPS Health Solutions (MAC J-8)": "WPS Health Solutions",
+  "Cahaba GBA (MAC J-6)": "Cahaba GBA",
+  "National Government Services (MAC J-6)": "National Government Services, Inc."
+};
+
+/**
+ * Wound care related search terms for filtering relevant LCDs
+ */
+const WOUND_CARE_SEARCH_TERMS = [
+  "skin substitute", 
+  "cellular tissue product",
+  "ctp",
+  "wound", 
+  "biologics",
+  "advanced wound care",
+  "tissue engineering",
+  "wound healing",
+  "skin graft",
+  "dermal substitute",
+  "acellular dermal matrix",
+  "bioengineered skin"
+];
+
+/**
+ * Fetches data from CMS Coverage API with error handling
+ */
+async function fetchCMSApiData(endpoint: string, params: Record<string, string> = {}): Promise<any> {
+  const url = new URL(`${CMS_LCD_API.baseUrl}${endpoint}`);
+  Object.entries(params).forEach(([key, value]) => {
+    url.searchParams.append(key, value);
+  });
+
+  console.log(`Fetching from CMS API: ${url.toString()}`);
+
+  try {
+    const response = await fetch(url.toString(), {
+      method: 'GET',
+      headers: {
+        'Accept': 'application/json',
+        'User-Agent': 'WoundCare-PreDetermination-Portal/1.0'
+      }
+    });
+
+    if (!response.ok) {
+      throw new Error(`CMS API request failed: ${response.status} ${response.statusText}`);
+    }
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error(`Error fetching from CMS API (${endpoint}):`, error);
+    throw error;
+  }
+}
+
+/**
+ * Extracts clean text content from HTML using cheerio
+ */
+function extractTextFromHTML(html: string): string {
+  if (!html || typeof html !== 'string') {
+    return '';
+  }
+
+  try {
+    const $ = cheerio.load(html);
+    
+    // Remove script and style elements
+    $('script, style, noscript').remove();
+    
+    // Get text content and clean it up
+    let text = $.text();
+    
+    // Normalize whitespace and remove extra line breaks
+    text = text
+      .replace(/\s+/g, ' ')  // Replace multiple whitespace with single space
+      .replace(/\n\s*\n/g, '\n')  // Replace multiple line breaks with single
+      .trim();
+
+    return text;
+  } catch (error) {
+    console.error('Error parsing HTML content:', error);
+    return html; // Return original if parsing fails
+  }
+}
+
+/**
+ * Checks if LCD content is relevant to wound care
+ */
+function isWoundCareRelevant(title: string, content: string): boolean {
+  const searchText = `${title} ${content}`.toLowerCase();
+  
+  return WOUND_CARE_SEARCH_TERMS.some(term => 
+    searchText.includes(term.toLowerCase())
+  );
+}
+
+/**
+ * Fetches policy updates from real CMS LCD database for wound care related policies
  */
 async function fetchCMSPolicyUpdates(): Promise<InsertPolicySource[]> {
   const policies: InsertPolicySource[] = [];
-  const searchTerms = [
-    "skin substitute", 
-    "cellular tissue product", 
-    "wound", 
-    "biologics",
-    "advanced wound care",
-    "tissue engineering"
-  ];
-
+  
   try {
-    // In a real implementation, this would make HTTP requests to CMS API
-    // For now, we'll simulate with enhanced sample data that represents real LCDs
+    console.log('Fetching real CMS LCD policies...');
+
+    // Step 1: Fetch all final LCDs 
+    const finalLCDs = await fetchCMSApiData(CMS_LCD_API.finalLCDsEndpoint);
     
-    const realWorldPolicies: InsertPolicySource[] = [
+    if (!finalLCDs?.data || !Array.isArray(finalLCDs.data)) {
+      console.warn('No LCD data received from CMS API');
+      return policies;
+    }
+
+    console.log(`Found ${finalLCDs.data.length} LCDs from CMS API`);
+
+    // Step 2: Process each LCD and filter for wound care relevance
+    let processedCount = 0;
+    let relevantCount = 0;
+
+    for (const lcdSummary of finalLCDs.data) {
+      try {
+        processedCount++;
+        
+        // Get detailed LCD data
+        const lcdDetails = await fetchCMSApiData(
+          CMS_LCD_API.lcdDataEndpoint,
+          { document_id: lcdSummary.document_id }
+        );
+
+        if (!lcdDetails?.data || lcdDetails.data.length === 0) {
+          continue;
+        }
+
+        const lcdData = lcdDetails.data[0];
+        
+        // Extract and clean content
+        const title = lcdData.title || lcdSummary.title || 'Untitled LCD';
+        const rawContent = lcdData.policy_text || lcdData.description || '';
+        const cleanContent = extractTextFromHTML(rawContent);
+        
+        // Check if this LCD is relevant to wound care
+        if (!isWoundCareRelevant(title, cleanContent)) {
+          continue;
+        }
+
+        relevantCount++;
+
+        // Get contractor information to map to MAC region
+        let macRegion = 'Unknown MAC';
+        if (lcdData.contractor_id) {
+          try {
+            const contractorData = await fetchCMSApiData(
+              CMS_LCD_API.contractorEndpoint,
+              { contractor_id: lcdData.contractor_id }
+            );
+            
+            if (contractorData?.data && contractorData.data.length > 0) {
+              const contractorName = contractorData.data[0].contractor_name;
+              // Map contractor name to our display format
+              macRegion = findMACRegionFromContractor(contractorName) || contractorName;
+            }
+          } catch (error) {
+            console.warn(`Failed to fetch contractor data for ${lcdData.contractor_id}:`, error);
+          }
+        }
+
+        // Create policy record
+        const policy: InsertPolicySource = {
+          mac: macRegion,
+          lcdId: lcdSummary.document_id || lcdData.document_id,
+          title: title,
+          url: lcdSummary.url || `https://www.cms.gov/medicare-coverage-database/view/lcd.aspx?lcdid=${lcdSummary.document_id}`,
+          effectiveDate: new Date(lcdData.effective_date || lcdSummary.effective_date || new Date()),
+          status: lcdData.status === 'Active' ? 'active' : 'inactive',
+          content: cleanContent
+        };
+
+        policies.push(policy);
+        
+        console.log(`✓ Added LCD ${policy.lcdId}: ${policy.title.substring(0, 60)}...`);
+
+        // Add small delay to avoid overwhelming the API
+        if (processedCount % 10 === 0) {
+          await new Promise(resolve => setTimeout(resolve, 100));
+        }
+
+      } catch (error) {
+        console.error(`Error processing LCD ${lcdSummary.document_id}:`, error);
+        continue;
+      }
+    }
+
+    console.log(`CMS API Integration Results:`);
+    console.log(`- Total LCDs processed: ${processedCount}`);
+    console.log(`- Wound care relevant LCDs found: ${relevantCount}`);
+    console.log(`- Policies ready for database: ${policies.length}`);
+
+    return policies;
+
+  } catch (error) {
+    console.error('Critical error in CMS API integration:', error);
+    
+    // Fallback to limited simulated data if API fails
+    console.warn('Falling back to simulated data due to API error');
+    return await fetchFallbackPolicyData();
+  }
+}
+
+/**
+ * Maps CMS contractor names to our MAC region display names
+ */
+function findMACRegionFromContractor(contractorName: string): string | null {
+  for (const [macRegion, cmsName] of Object.entries(MAC_REGION_MAPPING)) {
+    if (contractorName.includes(cmsName) || cmsName.includes(contractorName)) {
+      return macRegion;
+    }
+  }
+  return null;
+}
+
+/**
+ * Fallback function with minimal simulated data when CMS API fails
+ */
+async function fetchFallbackPolicyData(): Promise<InsertPolicySource[]> {
+  console.log('Using fallback policy data...');
+  
+  const fallbackPolicies: InsertPolicySource[] = [
       {
         mac: "Noridian Healthcare Solutions (MAC J-E)",
         lcdId: "L39764",
@@ -306,14 +532,8 @@ CONTRACTOR: Novitas Solutions (MAC J-L)
       }
     ];
 
-    policies.push(...realWorldPolicies);
-    console.log(`Fetched ${policies.length} policies from CMS LCD database simulation`);
-    
-  } catch (error) {
-    console.error('Error fetching CMS policy updates:', error);
-  }
-
-  return policies;
+    console.log(`Fetched ${fallbackPolicies.length} policies from CMS LCD database simulation`);
+    return fallbackPolicies;
 }
 
 /**
