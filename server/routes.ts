@@ -14,7 +14,6 @@ import {
   insertDocumentSignatureSchema
 } from "@shared/schema";
 import { encryptPatientData, decryptPatientData, safeDecryptPatientData, encryptEncounterNotes, decryptEncounterNotes } from "./services/encryption";
-import { analyzeEligibility, generateLetterContent } from "./services/openai";
 import { buildRAGContext } from "./services/ragService";
 import { generateDocument } from "./services/documentGenerator";
 import { performPolicyUpdate, performPolicyUpdateForMAC, scheduledPolicyUpdate, getPolicyUpdateStatus } from "./services/policyUpdater";
@@ -495,6 +494,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const decryptedNotes = decryptEncounterNotes(encounter.encryptedNotes as string[]);
 
       // Perform AI eligibility analysis
+      const { analyzeEligibility } = await import('./services/openai');
       const analysisResult = await analyzeEligibility({
         encounterNotes: decryptedNotes,
         woundDetails: encounter.woundDetails,
@@ -615,6 +615,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       // Generate letter content using AI
+      const { generateLetterContent } = await import('./services/openai');
       const decryptedPatientData = decryptPatientData(patient);
       const letterContent = await generateLetterContent(
         type,
