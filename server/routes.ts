@@ -95,6 +95,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Auth routes
   app.get('/api/auth/user', isAuthenticated, asyncHandler(async (req: any, res) => {
     const userId = req.user.claims.sub;
+    console.log(`DEBUG: Auth user ID: ${userId}`); // Temporary debug logging
     const user = await storage.getUser(userId);
     
     if (!user) {
@@ -103,11 +104,45 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
     // Get user's tenants and roles
     const tenants = await storage.getTenantsByUser(userId);
+    console.log(`DEBUG: Found ${tenants.length} tenants for user ${userId}:`, tenants.map(t => ({id: t.id, name: t.name}))); // Temporary debug logging
     
     sendSuccess(res, {
       ...user,
       tenants: tenants
     }, 'User data retrieved successfully');
+  }));
+
+  // TEMPORARY: Fix user tenant association
+  app.post('/api/auth/fix-tenant', isAuthenticated, asyncHandler(async (req: any, res) => {
+    const userId = req.user.claims.sub;
+    console.log(`DEBUG: Attempting to fix tenant for user ${userId}`);
+    
+    // Check if user already has tenants
+    const existingTenants = await storage.getTenantsByUser(userId);
+    if (existingTenants.length > 0) {
+      return sendSuccess(res, { message: 'User already has tenant access', tenants: existingTenants }, 'No fix needed');
+    }
+    
+    // Get the first available tenant
+    const firstTenant = await storage.db.select().from(storage.tenants).limit(1);
+    if (firstTenant.length === 0) {
+      throw createError.notFound('No tenants available', req.correlationId);
+    }
+    
+    // Associate user with the first tenant as Admin
+    await storage.addUserToTenant({
+      userId,
+      tenantId: firstTenant[0].id,
+      role: 'Admin',
+      isActive: true,
+    });
+    
+    console.log(`DEBUG: Successfully associated user ${userId} with tenant ${firstTenant[0].id} (${firstTenant[0].name})`);
+    
+    sendSuccess(res, { 
+      message: 'Successfully associated user with tenant',
+      tenant: firstTenant[0]
+    }, 'Tenant association fixed');
   }));
 
   // Tenant routes
