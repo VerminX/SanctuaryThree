@@ -71,7 +71,7 @@ async function upsertUser(
  * SECURITY FIX: Create or find user using email-based canonicalization
  * This ensures stable user identity across browser sessions and Replit Auth ID changes
  */
-async function upsertUserWithEmailCanonical(claims: any) {
+export async function upsertUserWithEmailCanonical(claims: any) {
   // Verify required claims
   if (!claims.email) {
     throw new Error('Email claim is required for user authentication');
