@@ -20,7 +20,16 @@ import { generateDocument } from "./services/documentGenerator";
 import { performPolicyUpdate, performPolicyUpdateForMAC, scheduledPolicyUpdate, getPolicyUpdateStatus } from "./services/policyUpdater";
 import { z } from "zod";
 import { asyncHandler, createError, sendSuccess } from "./middleware/errorMiddleware";
-import { AuthenticationError, AuthorizationError, ValidationError, DatabaseError } from "./services/errorManager";
+import { 
+  AppError, 
+  ErrorCategory, 
+  ErrorSeverity, 
+  errorLogger,
+  AuthenticationError, 
+  AuthorizationError, 
+  ValidationError, 
+  DatabaseError 
+} from "./services/errorManager";
 
 // Helper function to track user activity (HIPAA-compliant, no PHI in descriptions)
 async function trackActivity(
@@ -1477,6 +1486,87 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Client-side error reporting endpoint (requires authentication)
+  app.post('/api/errors/client', isAuthenticated, asyncHandler(async (req: any, res) => {
+    const userId = req.user.claims.sub;
+    
+    // Validate request body to prevent malicious payloads
+    const clientErrorSchema = z.object({
+      error: z.object({
+        name: z.string().max(100),
+        message: z.string().max(500),
+        stack: z.string().max(2000).optional()
+      }).optional(),
+      errorInfo: z.object({
+        componentStack: z.string().max(1000).optional()
+      }).optional(),
+      level: z.enum(['global', 'page', 'component']).optional(),
+      componentName: z.string().max(100).optional(),
+      errorId: z.string().max(50).optional(),
+      timestamp: z.string().optional(),
+      userAgent: z.string().max(200).optional(),
+      url: z.string().max(300).optional()
+    });
+    
+    const errorData = clientErrorSchema.parse(req.body);
+    
+    // Sanitize and limit error data for HIPAA compliance
+    const sanitizedErrorData = {
+      ...errorData,
+      // Remove potentially sensitive URL parameters
+      url: errorData.url ? sanitizeErrorUrl(errorData.url) : undefined,
+      // Truncate error messages to prevent PHI leakage
+      error: errorData.error ? {
+        ...errorData.error,
+        message: errorData.error.message?.substring(0, 200),
+        stack: undefined // Never log client stack traces in production
+      } : undefined,
+      errorInfo: undefined // Component stacks may contain PHI
+    };
+    
+    // Create a client-side error log using our centralized error system
+    const clientError = new AppError(
+      `Client-side error: ${sanitizedErrorData.error?.message || 'Unknown error'}`,
+      ErrorCategory.SYSTEM,
+      ErrorSeverity.HIGH,
+      500,
+      {
+        clientErrorData: sanitizedErrorData,
+        userAgent: req.get('User-Agent')?.substring(0, 200),
+        ip: req.ip,
+        userId,
+        source: 'CLIENT_SIDE',
+        componentName: errorData.componentName,
+        level: errorData.level
+      },
+      undefined,
+      req.correlationId
+    );
+    
+    // Log the client error with minimal context
+    errorLogger.logError(clientError, {
+      errorId: errorData.errorId,
+      sanitizedUrl: sanitizedErrorData.url,
+      timestamp: errorData.timestamp
+    });
+    
+    sendSuccess(res, { 
+      received: true, 
+      errorId: clientError.correlationId
+    }, 'Client error logged successfully');
+  }));
+
+  // Helper function to sanitize URLs for PHI compliance
+  function sanitizeErrorUrl(url: string): string {
+    if (!url) return url;
+    
+    return url
+      .replace(/\/patients\/[a-f0-9\-]{36}/gi, '/patients/[ID]')
+      .replace(/\/encounters\/[a-f0-9\-]{36}/gi, '/encounters/[ID]')
+      .replace(/\/documents\/[a-f0-9\-]{36}/gi, '/documents/[ID]')
+      .replace(/\/tenants\/[a-f0-9\-]{36}/gi, '/tenants/[ID]')
+      .replace(/\?.*/, ''); // Remove query parameters that might contain PHI
+  }
 
   const httpServer = createServer(app);
   return httpServer;
