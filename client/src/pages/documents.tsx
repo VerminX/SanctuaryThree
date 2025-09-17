@@ -47,7 +47,7 @@ export default function Documents() {
   const { data: patientsWithEligibility, isLoading: eligibilityLoading } = useQuery({
     queryKey: ["/api/patients-with-eligibility"],
     queryFn: async () => {
-      if (!patients || patients.length === 0) return [];
+      if (!patients || !Array.isArray(patients) || patients.length === 0) return [];
       
       const patientsPromises = patients.map(async (patient: any) => {
         try {
@@ -61,18 +61,25 @@ export default function Documents() {
             const encounters = await encountersResponse.json();
             
             // Get eligibility checks for each encounter
-            const checkPromises = encounters.map(async (encounter: any) => {
-              try {
-                // This would be a real API call in production
-                // For now, we'll return empty array
-                return [];
-              } catch (error) {
-                return [];
-              }
-            });
-            
-            const checkArrays = await Promise.all(checkPromises);
-            eligibilityChecks = checkArrays.flat();
+            if (Array.isArray(encounters)) {
+              const checkPromises = encounters.map(async (encounter: any) => {
+                try {
+                  // Get eligibility checks for this encounter
+                  const eligibilityResponse = await fetch(`/api/encounters/${encounter.id}/eligibility-checks`, {
+                    credentials: "include",
+                  });
+                  if (eligibilityResponse.ok) {
+                    return await eligibilityResponse.json();
+                  }
+                  return [];
+                } catch (error) {
+                  return [];
+                }
+              });
+              
+              const checkArrays = await Promise.all(checkPromises);
+              eligibilityChecks = checkArrays.flat();
+            }
           }
           
           return {
@@ -84,8 +91,8 @@ export default function Documents() {
         } catch (error) {
           return {
             id: patient.id,
-            name: `${patient.firstName} ${patient.lastName}`,
-            mrn: patient.mrn,
+            name: `${patient.firstName || ''} ${patient.lastName || ''}`,
+            mrn: patient.mrn || '',
             eligibilityChecks: [],
           };
         }
@@ -93,7 +100,7 @@ export default function Documents() {
       
       return await Promise.all(patientsPromises);
     },
-    enabled: !!patients && patients.length > 0,
+    enabled: !!patients && Array.isArray(patients) && patients.length > 0,
     retry: false,
   });
 
@@ -101,7 +108,7 @@ export default function Documents() {
   const { data: allDocuments, isLoading: documentsLoading } = useQuery({
     queryKey: ["/api/all-documents"],
     queryFn: async () => {
-      if (!patients || patients.length === 0) return [];
+      if (!patients || !Array.isArray(patients) || patients.length === 0) return [];
       
       const documentPromises = patients.map(async (patient: any) => {
         try {
@@ -110,11 +117,11 @@ export default function Documents() {
           });
           if (response.ok) {
             const documents = await response.json();
-            return documents.map((doc: any) => ({
+            return Array.isArray(documents) ? documents.map((doc: any) => ({
               ...doc,
-              patientName: `${patient.firstName} ${patient.lastName}`,
-              patientMrn: patient.mrn,
-            }));
+              patientName: `${patient.firstName || ''} ${patient.lastName || ''}`,
+              patientMrn: patient.mrn || '',
+            })) : [];
           }
           return [];
         } catch (error) {
@@ -123,9 +130,9 @@ export default function Documents() {
       });
       
       const documentArrays = await Promise.all(documentPromises);
-      return documentArrays.flat().sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+      return documentArrays.flat().sort((a: any, b: any) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
     },
-    enabled: !!patients && patients.length > 0,
+    enabled: !!patients && Array.isArray(patients) && patients.length > 0,
     retry: false,
   });
 

@@ -431,6 +431,36 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Get eligibility checks for an encounter
+  app.get('/api/encounters/:encounterId/eligibility-checks', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const { encounterId } = req.params;
+      
+      const encounter = await storage.getEncounter(encounterId);
+      if (!encounter) {
+        return res.status(404).json({ message: "Encounter not found" });
+      }
+
+      const patient = await storage.getPatient(encounter.patientId);
+      if (!patient) {
+        return res.status(404).json({ message: "Patient not found" });
+      }
+
+      // Verify user has access to tenant
+      const userTenantRole = await storage.getUserTenantRole(userId, patient.tenantId);
+      if (!userTenantRole) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+
+      const eligibilityChecks = await storage.getEligibilityChecksByEncounter(encounterId);
+      res.json(eligibilityChecks);
+    } catch (error) {
+      console.error("Error fetching eligibility checks:", error);
+      res.status(500).json({ message: "Failed to fetch eligibility checks" });
+    }
+  });
+
   // Document generation routes
   app.post('/api/patients/:patientId/documents', isAuthenticated, async (req: any, res) => {
     try {
