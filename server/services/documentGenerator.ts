@@ -1,4 +1,3 @@
-import { Document } from 'react-pdf';
 import { Document as DocxDocument, Packer, Paragraph, TextRun, HeadingLevel } from 'docx';
 import { storage } from '../storage';
 import { EligibilityCheck, Patient, Tenant } from '@shared/schema';
@@ -65,8 +64,8 @@ export async function generateDocument(request: DocumentGenerationRequest): Prom
       eligibilityCheck
     });
 
-    // Generate PDF (using a simple text-based approach for now)
-    await generatePdfDocument(content, pdfPath, {
+    // Generate PDF placeholder (real PDF generation requires additional setup like Puppeteer)
+    await generatePdfPlaceholder(content, pdfPath, {
       patient: patientData,
       tenant,
       type,
@@ -207,7 +206,7 @@ async function generateDocxDocument(
   fs.writeFileSync(filePath, buffer);
 }
 
-async function generatePdfDocument(
+async function generatePdfPlaceholder(
   content: string,
   filePath: string,
   context: {
@@ -217,8 +216,8 @@ async function generatePdfDocument(
     eligibilityCheck: EligibilityCheck;
   }
 ): Promise<void> {
-  // For now, create a simple text file as PDF generation requires additional setup
-  // In production, you would use a proper PDF library like puppeteer or react-pdf
+  // PDF generation placeholder - requires additional setup like Puppeteer, jsPDF, or html-pdf
+  // In production, implement proper PDF generation with libraries like puppeteer
   
   const { patient, tenant, type, eligibilityCheck } = context;
   
