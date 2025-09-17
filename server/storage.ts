@@ -40,7 +40,7 @@ import {
   type AuditLog,
 } from "@shared/schema";
 import { db } from "./db";
-import { eq, and, desc, asc } from "drizzle-orm";
+import { eq, and, desc, asc, or, lte, gte, sql, inArray } from "drizzle-orm";
 import crypto from "crypto";
 import { 
   encryptSignatureData, 
@@ -85,6 +85,12 @@ export interface IStorage {
   getAllPolicySources(): Promise<PolicySource[]>;
   updatePolicySource(id: string, policy: Partial<InsertPolicySource>): Promise<PolicySource>;
   updatePolicySourceStatus(id: string, status: string): Promise<PolicySource>;
+  
+  // Enhanced policy operations for time-aware status management
+  getCurrentAndFuturePoliciesByMAC(mac: string, daysAhead?: number): Promise<PolicySource[]>;
+  getPoliciesByStatus(mac: string, status: string[]): Promise<PolicySource[]>;
+  updatePolicyStatusBasedOnDates(): Promise<{ updated: number; superseded: number }>;
+  supersedePolicyByLCD(lcdId: string, supersededBy: string): Promise<PolicySource[]>;
   
   // Eligibility operations
   createEligibilityCheck(check: InsertEligibilityCheck): Promise<EligibilityCheck>;
@@ -331,6 +337,93 @@ export class DatabaseStorage implements IStorage {
       .where(eq(policySources.id, id))
       .returning();
     return updatedPolicy;
+  }
+
+  // Enhanced policy operations for time-aware status management
+  async getCurrentAndFuturePoliciesByMAC(mac: string, daysAhead: number = 90): Promise<PolicySource[]> {
+    const currentDate = new Date();
+    const futureDate = new Date(currentDate.getTime() + (daysAhead * 24 * 60 * 60 * 1000));
+    
+    return await db
+      .select()
+      .from(policySources)
+      .where(
+        and(
+          eq(policySources.mac, mac),
+          or(
+            eq(policySources.status, 'current'),
+            and(
+              eq(policySources.status, 'future'),
+              lte(policySources.effectiveDate, futureDate)
+            ),
+            eq(policySources.status, 'proposed')
+          )
+        )
+      )
+      .orderBy(desc(policySources.effectiveDate));
+  }
+
+  async getPoliciesByStatus(mac: string, statuses: string[]): Promise<PolicySource[]> {
+    return await db
+      .select()
+      .from(policySources)
+      .where(
+        and(
+          eq(policySources.mac, mac),
+          inArray(policySources.status, statuses)
+        )
+      )
+      .orderBy(desc(policySources.effectiveDate));
+  }
+
+  async updatePolicyStatusBasedOnDates(): Promise<{ updated: number; superseded: number }> {
+    const currentDate = new Date();
+    let updated = 0;
+    let superseded = 0;
+    
+    // Update future policies to current if their effective date has passed
+    const futureToCurrentResult = await db
+      .update(policySources)
+      .set({ status: 'current', updatedAt: new Date() })
+      .where(
+        and(
+          eq(policySources.status, 'future'),
+          lte(policySources.effectiveDate, currentDate)
+        )
+      )
+      .returning({ id: policySources.id });
+    
+    updated += futureToCurrentResult.length;
+    
+    // Update proposed policies to current if their effective date has passed
+    const proposedToCurrentResult = await db
+      .update(policySources)
+      .set({ status: 'current', updatedAt: new Date() })
+      .where(
+        and(
+          eq(policySources.status, 'proposed'),
+          lte(policySources.effectiveDate, currentDate)
+        )
+      )
+      .returning({ id: policySources.id });
+    
+    updated += proposedToCurrentResult.length;
+    
+    return { updated, superseded };
+  }
+
+  async supersedePolicyByLCD(lcdId: string, supersededBy: string): Promise<PolicySource[]> {
+    const updatedPolicies = await db
+      .update(policySources)
+      .set({ 
+        status: 'superseded', 
+        supersededBy,
+        updatedAt: new Date() 
+      })
+      .where(eq(policySources.lcdId, lcdId))
+      .returning();
+    
+    return updatedPolicies;
   }
 
   // Eligibility operations

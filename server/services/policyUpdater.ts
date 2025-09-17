@@ -336,30 +336,42 @@ async function fetchAllPagesFromCMS(endpoint: string): Promise<any[]> {
 
 /**
  * Enhanced production-ready CMS policy fetcher with full pagination and robust error handling
+ * Now includes both final and proposed LCDs for complete policy freshness
  */
 async function fetchCMSPolicyUpdates(): Promise<InsertPolicySource[]> {
   const policies: InsertPolicySource[] = [];
   
   try {
-    console.log('🔄 Fetching real CMS LCD policies with enhanced production client...');
+    console.log('🔄 Fetching real CMS LCD policies (both final and proposed) with enhanced production client...');
 
     // Step 1: Fetch ALL final LCDs using pagination
+    console.log('📋 Fetching final LCDs...');
     const allFinalLCDs = await fetchAllPagesFromCMS(CMS_LCD_API.finalLCDsEndpoint);
     
-    if (allFinalLCDs.length === 0) {
+    // Step 2: Fetch ALL proposed LCDs using pagination  
+    console.log('📋 Fetching proposed LCDs...');
+    const allProposedLCDs = await fetchAllPagesFromCMS(CMS_LCD_API.proposedLCDsEndpoint);
+    
+    if (allFinalLCDs.length === 0 && allProposedLCDs.length === 0) {
       console.warn('No LCD data received from CMS API');
       throw new Error('No LCDs available from CMS API');
     }
 
-    console.log(`Found ${allFinalLCDs.length} total final LCDs across all pages`);
+    console.log(`Found ${allFinalLCDs.length} final LCDs and ${allProposedLCDs.length} proposed LCDs across all pages`);
+    
+    // Combine both final and proposed LCDs with type annotation
+    const allLCDs = [
+      ...allFinalLCDs.map(lcd => ({ ...lcd, policyType: 'final' as const })),
+      ...allProposedLCDs.map(lcd => ({ ...lcd, policyType: 'proposed' as const }))
+    ];
 
-    // Step 2: Process LCDs directly from list data (much more efficient!)
+    // Step 3: Process both final and proposed LCDs with intelligent status assignment
     let processedCount = 0;
     let relevantCount = 0;
     
-    console.log(`🚀 Processing LCDs directly from list data (more efficient approach)...`);
+    console.log(`🚀 Processing ${allLCDs.length} LCDs (final + proposed) with intelligent status assignment...`);
     
-    for (const lcdSummary of allFinalLCDs) {
+    for (const lcdSummary of allLCDs) {
       try {
         // Validate required fields from CMS response
         if (!lcdSummary.document_id || !lcdSummary.title) {
@@ -392,21 +404,38 @@ async function fetchCMSPolicyUpdates(): Promise<InsertPolicySource[]> {
         const contractorName = contractorInfo.split('\r\n')[0] || contractorInfo.split('(')[0] || contractorInfo;
         const macRegion = findMACRegionFromContractor(contractorName.trim()) || contractorName.trim() || 'Unknown MAC';
 
-        // Create policy record with validation  
-        const effectiveDate = lcdSummary.effective_date;
+        // Intelligent status assignment based on effective date and policy type
+        const effectiveDate = lcdSummary.effective_date ? new Date(lcdSummary.effective_date) : null;
+        const currentDate = new Date();
+        const isEffectiveNow = effectiveDate && effectiveDate <= currentDate;
+        
+        let status: string;
+        if (lcdSummary.policyType === 'proposed') {
+          status = 'proposed'; // Proposed policies are always proposed until they become final
+        } else if (effectiveDate && isEffectiveNow) {
+          status = 'current'; // Final policies effective now are current
+        } else if (effectiveDate) {
+          status = 'future'; // Final policies with future effective dates
+        } else {
+          status = 'current'; // Default for final policies without effective date
+        }
+        
+        // Create policy record with enhanced metadata
         const policy: InsertPolicySource = {
           mac: macRegion,
           lcdId: lcdSummary.document_id.toString(),
           title: title,
           url: lcdSummary.url || `https://www.cms.gov/medicare-coverage-database/view/lcd.aspx?lcdid=${lcdSummary.document_id}`,
-          effectiveDate: effectiveDate ? new Date(effectiveDate) : new Date(),
-          status: 'active', // LCDs in the final list are considered active
-          content: `${title}\n\nContractor: ${contractorInfo}\n\nThis is a placeholder for the full LCD content which would be populated from the detailed LCD text.`
+          effectiveDate: effectiveDate || new Date(), // Fallback to current date if no effective date
+          status,
+          policyType: lcdSummary.policyType,
+          proposedDate: lcdSummary.policyType === 'proposed' ? new Date() : undefined,
+          content: `${title}\n\nContractor: ${contractorInfo}\nPolicy Type: ${lcdSummary.policyType}\nStatus: ${status}\n\nThis is a placeholder for the full LCD content which would be populated from the detailed LCD text.`
         };
 
         policies.push(policy);
         relevantCount++;
-        console.log(`✓ Found wound care LCD ${policy.lcdId}: ${policy.title.substring(0, 50)}... (${policy.mac})`);
+        console.log(`✓ Found wound care ${policy.policyType} LCD ${policy.lcdId}: ${policy.title.substring(0, 50)}... (${policy.mac}) [${policy.status}]`);
 
       } catch (error) {
         const errorMessage = error instanceof Error ? error.message : String(error);
@@ -417,7 +446,7 @@ async function fetchCMSPolicyUpdates(): Promise<InsertPolicySource[]> {
       
       // Log progress every 100 processed (much faster now!)
       if (processedCount % 100 === 0) {
-        console.log(`📈 Progress: ${processedCount}/${allFinalLCDs.length} LCDs processed, ${relevantCount} relevant found`);
+        console.log(`📈 Progress: ${processedCount}/${allLCDs.length} LCDs processed, ${relevantCount} relevant found`);
       }
     }
 

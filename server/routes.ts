@@ -15,7 +15,7 @@ import {
 } from "@shared/schema";
 import { encryptPatientData, decryptPatientData, safeDecryptPatientData, encryptEncounterNotes, decryptEncounterNotes } from "./services/encryption";
 import { analyzeEligibility, generateLetterContent } from "./services/openai";
-import { buildRAGContext, initializePolicyDatabase } from "./services/ragService";
+import { buildRAGContext } from "./services/ragService";
 import { generateDocument } from "./services/documentGenerator";
 import { performPolicyUpdate, performPolicyUpdateForMAC, scheduledPolicyUpdate, getPolicyUpdateStatus } from "./services/policyUpdater";
 import { z } from "zod";
@@ -48,8 +48,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Auth middleware
   await setupAuth(app);
 
-  // Initialize policy database on startup
-  await initializePolicyDatabase();
+  // Policy data is now managed by the scheduled CMS fetcher
 
 
   // Auth routes
