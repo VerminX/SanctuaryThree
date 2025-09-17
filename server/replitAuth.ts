@@ -7,6 +7,7 @@ import type { Express, RequestHandler } from "express";
 import memoize from "memoizee";
 import connectPg from "connect-pg-simple";
 import { storage } from "./storage";
+import * as crypto from 'crypto';
 
 if (!process.env.REPLIT_DOMAINS) {
   throw new Error("Environment variable REPLIT_DOMAINS not provided");
@@ -66,6 +67,85 @@ async function upsertUser(
   });
 }
 
+/**
+ * SECURITY FIX: Create or find user using email-based canonicalization
+ * This ensures stable user identity across browser sessions and Replit Auth ID changes
+ */
+async function upsertUserWithEmailCanonical(claims: any) {
+  // Verify required claims
+  if (!claims.email) {
+    throw new Error('Email claim is required for user authentication');
+  }
+  
+  // Security: Verify email is actually verified by the OIDC provider
+  if (claims.email_verified === false) {
+    throw new Error('Email must be verified for account access');
+  }
+  
+  // Normalize email to lowercase for consistent lookup
+  const normalizedEmail = claims.email.toLowerCase();
+  
+  try {
+    // First try to find existing user by email
+    let user = await storage.getUserByEmail(normalizedEmail);
+    
+    if (user) {
+      // User exists, update their profile info if needed
+      const updatedUser = await storage.upsertUser({
+        id: user.id, // Keep existing stable ID
+        email: normalizedEmail,
+        firstName: claims.first_name || claims.given_name,
+        lastName: claims.last_name || claims.family_name,
+        profileImageUrl: claims.picture || claims.profile_image_url,
+      });
+      return updatedUser;
+    } else {
+      // New user - create with email-based canonical identity
+      // Generate proper UUID for new users (don't use string replacement)
+      const { randomUUID } = await import('crypto');
+      const canonicalUserId = randomUUID();
+      
+      const newUser = await storage.upsertUser({
+        id: canonicalUserId,
+        email: normalizedEmail,
+        firstName: claims.first_name || claims.given_name,
+        lastName: claims.last_name || claims.family_name,
+        profileImageUrl: claims.picture || claims.profile_image_url,
+      });
+      
+      console.log(`Created new canonical user: ${normalizedEmail} -> ${canonicalUserId}`);
+      return newUser;
+    }
+  } catch (error) {
+    console.error('Error in email-based user canonicalization:', error);
+    throw error;
+  }
+}
+
+/**
+ * Get canonical user ID for authenticated request
+ * This is the stable ID that should be used for all database operations
+ */
+export async function getCanonicalUserId(req: any): Promise<string> {
+  if (!req.user || !req.user.claims) {
+    throw new Error('User not authenticated');
+  }
+  
+  const userEmail = req.user.claims.email;
+  if (!userEmail) {
+    throw new Error('Email not found in authentication claims');
+  }
+  
+  const normalizedEmail = userEmail.toLowerCase();
+  const user = await storage.getUserByEmail(normalizedEmail);
+  
+  if (!user) {
+    throw new Error('User not found in database - authentication may be incomplete');
+  }
+  
+  return user.id;
+}
+
 export async function setupAuth(app: Express) {
   app.set("trust proxy", 1);
   app.use(getSession());
@@ -80,7 +160,7 @@ export async function setupAuth(app: Express) {
   ) => {
     const user = {};
     updateUserSession(user, tokens);
-    await upsertUser(tokens.claims());
+    await upsertUserWithEmailCanonical(tokens.claims());
     verified(null, user);
   };
 
