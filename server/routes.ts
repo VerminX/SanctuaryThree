@@ -94,15 +94,35 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // Auth routes
   app.get('/api/auth/user', isAuthenticated, asyncHandler(async (req: any, res) => {
-    const userId = req.user.claims.sub;
-    const user = await storage.getUser(userId);
+    // CRITICAL FIX: Use email-based canonicalization instead of unstable Replit sub ID
+    const userEmail = req.user.claims.email;
+    const replitUserId = req.user.claims.sub;
+    
+    if (!userEmail) {
+      throw createError.badRequest('Email not found in authentication claims', req.correlationId);
+    }
+    
+    // First try to find user by stable email address
+    let user = await storage.getUserByEmail(userEmail);
+    
+    // If user doesn't exist, create them with the email as the canonical identity
+    if (!user) {
+      console.log(`Creating new user for email: ${userEmail}`);
+      user = await storage.upsertUser({
+        id: userEmail.toLowerCase().replace('@', '_at_').replace('.', '_'),
+        email: userEmail,
+        firstName: req.user.claims.first_name || req.user.claims.given_name,
+        lastName: req.user.claims.last_name || req.user.claims.family_name,
+        profileImageUrl: req.user.claims.picture
+      });
+    }
     
     if (!user) {
       throw createError.notFound('User', req.correlationId);
     }
 
-    // Get user's tenants and roles
-    const tenants = await storage.getTenantsByUser(userId);
+    // Get user's tenants and roles using the stable user ID (not Replit sub)
+    const tenants = await storage.getTenantsByUser(user.id);
     
     // Prevent caching to ensure fresh user/tenant data
     res.set('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
