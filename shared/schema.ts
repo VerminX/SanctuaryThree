@@ -101,7 +101,10 @@ export const policySources = pgTable("policy_sources", {
   url: text("url").notNull(),
   effectiveDate: timestamp("effective_date").notNull(),
   postponedDate: timestamp("postponed_date"),
-  status: varchar("status", { length: 20 }).notNull(), // active, postponed, superseded
+  proposedDate: timestamp("proposed_date"), // When policy was proposed
+  supersededBy: varchar("superseded_by", { length: 50 }), // LCD ID that supersedes this one
+  policyType: varchar("policy_type", { length: 20 }).notNull().default('final'), // final, proposed
+  status: varchar("status", { length: 20 }).notNull(), // current, future, proposed, superseded, postponed
   content: text("content").notNull(),
   embeddedVector: text("embedded_vector"), // Serialized vector for RAG
   createdAt: timestamp("created_at").defaultNow(),
@@ -292,6 +295,23 @@ export type Patient = typeof patients.$inferSelect;
 export type InsertEncounter = z.infer<typeof insertEncounterSchema>;
 export type Encounter = typeof encounters.$inferSelect;
 export type InsertPolicySource = z.infer<typeof insertPolicySourceSchema>;
+
+// Policy status enums for better type safety
+export const POLICY_STATUS = {
+  CURRENT: 'current',      // Currently active and effective
+  FUTURE: 'future',        // Will be effective in the future
+  PROPOSED: 'proposed',    // In comment period, not yet final
+  SUPERSEDED: 'superseded', // Replaced by newer version
+  POSTPONED: 'postponed'   // Implementation delayed
+} as const;
+
+export const POLICY_TYPE = {
+  FINAL: 'final',         // Final LCD policy
+  PROPOSED: 'proposed'    // Proposed LCD policy
+} as const;
+
+export type PolicyStatus = keyof typeof POLICY_STATUS;
+export type PolicyType = keyof typeof POLICY_TYPE;
 export type PolicySource = typeof policySources.$inferSelect;
 export type InsertEligibilityCheck = z.infer<typeof insertEligibilityCheckSchema>;
 export type EligibilityCheck = typeof eligibilityChecks.$inferSelect;
