@@ -1324,6 +1324,172 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // RAG System Validation Routes (for testing and quality assurance)
+  app.get('/api/validation/rag/policy-retrieval', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      
+      // Import validation service dynamically to avoid circular dependencies
+      const { validatePolicyRetrieval } = await import('./services/ragValidation');
+      
+      console.log(`RAG policy retrieval validation requested by user: ${userId}`);
+      const results = await validatePolicyRetrieval();
+      
+      res.json({
+        testType: 'policy-retrieval',
+        executedAt: new Date().toISOString(),
+        results
+      });
+    } catch (error) {
+      console.error("Error in policy retrieval validation:", error);
+      res.status(500).json({ 
+        message: "Failed to run policy retrieval validation",
+        error: (error as Error).message
+      });
+    }
+  });
+
+  app.get('/api/validation/rag/ai-analysis', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      
+      // Import validation service dynamically
+      const { validateAIAnalysis } = await import('./services/ragValidation');
+      
+      console.log(`RAG AI analysis validation requested by user: ${userId}`);
+      const results = await validateAIAnalysis();
+      
+      res.json({
+        testType: 'ai-analysis', 
+        executedAt: new Date().toISOString(),
+        results
+      });
+    } catch (error) {
+      console.error("Error in AI analysis validation:", error);
+      res.status(500).json({ 
+        message: "Failed to run AI analysis validation",
+        error: (error as Error).message 
+      });
+    }
+  });
+
+  app.get('/api/validation/rag/citation-generation', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      
+      // Import validation service dynamically
+      const { validateCitationGeneration } = await import('./services/ragValidation');
+      
+      console.log(`RAG citation validation requested by user: ${userId}`);
+      const results = await validateCitationGeneration();
+      
+      res.json({
+        testType: 'citation-validation',
+        executedAt: new Date().toISOString(),
+        results
+      });
+    } catch (error) {
+      console.error("Error in citation validation:", error);
+      res.status(500).json({ 
+        message: "Failed to run citation validation",
+        error: (error as Error).message
+      });
+    }
+  });
+
+  app.get('/api/validation/rag/comprehensive', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      
+      // Import validation service dynamically
+      const { runComprehensiveValidation } = await import('./services/ragValidation');
+      
+      console.log(`Comprehensive RAG system validation requested by user: ${userId}`);
+      const results = await runComprehensiveValidation();
+      
+      res.json({
+        testType: 'comprehensive',
+        executedAt: new Date().toISOString(),
+        ...results
+      });
+    } catch (error) {
+      console.error("Error in comprehensive RAG validation:", error);
+      res.status(500).json({ 
+        message: "Failed to run comprehensive RAG validation",
+        error: (error as Error).message
+      });
+    }
+  });
+
+  // Individual RAG component testing endpoints
+  app.post('/api/validation/rag/test-retrieval', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const { macRegion, woundType } = req.body;
+
+      if (!macRegion || !woundType) {
+        return res.status(400).json({ 
+          message: "macRegion and woundType are required" 
+        });
+      }
+
+      const { buildRAGContext } = await import('./services/ragService');
+      
+      console.log(`Testing RAG retrieval: MAC=${macRegion}, Wound=${woundType} by user: ${userId}`);
+      const context = await buildRAGContext(macRegion, woundType);
+      
+      res.json({
+        success: context.citations.length > 0,
+        macRegion,
+        woundType,
+        contextLength: context.content.length,
+        citationsFound: context.citations.length,
+        context,
+        testedAt: new Date().toISOString()
+      });
+    } catch (error) {
+      console.error("Error testing RAG retrieval:", error);
+      res.status(500).json({ 
+        message: "Failed to test RAG retrieval",
+        error: (error as Error).message
+      });
+    }
+  });
+
+  app.post('/api/validation/rag/test-analysis', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const analysisRequest = req.body;
+
+      if (!analysisRequest.policyContext || !analysisRequest.patientInfo) {
+        return res.status(400).json({ 
+          message: "policyContext and patientInfo are required" 
+        });
+      }
+
+      const { analyzeEligibility } = await import('./services/openai');
+      
+      console.log(`Testing AI analysis for MAC: ${analysisRequest.patientInfo.macRegion} by user: ${userId}`);
+      const startTime = Date.now();
+      const analysis = await analyzeEligibility(analysisRequest);
+      const responseTime = Date.now() - startTime;
+      
+      res.json({
+        success: true,
+        analysis,
+        responseTime,
+        contextLength: analysisRequest.policyContext.length,
+        testedAt: new Date().toISOString()
+      });
+    } catch (error) {
+      console.error("Error testing AI analysis:", error);
+      res.status(500).json({ 
+        message: "Failed to test AI analysis",
+        error: (error as Error).message
+      });
+    }
+  });
+
 
   const httpServer = createServer(app);
   return httpServer;

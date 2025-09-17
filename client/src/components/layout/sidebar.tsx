@@ -11,7 +11,8 @@ import {
   Shield, 
   Settings,
   ChevronDown,
-  Moon
+  Moon,
+  TestTube2
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -24,6 +25,7 @@ const navigationItems = [
   { href: "/documents", label: "Document Generation", icon: FileText },
   { href: "/policies", label: "Policy Database", icon: Book },
   { href: "/audit", label: "Audit Logs", icon: Shield },
+  { href: "/validation", label: "System Validation", icon: TestTube2 },
   { href: "/settings", label: "Settings", icon: Settings },
 ];
 

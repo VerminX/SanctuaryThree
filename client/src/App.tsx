@@ -16,6 +16,7 @@ import Policies from "@/pages/policies";
 import Audit from "@/pages/audit";
 import Settings from "@/pages/settings";
 import TenantSetup from "@/pages/tenant-setup";
+import Validation from "@/pages/validation";
 
 function Router() {
   const { isAuthenticated, isLoading } = useAuth();
@@ -35,6 +36,7 @@ function Router() {
           <Route path="/documents" component={Documents} />
           <Route path="/policies" component={Policies} />
           <Route path="/audit" component={Audit} />
+          <Route path="/validation" component={Validation} />
           <Route path="/settings" component={Settings} />
         </>
       )}
