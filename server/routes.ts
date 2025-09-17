@@ -720,7 +720,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Update document current version
       await storage.updateDocument(documentId, {
         currentVersion: newVersionNumber,
-        status: 'draft', // Reset to draft when new version created
+        // Don't reset status - creating a new version doesn't necessarily change the document status
       });
 
       // Log audit event
