@@ -214,7 +214,7 @@ export const fileUploads = pgTable("file_uploads", {
   fileType: varchar("file_type", { length: 50 }).notNull(), // PDF, DOC, etc
   fileSize: integer("file_size").notNull(), // File size in bytes
   objectPath: varchar("object_path", { length: 500 }).notNull(), // Object storage path
-  status: varchar("status", { length: 20 }).notNull().default("uploaded"), // uploaded, processing, processed, failed
+  status: varchar("status", { length: 20 }).notNull().default("uploaded"), // uploaded, processing, processed, data_extracted, failed, extraction_failed
   processingError: text("processing_error"), // Error message if processing failed
   extractedText: text("extracted_text"), // Raw text extracted from PDF
   createdAt: timestamp("created_at").defaultNow(),
@@ -318,6 +318,38 @@ export const pdfExtractedDataRelations = relations(pdfExtractedData, ({ one }) =
   encounter: one(encounters, { fields: [pdfExtractedData.encounterId], references: [encounters.id] }),
 }));
 
+// Enums for better type safety - declared before use in Zod schemas
+export const POLICY_STATUS = {
+  CURRENT: 'current',      // Currently active and effective
+  FUTURE: 'future',        // Will be effective in the future
+  PROPOSED: 'proposed',    // In comment period, not yet final
+  SUPERSEDED: 'superseded', // Replaced by newer version
+  POSTPONED: 'postponed'   // Implementation delayed
+} as const;
+
+export const POLICY_TYPE = {
+  FINAL: 'final',         // Final LCD policy
+  PROPOSED: 'proposed'    // Proposed LCD policy
+} as const;
+
+// File upload status enums for better type safety
+export const FILE_UPLOAD_STATUS = {
+  UPLOADED: 'uploaded',               // File successfully uploaded to storage
+  PROCESSING: 'processing',           // File is being processed
+  PROCESSED: 'processed',            // Basic processing complete (text extracted)
+  DATA_EXTRACTED: 'data_extracted',  // Structured data extraction complete
+  FAILED: 'failed',                  // General processing failure
+  EXTRACTION_FAILED: 'extraction_failed' // Data extraction specifically failed
+} as const;
+
+// PDF validation status enums
+export const PDF_VALIDATION_STATUS = {
+  PENDING: 'pending',     // Awaiting review
+  REVIEWED: 'reviewed',   // Under review
+  APPROVED: 'approved',   // Approved for use
+  REJECTED: 'rejected'    // Rejected, needs correction
+} as const;
+
 // Zod schemas for validation
 export const insertTenantSchema = createInsertSchema(tenants).omit({ id: true, createdAt: true, updatedAt: true });
 export const insertTenantUserSchema = createInsertSchema(tenantUsers).omit({ id: true, createdAt: true });
@@ -331,8 +363,31 @@ export const insertDocumentApprovalSchema = createInsertSchema(documentApprovals
 export const insertDocumentSignatureSchema = createInsertSchema(documentSignatures).omit({ id: true, signedAt: true });
 export const insertRecentActivitySchema = createInsertSchema(recentActivities).omit({ id: true, createdAt: true });
 export const insertAuditLogSchema = createInsertSchema(auditLogs).omit({ id: true, timestamp: true, currentHash: true });
-export const insertFileUploadSchema = createInsertSchema(fileUploads).omit({ id: true, createdAt: true, processedAt: true });
-export const insertPdfExtractedDataSchema = createInsertSchema(pdfExtractedData).omit({ id: true, createdAt: true, reviewedAt: true });
+// Enhanced file upload schema with status validation
+export const insertFileUploadSchema = createInsertSchema(fileUploads)
+  .omit({ id: true, createdAt: true, processedAt: true })
+  .extend({
+    status: z.enum([
+      FILE_UPLOAD_STATUS.UPLOADED,
+      FILE_UPLOAD_STATUS.PROCESSING,
+      FILE_UPLOAD_STATUS.PROCESSED,
+      FILE_UPLOAD_STATUS.DATA_EXTRACTED,
+      FILE_UPLOAD_STATUS.FAILED,
+      FILE_UPLOAD_STATUS.EXTRACTION_FAILED
+    ]).default(FILE_UPLOAD_STATUS.UPLOADED)
+  });
+
+// Enhanced PDF extracted data schema with validation status validation  
+export const insertPdfExtractedDataSchema = createInsertSchema(pdfExtractedData)
+  .omit({ id: true, createdAt: true, reviewedAt: true })
+  .extend({
+    validationStatus: z.enum([
+      PDF_VALIDATION_STATUS.PENDING,
+      PDF_VALIDATION_STATUS.REVIEWED,
+      PDF_VALIDATION_STATUS.APPROVED,
+      PDF_VALIDATION_STATUS.REJECTED
+    ]).default(PDF_VALIDATION_STATUS.PENDING)
+  });
 
 // Types
 export type UpsertUser = typeof users.$inferInsert;
@@ -347,22 +402,10 @@ export type InsertEncounter = z.infer<typeof insertEncounterSchema>;
 export type Encounter = typeof encounters.$inferSelect;
 export type InsertPolicySource = z.infer<typeof insertPolicySourceSchema>;
 
-// Policy status enums for better type safety
-export const POLICY_STATUS = {
-  CURRENT: 'current',      // Currently active and effective
-  FUTURE: 'future',        // Will be effective in the future
-  PROPOSED: 'proposed',    // In comment period, not yet final
-  SUPERSEDED: 'superseded', // Replaced by newer version
-  POSTPONED: 'postponed'   // Implementation delayed
-} as const;
-
-export const POLICY_TYPE = {
-  FINAL: 'final',         // Final LCD policy
-  PROPOSED: 'proposed'    // Proposed LCD policy
-} as const;
-
 export type PolicyStatus = keyof typeof POLICY_STATUS;
 export type PolicyType = keyof typeof POLICY_TYPE;
+export type FileUploadStatus = keyof typeof FILE_UPLOAD_STATUS;
+export type PdfValidationStatus = keyof typeof PDF_VALIDATION_STATUS;
 export type PolicySource = typeof policySources.$inferSelect;
 export type InsertEligibilityCheck = z.infer<typeof insertEligibilityCheckSchema>;
 export type EligibilityCheck = typeof eligibilityChecks.$inferSelect;

@@ -155,6 +155,7 @@ export interface IStorage {
   createPdfExtractedData(data: InsertPdfExtractedData): Promise<PdfExtractedData>;
   getPdfExtractedData(id: string): Promise<PdfExtractedData | undefined>;
   getPdfExtractedDataByFileUpload(fileUploadId: string): Promise<PdfExtractedData | undefined>;
+  getPdfExtractedDataByUploadId(uploadId: string): Promise<PdfExtractedData | undefined>; // Alias for compatibility
   getPdfExtractedDataByTenant(tenantId: string): Promise<PdfExtractedData[]>;
   updatePdfExtractedDataValidation(id: string, status: string, reviewedBy: string, comments?: string): Promise<PdfExtractedData>;
   linkPdfExtractedDataToRecords(id: string, patientId?: string, encounterId?: string): Promise<PdfExtractedData>;
@@ -854,6 +855,11 @@ export class DatabaseStorage implements IStorage {
   async getPdfExtractedDataByFileUpload(fileUploadId: string): Promise<PdfExtractedData | undefined> {
     const [data] = await db.select().from(pdfExtractedData).where(eq(pdfExtractedData.fileUploadId, fileUploadId));
     return data;
+  }
+
+  // Alias method for compatibility with requested naming convention
+  async getPdfExtractedDataByUploadId(uploadId: string): Promise<PdfExtractedData | undefined> {
+    return this.getPdfExtractedDataByFileUpload(uploadId);
   }
 
   async getPdfExtractedDataByTenant(tenantId: string): Promise<PdfExtractedData[]> {
