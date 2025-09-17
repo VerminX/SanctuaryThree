@@ -1563,41 +1563,177 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }, 'Client error logged successfully');
   }));
 
-  // Database health check endpoints for monitoring and alerting
+  // PUBLIC health check endpoint - MINIMAL information only for monitoring systems
   app.get('/api/health', asyncHandler(async (req: any, res) => {
     try {
-      const health = await storage.healthCheck?.() || { isHealthy: false, error: 'Health check not implemented' };
+      const { healthAggregator } = await import('./services/healthAggregator');
       
-      if (health.isHealthy) {
-        sendSuccess(res, {
-          status: 'healthy',
-          database: {
-            healthy: health.isHealthy,
-            latency: health.latency,
-            lastCheck: health.lastCheck,
-            poolStats: health.poolStats
-          },
-          timestamp: new Date().toISOString(),
-          environment: app.get('env')
-        }, 'System is healthy');
+      // SECURITY: Only provide basic health status to unauthenticated users
+      const publicHealth = await healthAggregator.getPublicHealth();
+      const statusCode = healthAggregator.getHttpStatusCode(publicHealth.overall.status);
+      
+      res.status(statusCode).json({
+        ...publicHealth,
+        message: publicHealth.overall.status === 'UP' 
+          ? 'System operational' 
+          : 'Some services experiencing issues',
+        security_level: 'public',
+        note: 'Use /api/health/diagnostics with authentication for detailed information'
+      });
+    } catch (error) {
+      const healthError = new AppError(
+        'Failed to get public health status',
+        ErrorCategory.SYSTEM,
+        ErrorSeverity.HIGH,
+        503,
+        {
+          error: error instanceof Error ? error.message : String(error),
+          endpoint: 'public_health'
+        },
+        error instanceof Error ? error : undefined
+      );
+      
+      errorLogger.logError(healthError);
+      res.status(503).json({
+        overall: { status: 'DOWN', last_check: new Date() },
+        error: 'Health check system failure',
+        timestamp: new Date().toISOString(),
+        security_level: 'public'
+      });
+    }
+  }));
+
+  // AUTHENTICATED health diagnostics endpoint - DETAILED information for authorized users only
+  app.get('/api/health/diagnostics', isAuthenticated, asyncHandler(async (req: any, res) => {
+    try {
+      const { healthAggregator } = await import('./services/healthAggregator');
+      
+      // SECURITY: Full diagnostics only available to authenticated users
+      const systemHealth = await healthAggregator.getSystemHealth(true);
+      const statusCode = healthAggregator.getHttpStatusCode(systemHealth.overall.status);
+      
+      res.status(statusCode).json({
+        ...systemHealth,
+        message: systemHealth.overall.status === 'UP' 
+          ? 'All systems operational' 
+          : `${systemHealth.overall.services_unhealthy} of ${systemHealth.overall.services_total} services are unhealthy`,
+        security_level: 'authenticated',
+        user_id: req.user.claims.sub
+      });
+    } catch (error) {
+      const healthError = new AppError(
+        'Failed to get detailed health diagnostics',
+        ErrorCategory.SYSTEM,
+        ErrorSeverity.HIGH,
+        503,
+        {
+          error: error instanceof Error ? error.message : String(error),
+          userId: req.user.claims.sub,
+          endpoint: 'authenticated_diagnostics'
+        },
+        error instanceof Error ? error : undefined
+      );
+      
+      errorLogger.logError(healthError);
+      res.status(503).json({
+        overall: { status: 'DOWN', last_check: new Date() },
+        error: 'Health diagnostics system failure',
+        timestamp: new Date().toISOString(),
+        security_level: 'authenticated'
+      });
+    }
+  }));
+
+  // Kubernetes/Docker readiness probe endpoint
+  app.get('/api/health/ready', asyncHandler(async (req: any, res) => {
+    try {
+      const { healthAggregator } = await import('./services/healthAggregator');
+      const readinessStatus = await healthAggregator.getReadinessStatus();
+      
+      const statusCode = readinessStatus.ready ? 200 : 503;
+      
+      res.status(statusCode).json({
+        ...readinessStatus,
+        message: readinessStatus.ready ? 'Service ready for traffic' : 'Service not ready'
+      });
+    } catch (error) {
+      res.status(503).json({
+        ready: false,
+        error: 'Readiness check failed',
+        timestamp: new Date().toISOString()
+      });
+    }
+  }));
+
+  // Kubernetes/Docker liveness probe endpoint  
+  app.get('/api/health/live', asyncHandler(async (req: any, res) => {
+    try {
+      // Basic liveness check - just verify the app is responsive
+      const uptime = process.uptime();
+      const memoryUsage = process.memoryUsage();
+      
+      // Consider app "alive" if it's been running > 5 seconds and memory usage is reasonable
+      const isAlive = uptime > 5 && memoryUsage.heapUsed < (1024 * 1024 * 1000); // 1GB threshold
+      
+      if (isAlive) {
+        res.status(200).json({
+          alive: true,
+          uptime: uptime,
+          memory_usage_mb: Math.round(memoryUsage.heapUsed / 1024 / 1024),
+          timestamp: new Date().toISOString()
+        });
       } else {
         res.status(503).json({
-          status: 'unhealthy',
-          database: {
-            healthy: false,
-            error: health.error,
-            lastCheck: health.lastCheck
-          },
-          timestamp: new Date().toISOString(),
-          environment: app.get('env')
+          alive: false,
+          uptime: uptime,
+          memory_usage_mb: Math.round(memoryUsage.heapUsed / 1024 / 1024),
+          error: 'Application may be in unhealthy state',
+          timestamp: new Date().toISOString()
         });
       }
     } catch (error) {
       res.status(503).json({
-        status: 'error',
-        error: error instanceof Error ? error.message : 'Unknown error',
+        alive: false,
+        error: 'Liveness check failed',
         timestamp: new Date().toISOString()
       });
+    }
+  }));
+
+  // Individual service health check endpoint
+  app.get('/api/health/service/:serviceName', asyncHandler(async (req: any, res) => {
+    try {
+      const { healthAggregator } = await import('./services/healthAggregator');
+      const { serviceName } = req.params;
+      
+      const serviceHealth = await healthAggregator.getServiceHealth(serviceName);
+      
+      if (!serviceHealth) {
+        res.status(404).json({
+          error: `Service '${serviceName}' not found`,
+          available_services: ['database', 'openai', 'cms', 'application'],
+          timestamp: new Date().toISOString()
+        });
+        return;
+      }
+      
+      const statusCode = serviceHealth.healthy ? 200 : 503;
+      res.status(statusCode).json(serviceHealth);
+    } catch (error) {
+      const serviceError = new AppError(
+        `Failed to get health for service: ${req.params.serviceName}`,
+        ErrorCategory.SYSTEM,
+        ErrorSeverity.MEDIUM,
+        500,
+        {
+          serviceName: req.params.serviceName,
+          error: error instanceof Error ? error.message : String(error)
+        },
+        error instanceof Error ? error : undefined
+      );
+      
+      errorLogger.logError(serviceError);
+      sendError(res, serviceError);
     }
   }));
 
