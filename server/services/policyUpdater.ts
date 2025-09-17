@@ -445,6 +445,48 @@ export async function performPolicyUpdate(): Promise<PolicyUpdateResult> {
 }
 
 /**
+ * MAC-specific function to perform policy database update for a specific region
+ * Only updates policies for the specified MAC region
+ */
+export async function performPolicyUpdateForMAC(macRegion: string): Promise<PolicyUpdateResult> {
+  console.log(`Starting policy database update for MAC region: ${macRegion}...`);
+  
+  try {
+    // Fetch latest policies from CMS and MAC sources
+    const allNewPolicies = await fetchCMSPolicyUpdates();
+    
+    // Filter policies for the specific MAC region
+    const newPolicies = allNewPolicies.filter(policy => policy.mac === macRegion);
+    
+    if (newPolicies.length === 0) {
+      console.log(`No policies found for MAC region: ${macRegion}`);
+      return {
+        totalFetched: 0,
+        newPolicies: 0,
+        updatedPolicies: 0,
+        supersededPolicies: 0,
+        changes: [],
+        errors: []
+      };
+    }
+    
+    // Detect changes compared to existing database
+    const changes = await detectPolicyChanges(newPolicies);
+    
+    // Update database with changes
+    const result = await updatePolicyRecords(changes);
+    
+    console.log(`MAC-specific policy update completed for ${macRegion}: ${result.newPolicies} new, ${result.updatedPolicies} updated, ${result.errors.length} errors`);
+    
+    return result;
+    
+  } catch (error) {
+    console.error(`MAC-specific policy update failed for ${macRegion}:`, error);
+    throw error;
+  }
+}
+
+/**
  * Scheduled policy update job (runs nightly)
  */
 export async function scheduledPolicyUpdate(): Promise<void> {

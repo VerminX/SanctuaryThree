@@ -17,7 +17,7 @@ import { encryptPatientData, decryptPatientData, safeDecryptPatientData, encrypt
 import { analyzeEligibility, generateLetterContent } from "./services/openai";
 import { buildRAGContext, initializePolicyDatabase } from "./services/ragService";
 import { generateDocument } from "./services/documentGenerator";
-import { performPolicyUpdate, scheduledPolicyUpdate, getPolicyUpdateStatus } from "./services/policyUpdater";
+import { performPolicyUpdate, performPolicyUpdateForMAC, scheduledPolicyUpdate, getPolicyUpdateStatus } from "./services/policyUpdater";
 import { z } from "zod";
 
 // Helper function to track user activity (HIPAA-compliant, no PHI in descriptions)
@@ -986,6 +986,61 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error("Error fetching policies:", error);
       res.status(500).json({ message: "Failed to fetch policies" });
+    }
+  });
+
+  // Policy refresh route for specific tenant
+  app.post('/api/tenants/:tenantId/policies/refresh', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const { tenantId } = req.params;
+      
+      // Verify user has access to tenant
+      const userTenantRole = await storage.getUserTenantRole(userId, tenantId);
+      if (!userTenantRole) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+
+      const tenant = await storage.getTenant(tenantId);
+      if (!tenant) {
+        return res.status(404).json({ message: "Tenant not found" });
+      }
+
+      console.log(`Policy refresh triggered by user: ${userId} for tenant: ${tenantId} (MAC: ${tenant.macRegion})`);
+      
+      // Perform MAC-specific policy update
+      const result = await performPolicyUpdateForMAC(tenant.macRegion);
+      
+      // Log audit event for tenant-specific action
+      await storage.createAuditLog({
+        tenantId,
+        userId,
+        action: 'TRIGGER_TENANT_POLICY_REFRESH',
+        entity: 'PolicySource',
+        entityId: tenant.macRegion,
+        ipAddress: req.ip,
+        userAgent: req.get('User-Agent'),
+        previousHash: '',
+      });
+
+      // Track user activity
+      await trackActivity(
+        tenantId,
+        userId,
+        'Refreshed policy database',
+        'PolicyUpdate',
+        tenant.macRegion,
+        `MAC region ${tenant.macRegion}`
+      );
+
+      res.json({
+        message: `Policy refresh completed successfully for MAC region ${tenant.macRegion}`,
+        macRegion: tenant.macRegion,
+        result
+      });
+    } catch (error) {
+      console.error("Error refreshing policies:", error);
+      res.status(500).json({ message: "Failed to refresh policies" });
     }
   });
 
