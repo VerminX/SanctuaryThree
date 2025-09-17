@@ -11,9 +11,6 @@ export function useAuth() {
     queryKey: ["/api/auth/user"],
     queryFn: getQueryFn({ on401: "returnNull" }),
     retry: false,
-    staleTime: 0, // Always fetch fresh user data
-    refetchOnMount: 'always', // Always refetch when component mounts
-    refetchOnWindowFocus: true, // Refetch when user returns to tab
   });
 
   return {

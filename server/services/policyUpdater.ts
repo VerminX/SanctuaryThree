@@ -1,7 +1,6 @@
 import { storage } from '../storage';
 import { InsertPolicySource, PolicySource } from '@shared/schema';
 import * as cheerio from 'cheerio';
-import { cmsApiCircuitBreaker } from './apiCircuitBreaker';
 
 interface PolicyChange {
   lcdId: string;
@@ -207,9 +206,11 @@ function isWoundCareRelevant(title: string, content: string): boolean {
 }
 
 /**
- * Enhanced HTTP client with circuit breaker protection and retry logic for CMS API
+ * Enhanced HTTP client with retry logic and rate limiting for CMS API
  */
-async function fetchCMSApiDataWithRetry(endpoint: string, params?: Record<string, any>, correlationId?: string): Promise<any> {
+async function fetchCMSApiDataWithRetry(endpoint: string, params?: Record<string, any>, maxRetries: number = 3): Promise<any> {
+  let lastError: Error;
+  
   // Build full URL from base URL and endpoint
   const fullUrl = endpoint.startsWith('http') ? endpoint : `${CMS_LCD_API.baseUrl}${endpoint}`;
   const urlObj = new URL(fullUrl);
@@ -218,57 +219,74 @@ async function fetchCMSApiDataWithRetry(endpoint: string, params?: Record<string
       urlObj.searchParams.append(key, value.toString());
     });
   }
+  
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      const response = await fetch(urlObj.toString(), {
+        headers: {
+          'User-Agent': 'WoundCare-Portal/1.0',
+          'Accept': 'application/json'
+        },
+        // 30 second timeout
+        signal: AbortSignal.timeout(30000)
+      });
 
-  // Define the actual API call
-  const apiCall = async () => {
-    const response = await fetch(urlObj.toString(), {
-      headers: {
-        'User-Agent': 'WoundCare-Portal/1.0',
-        'Accept': 'application/json'
-      },
-      // 30 second timeout
-      signal: AbortSignal.timeout(30000)
-    });
+      // Handle rate limiting
+      if (response.status === 429) {
+        const retryAfter = response.headers.get('Retry-After');
+        const waitTime = retryAfter ? parseInt(retryAfter) * 1000 : Math.pow(2, attempt) * 1000;
+        console.warn(`🚫 Rate limited (attempt ${attempt}/${maxRetries}), waiting ${waitTime}ms...`);
+        await new Promise(resolve => setTimeout(resolve, waitTime));
+        continue;
+      }
 
-    // Handle rate limiting
-    if (response.status === 429) {
-      const retryAfter = response.headers.get('Retry-After');
-      const waitTime = retryAfter ? parseInt(retryAfter) * 1000 : 5000;
-      console.warn(`🚫 Rate limited, waiting ${waitTime}ms...`);
-      await new Promise(resolve => setTimeout(resolve, waitTime));
-      throw new Error('Rate limited - will retry');
+      if (response.status >= 500) {
+        throw new Error(`Server error: ${response.status} ${response.statusText}`);
+      }
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      }
+
+      const data = await response.json();
+      
+      // Basic schema validation
+      if (!data || typeof data !== 'object') {
+        throw new Error('Invalid response format from CMS API');
+      }
+
+      return data;
+
+    } catch (error) {
+      lastError = error as Error;
+      
+      // Proper error message extraction
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      
+      // Don't retry on client errors (except 429)
+      if (errorMessage.includes('HTTP 4') && !errorMessage.includes('429')) {
+        throw error;
+      }
+      
+      if (attempt < maxRetries) {
+        // Exponential backoff with jitter
+        const baseDelay = Math.pow(2, attempt) * 1000;
+        const jitter = Math.random() * 1000;
+        const delay = baseDelay + jitter;
+        
+        console.warn(`⚠ Request failed (attempt ${attempt}/${maxRetries}): ${errorMessage}, retrying in ${delay}ms...`);
+        await new Promise(resolve => setTimeout(resolve, delay));
+      }
     }
+  }
 
-    if (response.status >= 500) {
-      throw new Error(`Server error: ${response.status} ${response.statusText}`);
-    }
-
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-    }
-
-    const data = await response.json();
-    
-    // Basic schema validation
-    if (!data || typeof data !== 'object') {
-      throw new Error('Invalid response format from CMS API');
-    }
-
-    return data;
-  };
-
-  // Execute with circuit breaker protection
-  return await cmsApiCircuitBreaker.execute(
-    apiCall,
-    `CMS_API_${endpoint.replace(/[^a-zA-Z0-9]/g, '_')}`,
-    correlationId
-  );
+  throw lastError!;
 }
 
 /**
  * Fetches all pages from a paginated CMS endpoint
  */
-async function fetchAllPagesFromCMS(endpoint: string, correlationId?: string): Promise<any[]> {
+async function fetchAllPagesFromCMS(endpoint: string): Promise<any[]> {
   const allData: any[] = [];
   let currentPage = 1;
   let hasMorePages = true;
@@ -280,7 +298,7 @@ async function fetchAllPagesFromCMS(endpoint: string, correlationId?: string): P
       const response = await fetchCMSApiDataWithRetry(endpoint, { 
         page: currentPage, 
         per_page: 100  // CMS API uses per_page, not limit
-      }, correlationId);
+      });
       
       if (!response.data || !Array.isArray(response.data)) {
         console.warn(`⚠ No data array found in page ${currentPage}, stopping pagination`);
@@ -328,11 +346,11 @@ async function fetchCMSPolicyUpdates(): Promise<InsertPolicySource[]> {
 
     // Step 1: Fetch ALL final LCDs using pagination
     console.log('📋 Fetching final LCDs...');
-    const allFinalLCDs = await fetchAllPagesFromCMS(CMS_LCD_API.finalLCDsEndpoint, 'fetchCMSPolicies');
+    const allFinalLCDs = await fetchAllPagesFromCMS(CMS_LCD_API.finalLCDsEndpoint);
     
     // Step 2: Fetch ALL proposed LCDs using pagination  
     console.log('📋 Fetching proposed LCDs...');
-    const allProposedLCDs = await fetchAllPagesFromCMS(CMS_LCD_API.proposedLCDsEndpoint, 'fetchCMSPolicies');
+    const allProposedLCDs = await fetchAllPagesFromCMS(CMS_LCD_API.proposedLCDsEndpoint);
     
     if (allFinalLCDs.length === 0 && allProposedLCDs.length === 0) {
       console.warn('No LCD data received from CMS API');

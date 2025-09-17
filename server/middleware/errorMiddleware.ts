@@ -148,8 +148,8 @@ export function enhancedRequestLogger(req: Request, res: Response, next: NextFun
         }
       }
 
-      // Log performance metrics for monitoring (use consistent naming with performance monitor)
-      errorLogger.logMetric(`response_time_ms`, duration, {
+      // Log performance metrics for monitoring
+      errorLogger.logMetric(`request_duration`, duration, {
         method: req.method,
         path: path.replace(/\/[^\/]+/g, '/*'), // Normalize paths for better grouping
         status_code: statusCode.toString()
