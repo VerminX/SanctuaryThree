@@ -3,6 +3,16 @@ import { db } from '../db';
 import { sql } from 'drizzle-orm';
 import { errorLogger, AppError, ErrorCategory, ErrorSeverity } from './errorManager';
 
+// Import performance monitor for metrics integration
+let performanceMonitor: any = null;
+try {
+  // Use dynamic import to avoid circular dependency
+  const { performanceMonitor: pm } = require('./performanceMonitor');
+  performanceMonitor = pm;
+} catch (error) {
+  // Performance monitor not available - will skip metrics recording
+}
+
 export interface ConnectionHealth {
   isHealthy: boolean;
   latency?: number;
@@ -82,7 +92,12 @@ class DatabaseResilienceService {
     
     for (let attempt = 1; attempt <= this.config.retryAttempts; attempt++) {
       try {
+        const operationStartTime = Date.now();
         const result = await this.executeWithTimeout(operation, this.config.connectionTimeout);
+        const operationLatency = Date.now() - operationStartTime;
+        
+        // Record successful database operation metrics
+        this.recordDatabaseMetrics(operationName, operationLatency, true, correlationId);
         
         // Reset failure count on success
         if (this.consecutiveFailures > 0) {
@@ -127,6 +142,10 @@ class DatabaseResilienceService {
           correlationId
         );
         errorLogger.logError(dbError);
+        
+        // Record failed database operation metrics
+        const failureLatency = Date.now() - startTime;
+        this.recordDatabaseMetrics(operationName, failureLatency, false, correlationId);
 
         // Open circuit breaker if threshold reached
         if (this.consecutiveFailures >= this.config.circuitBreakerThreshold) {
@@ -195,6 +214,9 @@ class DatabaseResilienceService {
       const latency = Date.now() - startTime;
       this.lastHealthCheck = new Date();
       this.isHealthy = true;
+      
+      // Record database health check metrics
+      this.recordHealthMetrics(latency, true);
 
       const health: ConnectionHealth = {
         isHealthy: true,
@@ -225,6 +247,10 @@ class DatabaseResilienceService {
         error instanceof Error ? error : undefined
       );
       errorLogger.logError(healthError);
+      
+      // Record failed health check metrics
+      const failedLatency = Date.now() - startTime;
+      this.recordHealthMetrics(failedLatency, false);
 
       return {
         isHealthy: false,
@@ -435,6 +461,119 @@ class DatabaseResilienceService {
       {}
     );
     errorLogger.logError(resetInfo);
+  }
+
+  /**
+   * Record database operation metrics
+   */
+  private recordDatabaseMetrics(operationName: string, latency: number, success: boolean, correlationId?: string): void {
+    if (!performanceMonitor) return;
+    
+    try {
+      // Record query execution time
+      performanceMonitor.recordMetric('avg_query_time_ms', latency, 'milliseconds', {
+        operation: operationName,
+        success: success.toString(),
+        correlationId: correlationId || 'unknown'
+      });
+      
+      // Record success/failure for error rate calculation
+      performanceMonitor.recordMetric('database_operation_count', 1, 'count', {
+        operation: operationName,
+        success: success.toString(),
+        correlationId: correlationId || 'unknown'
+      });
+      
+      if (!success) {
+        performanceMonitor.recordMetric('database_error_count', 1, 'count', {
+          operation: operationName,
+          correlationId: correlationId || 'unknown'
+        });
+      }
+      
+      // Log metric recording for debugging
+      const metricLog = new AppError(
+        `Database metrics recorded`,
+        ErrorCategory.SYSTEM,
+        ErrorSeverity.LOW,
+        200,
+        {
+          operation: operationName,
+          latency,
+          success,
+          correlationId: correlationId || 'unknown'
+        },
+        undefined,
+        correlationId
+      );
+      errorLogger.logError(metricLog);
+    } catch (error) {
+      // Don't fail database operations due to metrics recording issues
+      const metricsError = new AppError(
+        `Failed to record database metrics`,
+        ErrorCategory.SYSTEM,
+        ErrorSeverity.LOW,
+        500,
+        {
+          operation: operationName,
+          error: error instanceof Error ? error.message : String(error)
+        },
+        error instanceof Error ? error : undefined,
+        correlationId
+      );
+      errorLogger.logError(metricsError);
+    }
+  }
+
+  /**
+   * Record database health check metrics
+   */
+  private recordHealthMetrics(latency: number, success: boolean): void {
+    if (!performanceMonitor) return;
+    
+    try {
+      // Record health check latency
+      performanceMonitor.recordMetric('database_health_check_ms', latency, 'milliseconds', {
+        success: success.toString()
+      });
+      
+      // Record circuit breaker state
+      performanceMonitor.recordMetric('database_circuit_breaker_open', this.circuitBreakerOpen ? 1 : 0, 'boolean', {
+        consecutive_failures: this.consecutiveFailures.toString()
+      });
+      
+      // Record active connections (placeholder - Neon doesn't expose detailed stats)
+      performanceMonitor.recordMetric('database_active_connections', 1, 'count', {
+        healthy: this.isHealthy.toString()
+      });
+      
+      // Calculate and record error rate
+      if (this.consecutiveFailures > 0) {
+        const errorRate = (this.consecutiveFailures / (this.consecutiveFailures + 1)) * 100;
+        performanceMonitor.recordMetric('database_query_error_rate', errorRate, 'percentage', {
+          consecutive_failures: this.consecutiveFailures.toString()
+        });
+      } else {
+        performanceMonitor.recordMetric('database_query_error_rate', 0, 'percentage', {
+          consecutive_failures: '0'
+        });
+      }
+    } catch (error) {
+      // Don't fail health checks due to metrics recording issues
+      const healthMetricsError = new AppError(
+        `Failed to record database health metrics`,
+        ErrorCategory.SYSTEM,
+        ErrorSeverity.LOW,
+        500,
+        {
+          latency,
+          success,
+          error: error instanceof Error ? error.message : String(error)
+        },
+        error instanceof Error ? error : undefined
+      );
+      errorLogger.logError(healthMetricsError);
+    }
   }
 }
 

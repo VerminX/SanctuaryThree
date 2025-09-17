@@ -14,6 +14,7 @@ import {
   enhancedRequestLogger,
   centralizedErrorHandler
 } from "./middleware/errorMiddleware";
+import { performanceMonitor } from "./services/performanceMonitor";
 
 // Setup global error handling first
 setupGlobalErrorHandlers();
@@ -29,6 +30,9 @@ app.use(addCorrelationId);
 
 // Enhanced request logging
 app.use(enhancedRequestLogger);
+
+// Performance monitoring - must come after correlation ID and request logging
+app.use(performanceMonitor.createPerformanceMiddleware());
 
 (async () => {
   const server = await registerRoutes(app);

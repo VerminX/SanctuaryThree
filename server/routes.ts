@@ -1834,6 +1834,183 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   }));
 
+  // Performance monitoring and alerting endpoints
+  app.get('/api/performance/metrics', isAuthenticated, asyncHandler(async (req: any, res) => {
+    try {
+      const { performanceMonitor } = await import('./services/performanceMonitor');
+      const summary = performanceMonitor.getPerformanceSummary();
+      
+      sendSuccess(res, {
+        performance: summary,
+        timestamp: new Date().toISOString(),
+        environment: process.env.NODE_ENV || 'development'
+      }, 'Performance metrics retrieved successfully');
+    } catch (error) {
+      const metricsError = new AppError(
+        'Failed to get performance metrics',
+        ErrorCategory.SYSTEM,
+        ErrorSeverity.HIGH,
+        503,
+        {
+          error: error instanceof Error ? error.message : String(error),
+          userId: req.user?.claims?.sub
+        },
+        error instanceof Error ? error : undefined,
+        req.correlationId
+      );
+      
+      errorLogger.logError(metricsError);
+      sendError(res, metricsError);
+    }
+  }));
+
+  // Performance alerts status endpoint
+  app.get('/api/performance/alerts', isAuthenticated, asyncHandler(async (req: any, res) => {
+    try {
+      const { performanceMonitor } = await import('./services/performanceMonitor');
+      const alertStatus = performanceMonitor.getAlertStatus();
+      
+      sendSuccess(res, {
+        alerts: alertStatus,
+        timestamp: new Date().toISOString()
+      }, 'Performance alerts retrieved successfully');
+    } catch (error) {
+      const alertsError = new AppError(
+        'Failed to get performance alerts',
+        ErrorCategory.SYSTEM,
+        ErrorSeverity.HIGH,
+        503,
+        {
+          error: error instanceof Error ? error.message : String(error),
+          userId: req.user?.claims?.sub
+        },
+        error instanceof Error ? error : undefined,
+        req.correlationId
+      );
+      
+      errorLogger.logError(alertsError);
+      sendError(res, alertsError);
+    }
+  }));
+
+  // Historical metrics endpoint for specific metric
+  app.get('/api/performance/metrics/:metricName', isAuthenticated, asyncHandler(async (req: any, res) => {
+    try {
+      const { performanceMonitor } = await import('./services/performanceMonitor');
+      const { metricName } = req.params;
+      const minutes = parseInt(req.query.minutes as string) || 60;
+      
+      const history = performanceMonitor.getMetricHistory(metricName, minutes);
+      
+      sendSuccess(res, {
+        metric_name: metricName,
+        time_window_minutes: minutes,
+        data_points: history.length,
+        history: history,
+        timestamp: new Date().toISOString()
+      }, `Metric history for ${metricName} retrieved successfully`);
+    } catch (error) {
+      const historyError = new AppError(
+        `Failed to get metric history for: ${req.params.metricName}`,
+        ErrorCategory.SYSTEM,
+        ErrorSeverity.MEDIUM,
+        500,
+        {
+          metricName: req.params.metricName,
+          error: error instanceof Error ? error.message : String(error),
+          userId: req.user?.claims?.sub
+        },
+        error instanceof Error ? error : undefined,
+        req.correlationId
+      );
+      
+      errorLogger.logError(historyError);
+      sendError(res, historyError);
+    }
+  }));
+
+  // Update alert rules endpoint (admin only)
+  app.post('/api/performance/alerts/rules', isAuthenticated, asyncHandler(async (req: any, res) => {
+    try {
+      // Check admin permissions
+      const userTenant = await storage.getUserTenantRole(req.user.claims.sub, req.user.claims.tenantId);
+      if (!userTenant || userTenant.role.toLowerCase() !== 'admin') {
+        throw new AppError(
+          'Insufficient permissions to modify alert rules',
+          ErrorCategory.AUTHORIZATION,
+          ErrorSeverity.MEDIUM,
+          403,
+          {
+            userId: req.user.claims.sub,
+            tenantId: req.user.claims.tenantId,
+            role: userTenant?.role
+          },
+          undefined,
+          req.correlationId
+        );
+      }
+
+      const { performanceMonitor } = await import('./services/performanceMonitor');
+      const alertRule = req.body;
+      
+      // Validate alert rule structure
+      if (!alertRule.id || !alertRule.name || !alertRule.metric || !alertRule.threshold) {
+        throw new AppError(
+          'Invalid alert rule format',
+          ErrorCategory.VALIDATION,
+          ErrorSeverity.MEDIUM,
+          400,
+          {
+            providedRule: alertRule,
+            requiredFields: ['id', 'name', 'metric', 'threshold', 'operator', 'severity']
+          },
+          undefined,
+          req.correlationId
+        );
+      }
+      
+      performanceMonitor.updateAlertRule(alertRule);
+      
+      // Audit log for alert rule changes
+      const auditLog = {
+        tenantId: req.user.claims.tenantId,
+        userId: req.user.claims.sub,
+        action: 'PERFORMANCE_ALERT_RULE_UPDATE',
+        entityType: 'ALERT_RULE',
+        entityId: alertRule.id,
+        changes: { alert_rule: alertRule },
+        ipAddress: req.ip,
+        userAgent: req.get('User-Agent')
+      };
+      
+      await storage.createAuditLog(auditLog);
+      
+      sendSuccess(res, {
+        rule_id: alertRule.id,
+        rule_name: alertRule.name,
+        updated_by: req.user.claims.sub,
+        timestamp: new Date().toISOString()
+      }, 'Alert rule updated successfully');
+    } catch (error) {
+      const ruleError = new AppError(
+        'Failed to update alert rule',
+        ErrorCategory.SYSTEM,
+        ErrorSeverity.HIGH,
+        500,
+        {
+          error: error instanceof Error ? error.message : String(error),
+          userId: req.user?.claims?.sub,
+          tenantId: req.user?.claims?.tenantId
+        },
+        error instanceof Error ? error : undefined,
+        req.correlationId
+      );
+      
+      errorLogger.logError(ruleError);
+      sendError(res, ruleError);
+    }
+  }));
+
   // External API health check endpoints for monitoring circuit breakers
   app.get('/api/health/external', isAuthenticated, asyncHandler(async (req: any, res) => {
     try {
