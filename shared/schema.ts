@@ -226,10 +226,13 @@ export const pdfExtractedData = pgTable("pdf_extracted_data", {
   id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
   fileUploadId: uuid("file_upload_id").notNull().references(() => fileUploads.id, { onDelete: "cascade" }),
   tenantId: uuid("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
+  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }), // User who initiated extraction
   documentType: varchar("document_type", { length: 50 }).notNull(), // registration_form, medical_record, encounter_note
+  extractedText: text("extracted_text"), // Raw extracted text from PDF (encrypted)
   extractedPatientData: jsonb("extracted_patient_data"), // Patient demographics, insurance info
   extractedEncounterData: jsonb("extracted_encounter_data"), // Encounter details, notes, procedures
-  extractionConfidence: decimal("extraction_confidence", { precision: 3, scale: 2 }), // 0.00 to 1.00
+  extractionConfidence: decimal("extraction_confidence", { precision: 3, scale: 2 }), // 0.00 to 1.00 (stored as string)
+  validationScore: decimal("validation_score", { precision: 3, scale: 2 }), // 0.00 to 1.00 validation score (stored as string)
   validationStatus: varchar("validation_status", { length: 20 }).notNull().default("pending"), // pending, reviewed, approved, rejected
   reviewedBy: varchar("reviewed_by").references(() => users.id),
   reviewComments: text("review_comments"),
@@ -386,7 +389,10 @@ export const insertPdfExtractedDataSchema = createInsertSchema(pdfExtractedData)
       PDF_VALIDATION_STATUS.REVIEWED,
       PDF_VALIDATION_STATUS.APPROVED,
       PDF_VALIDATION_STATUS.REJECTED
-    ]).default(PDF_VALIDATION_STATUS.PENDING)
+    ]).default(PDF_VALIDATION_STATUS.PENDING),
+    // Decimal fields need to be strings (Drizzle decimal type returns string)
+    extractionConfidence: z.string().optional(),
+    validationScore: z.string().optional()
   });
 
 // Types

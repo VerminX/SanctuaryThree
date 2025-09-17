@@ -1675,7 +1675,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           extractionResult: {
             textLength: extractionResult.text.length,
             numPages: extractionResult.numPages,
-            confidence: extractionResult.confidence
+            confidence: parseFloat(String(extractionResult.confidence)) // Ensure number format
           }
         });
 
@@ -1763,24 +1763,24 @@ export async function registerRoutes(app: Express): Promise<Server> {
           fileUploadId: upload.id,
           tenantId: upload.tenantId,
           userId: upload.userId,
+          documentType: 'medical_record', // Default document type for PDF extraction
           extractedText: encryptedText, // Encrypted PHI
           extractedPatientData: encryptedPatientData, // Fully encrypted patient PHI
           extractedEncounterData: encryptedEncounterData, // Encrypted encounter PHI
-          extractionConfidence: extractionResult.confidence,
-          validationScore: validation.score,
+          extractionConfidence: extractionResult.confidence.toString(), // Convert to string for decimal type
+          validationScore: validation.score.toString(), // Convert to string for decimal type
           validationStatus: PDF_VALIDATION_STATUS.PENDING // Use proper enum constant
         });
 
         // Step 5: CRITICAL HIPAA FIX - Replace plaintext extracted_text with encrypted version
-        await storage.updateFileUpload(uploadId, { 
-          extractedText: encryptedText, // Replace plaintext with encrypted PHI
-          status: FILE_UPLOAD_STATUS.DATA_EXTRACTED,
-          processingError: null,
-          processedAt: new Date()
-        });
+        await storage.updateFileUploadText(uploadId, encryptedText);
+        await storage.updateFileUploadStatus(uploadId, FILE_UPLOAD_STATUS.DATA_EXTRACTED);
 
         // Clear plaintext from memory immediately (HIPAA security)
-        extractedText = undefined as any;
+        extractedText = '';
+        extractionResult.patientData = {};
+        extractionResult.encounterData = {};
+        extractionResult = null;
 
         // Step 6: Log audit event for HIPAA compliance (NO PHI in logs)
         await storage.createAuditLog({
@@ -1797,8 +1797,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         res.status(200).json({
           message: "Data extraction completed",
           extractionId: extractedData.id,
-          confidence: extractionResult.confidence,
-          validationScore: validation.score,
+          confidence: parseFloat(String(extractionResult.confidence)), // Ensure number format
+          validationScore: parseFloat(String(validation.score)), // Ensure number format
           isComplete: validation.isComplete,
           missingFields: validation.missingCriticalFields,
           warnings: extractionResult.warnings,
@@ -1889,6 +1889,184 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error("Error fetching uploads:", error);
       res.status(500).json({ message: "Failed to fetch uploads" });
+    }
+  });
+
+  // Create Patient and Encounter from Extracted Data
+  app.post('/api/upload/:uploadId/create-records', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const { uploadId } = req.params;
+      
+      // Get the file upload record
+      const upload = await storage.getFileUpload(uploadId);
+      if (!upload) {
+        return res.status(404).json({ message: "Upload not found" });
+      }
+      
+      // Verify user has access to this file
+      const userTenantRole = await storage.getUserTenantRole(userId, upload.tenantId);
+      if (!userTenantRole) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+      
+      // Get the extracted data
+      const extractedData = await storage.getPdfExtractedDataByFileUpload(uploadId);
+      if (!extractedData) {
+        return res.status(400).json({ message: "No extracted data found. Please extract data first." });
+      }
+      
+      if (extractedData.validationStatus === 'pending') {
+        return res.status(400).json({ message: "Extracted data must be validated before creating records" });
+      }
+
+      try {
+        // Decrypt the extracted patient data
+        const { decryptPHI } = await import('./services/encryption');
+        
+        const patientData = extractedData.extractedPatientData;
+        const encounterData = extractedData.extractedEncounterData;
+        
+        // Decrypt patient PHI fields
+        const decryptedPatientData = {
+          mrn: patientData.mrn ? decryptPHI(patientData.mrn) : '',
+          firstName: patientData.firstName ? decryptPHI(patientData.firstName) : '',
+          lastName: patientData.lastName ? decryptPHI(patientData.lastName) : '',
+          dateOfBirth: patientData.dateOfBirth ? decryptPHI(patientData.dateOfBirth) : '',
+          phoneNumber: patientData.phoneNumber ? decryptPHI(patientData.phoneNumber) : undefined,
+          address: patientData.address ? decryptPHI(patientData.address) : undefined,
+          insuranceId: patientData.insuranceId ? decryptPHI(patientData.insuranceId) : undefined,
+          payerType: patientData.payerType || 'Original Medicare',
+          planName: patientData.planName,
+          macRegion: patientData.macRegion
+        };
+
+        // Check if patient already exists by MRN
+        let existingPatient = null;
+        if (decryptedPatientData.mrn) {
+          const patients = await storage.getPatientsByTenant(upload.tenantId);
+          for (const patient of patients) {
+            try {
+              const decryptedMrn = patient.encryptedFirstName ? decryptPHI(patient.mrn) : patient.mrn;
+              if (decryptedMrn === decryptedPatientData.mrn) {
+                existingPatient = patient;
+                break;
+              }
+            } catch {
+              // Skip patients with decryption issues
+              continue;
+            }
+          }
+        }
+
+        let patientId: string;
+        
+        if (existingPatient) {
+          // Use existing patient
+          patientId = existingPatient.id;
+          console.log(`Using existing patient: ${patientId}`);
+        } else {
+          // Create new patient with encrypted PHI data
+          const { encryptPatientData } = await import('./services/encryption');
+          const encryptedFields = encryptPatientData(
+            decryptedPatientData.firstName,
+            decryptedPatientData.lastName, 
+            decryptedPatientData.dateOfBirth
+          );
+
+          const newPatient = await storage.createPatient({
+            tenantId: upload.tenantId,
+            mrn: decryptedPatientData.mrn,
+            encryptedFirstName: encryptedFields.encryptedFirstName,
+            encryptedLastName: encryptedFields.encryptedLastName,
+            encryptedDob: encryptedFields.encryptedDob,
+            payerType: decryptedPatientData.payerType,
+            planName: decryptedPatientData.planName,
+            macRegion: decryptedPatientData.macRegion
+          });
+          
+          patientId = newPatient.id;
+          console.log(`Created new patient: ${patientId}`);
+        }
+
+        // Decrypt and process encounter data
+        const { decryptEncounterNotes } = await import('./services/encryption');
+        
+        const decryptedEncounterData = {
+          date: encounterData.encounterDate ? new Date(encounterData.encounterDate) : new Date(),
+          notes: encounterData.notes ? decryptEncounterNotes(encounterData.notes) : [],
+          assessment: encounterData.assessment ? decryptPHI(encounterData.assessment) : '',
+          plan: encounterData.plan ? decryptPHI(encounterData.plan) : '',
+          woundDetails: encounterData.woundDetails ? JSON.parse(decryptPHI(encounterData.woundDetails)) : {},
+          conservativeCare: encounterData.conservativeCare ? JSON.parse(decryptPHI(encounterData.conservativeCare)) : {},
+          infectionStatus: encounterData.infectionStatus || 'None',
+          comorbidities: encounterData.comorbidities || []
+        };
+
+        // Create encounter with encrypted data
+        const { encryptEncounterNotes, encryptPHI } = await import('./services/encryption');
+        
+        const newEncounter = await storage.createEncounter({
+          patientId,
+          date: decryptedEncounterData.date,
+          encryptedNotes: encryptEncounterNotes(decryptedEncounterData.notes),
+          woundDetails: decryptedEncounterData.woundDetails,
+          conservativeCare: decryptedEncounterData.conservativeCare,
+          infectionStatus: decryptedEncounterData.infectionStatus,
+          comorbidities: decryptedEncounterData.comorbidities
+        });
+
+        // Update extraction data status to completed
+        await storage.updatePdfExtractedDataValidation(extractedData.id, 'approved', userId, 'Records created successfully');
+
+        // HIPAA SECURITY: Clear plaintext PHI from memory immediately
+        decryptedPatientData.firstName = '';
+        decryptedPatientData.lastName = '';
+        decryptedPatientData.dateOfBirth = '';
+        decryptedPatientData.mrn = '';
+        decryptedPatientData.phoneNumber = '';
+        decryptedPatientData.address = '';
+        decryptedPatientData.insuranceId = '';
+        
+        decryptedEncounterData.notes = [];
+        decryptedEncounterData.assessment = '';
+        decryptedEncounterData.plan = '';
+        
+        // Null out the objects to ensure garbage collection
+        Object.keys(decryptedPatientData).forEach(key => { decryptedPatientData[key] = null; });
+        Object.keys(decryptedEncounterData).forEach(key => { decryptedEncounterData[key] = null; });
+
+        // Log audit event
+        await storage.createAuditLog({
+          tenantId: upload.tenantId,
+          userId,
+          action: 'CREATE_RECORDS_FROM_PDF',
+          entity: 'Patient',
+          entityId: patientId,
+          ipAddress: req.ip,
+          userAgent: req.get('User-Agent'),
+          previousHash: '',
+        });
+
+        res.status(201).json({
+          message: "Patient and encounter records created successfully",
+          patientId,
+          encounterId: newEncounter.id,
+          wasNewPatient: !existingPatient,
+          extractionId: extractedData.id
+        });
+
+      } catch (processError) {
+        console.error('Error creating records from extracted data:', processError);
+        res.status(500).json({ 
+          message: "Failed to create patient and encounter records",
+          error: process.env.NODE_ENV === 'development' ? (processError as Error).message : 'Record creation failed'
+        });
+      }
+
+    } catch (error) {
+      console.error('Error in create-records endpoint:', error);
+      res.status(500).json({ message: "Internal server error" });
     }
   });
 

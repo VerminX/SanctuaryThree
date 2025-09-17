@@ -21,6 +21,10 @@ interface FileUpload {
   processingError?: string;
 }
 
+interface UploadsResponse {
+  uploads: FileUpload[];
+}
+
 interface ExtractionResult {
   extractionId: string;
   confidence: number;
@@ -85,7 +89,7 @@ export default function UploadPage() {
   const [extractionResults, setExtractionResults] = useState<Record<string, ExtractionResult>>({});
 
   // Fetch recent uploads
-  const { data: uploads, refetch: refetchUploads } = useQuery({
+  const { data: uploads, refetch: refetchUploads } = useQuery<UploadsResponse>({
     queryKey: ['/api/uploads'],
     enabled: !!user
   });
@@ -166,6 +170,29 @@ export default function UploadPage() {
         title: "Data extraction failed", 
         description: error.message || "Failed to extract structured data",
         variant: "destructive"
+      });
+    }
+  });
+
+  // Create records mutation
+  const createRecordsMutation = useMutation({
+    mutationFn: async (uploadId: string) => {
+      const response = await apiRequest('POST', `/api/upload/${uploadId}/create-records`);
+      return response.json();
+    },
+    onSuccess: (data) => {
+      refetchUploads();
+      const patientText = data.wasNewPatient ? "New patient created" : "Existing patient updated";
+      toast({
+        title: "Records Created Successfully",
+        description: `${patientText} and encounter record added. Patient ID: ${data.patientId}`,
+      });
+    },
+    onError: (error: any) => {
+      toast({
+        title: "Failed to Create Records",
+        description: error.message || "Failed to create patient and encounter records",
+        variant: "destructive",
       });
     }
   });
@@ -285,9 +312,9 @@ export default function UploadPage() {
           </CardDescription>
         </CardHeader>
         <CardContent>
-          {uploads && Array.isArray(uploads) && uploads.length > 0 ? (
+          {uploads?.uploads && Array.isArray(uploads.uploads) && uploads.uploads.length > 0 ? (
             <div className="space-y-4">
-              {uploads.map((upload: FileUpload) => (
+              {uploads.uploads.map((upload: FileUpload) => (
                 <div key={upload.id} className="border rounded-lg p-4 space-y-3">
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-3">
@@ -404,8 +431,21 @@ export default function UploadPage() {
                       )}
 
                       {extractionResults[upload.id].canCreateRecords && (
-                        <Button size="sm" className="w-full" data-testid={`create-records-${upload.id}`}>
-                          Create Patient & Encounter Records
+                        <Button 
+                          size="sm" 
+                          className="w-full" 
+                          data-testid={`create-records-${upload.id}`}
+                          onClick={() => createRecordsMutation.mutate(upload.id)}
+                          disabled={createRecordsMutation.isPending}
+                        >
+                          {createRecordsMutation.isPending ? (
+                            <>
+                              <Clock className="w-4 h-4 mr-2 animate-spin" />
+                              Creating Records...
+                            </>
+                          ) : (
+                            'Create Patient & Encounter Records'
+                          )}
                         </Button>
                       )}
                     </div>
