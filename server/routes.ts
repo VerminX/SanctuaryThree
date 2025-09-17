@@ -3,7 +3,7 @@ import { createServer, type Server } from "http";
 import fs from "fs";
 import path from "path";
 import { storage } from "./storage";
-import { setupAuth, isAuthenticated } from "./replitAuth";
+import { setupAuth, isAuthenticated, getCanonicalUserId } from "./replitAuth";
 import { 
   insertTenantSchema, 
   insertPatientSchema, 
@@ -136,7 +136,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // Tenant routes
   app.post('/api/tenants', isAuthenticated, asyncHandler(async (req: any, res) => {
-    const userId = req.user.claims.sub;
+    const userId = await getCanonicalUserId(req);
     const tenantData = insertTenantSchema.parse(req.body);
     
     const tenant = await storage.createTenant(tenantData);
@@ -165,7 +165,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   }));
 
   app.get('/api/tenants/:tenantId', isAuthenticated, asyncHandler(async (req: any, res) => {
-    const userId = req.user.claims.sub;
+    const userId = await getCanonicalUserId(req);
     const { tenantId } = req.params;
     
     // Verify user has access to tenant
@@ -185,7 +185,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Patient routes
   app.post('/api/tenants/:tenantId/patients', isAuthenticated, async (req: any, res) => {
     try {
-      const userId = req.user.claims.sub;
+      const userId = await getCanonicalUserId(req);
       const { tenantId } = req.params;
       
       // Verify user has access to tenant
@@ -245,7 +245,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.get('/api/tenants/:tenantId/patients', isAuthenticated, async (req: any, res) => {
     try {
-      const userId = req.user.claims.sub;
+      const userId = await getCanonicalUserId(req);
       const { tenantId } = req.params;
       
       // Verify user has access to tenant
@@ -289,7 +289,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.get('/api/patients/:patientId', isAuthenticated, async (req: any, res) => {
     try {
-      const userId = req.user.claims.sub;
+      const userId = await getCanonicalUserId(req);
       const { patientId } = req.params;
       
       const patient = await storage.getPatient(patientId);
@@ -337,7 +337,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Encounter routes
   app.post('/api/patients/:patientId/encounters', isAuthenticated, async (req: any, res) => {
     try {
-      const userId = req.user.claims.sub;
+      const userId = await getCanonicalUserId(req);
       const { patientId } = req.params;
       
       const patient = await storage.getPatient(patientId);
@@ -413,7 +413,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.get('/api/patients/:patientId/encounters', isAuthenticated, async (req: any, res) => {
     try {
-      const userId = req.user.claims.sub;
+      const userId = await getCanonicalUserId(req);
       const { patientId } = req.params;
       
       const patient = await storage.getPatient(patientId);
@@ -445,7 +445,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Update encounter
   app.put('/api/encounters/:encounterId', isAuthenticated, async (req: any, res) => {
     try {
-      const userId = req.user.claims.sub;
+      const userId = await getCanonicalUserId(req);
       const { encounterId } = req.params;
       
       const encounter = await storage.getEncounter(encounterId);
@@ -516,7 +516,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Eligibility analysis routes
   app.post('/api/encounters/:encounterId/analyze-eligibility', isAuthenticated, async (req: any, res) => {
     try {
-      const userId = req.user.claims.sub;
+      const userId = await getCanonicalUserId(req);
       const { encounterId } = req.params;
       
       const encounter = await storage.getEncounter(encounterId);
@@ -586,7 +586,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Get eligibility checks for an encounter
   app.get('/api/encounters/:encounterId/eligibility-checks', isAuthenticated, async (req: any, res) => {
     try {
-      const userId = req.user.claims.sub;
+      const userId = await getCanonicalUserId(req);
       const { encounterId } = req.params;
       
       const encounter = await storage.getEncounter(encounterId);
@@ -616,7 +616,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Get recent eligibility checks for current tenant
   app.get('/api/recent-eligibility-checks', isAuthenticated, async (req: any, res) => {
     try {
-      const userId = req.user.claims.sub;
+      const userId = await getCanonicalUserId(req);
       const limit = parseInt(req.query.limit as string) || 10;
 
       // Get user's tenants
@@ -639,7 +639,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Document generation routes
   app.post('/api/patients/:patientId/documents', isAuthenticated, async (req: any, res) => {
     try {
-      const userId = req.user.claims.sub;
+      const userId = await getCanonicalUserId(req);
       const { patientId } = req.params;
       const { type, eligibilityCheckId } = req.body;
       
@@ -713,7 +713,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.get('/api/patients/:patientId/documents', isAuthenticated, async (req: any, res) => {
     try {
-      const userId = req.user.claims.sub;
+      const userId = await getCanonicalUserId(req);
       const { patientId } = req.params;
       
       const patient = await storage.getPatient(patientId);
@@ -751,7 +751,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Document export routes
   app.get('/api/documents/:documentId/export/:format', isAuthenticated, async (req: any, res) => {
     try {
-      const userId = req.user.claims.sub;
+      const userId = await getCanonicalUserId(req);
       const { documentId, format } = req.params;
       
       if (!['PDF', 'DOCX'].includes(format)) {
@@ -818,7 +818,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Get document versions
   app.get('/api/documents/:documentId/versions', isAuthenticated, async (req: any, res) => {
     try {
-      const userId = req.user.claims.sub;
+      const userId = await getCanonicalUserId(req);
       const { documentId } = req.params;
       
       const document = await storage.getDocument(documentId);
@@ -861,7 +861,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Create new document version
   app.post('/api/documents/:documentId/versions', isAuthenticated, async (req: any, res) => {
     try {
-      const userId = req.user.claims.sub;
+      const userId = await getCanonicalUserId(req);
       const { documentId } = req.params;
       
       // SECURITY FIX: Comprehensive Zod validation for version creation
@@ -928,7 +928,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Submit document for approval
   app.post('/api/documents/:documentId/submit-approval', isAuthenticated, async (req: any, res) => {
     try {
-      const userId = req.user.claims.sub;
+      const userId = await getCanonicalUserId(req);
       const { documentId } = req.params;
       const { approverRole } = req.body;
       
@@ -1002,7 +1002,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Get pending approvals for user
   app.get('/api/tenants/:tenantId/pending-approvals', isAuthenticated, async (req: any, res) => {
     try {
-      const userId = req.user.claims.sub;
+      const userId = await getCanonicalUserId(req);
       const { tenantId } = req.params;
       
       // Verify user has access to tenant
@@ -1023,7 +1023,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Policy management routes
   app.get('/api/tenants/:tenantId/policies', isAuthenticated, async (req: any, res) => {
     try {
-      const userId = req.user.claims.sub;
+      const userId = await getCanonicalUserId(req);
       const { tenantId } = req.params;
       
       // Verify user has access to tenant
@@ -1048,7 +1048,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Policy refresh route for specific tenant
   app.post('/api/tenants/:tenantId/policies/refresh', isAuthenticated, async (req: any, res) => {
     try {
-      const userId = req.user.claims.sub;
+      const userId = await getCanonicalUserId(req);
       const { tenantId } = req.params;
       
       // Verify user has access to tenant
@@ -1103,7 +1103,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Policy update management routes (admin only)
   app.post('/api/admin/policies/update', isAuthenticated, async (req: any, res) => {
     try {
-      const userId = req.user.claims.sub;
+      const userId = await getCanonicalUserId(req);
       
       // Check admin permissions
       const userTenant = await storage.getUserTenantRole(userId, req.user.claims.tenantId);
@@ -1165,7 +1165,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.get('/api/tenants/:tenantId/dashboard-stats', isAuthenticated, async (req: any, res) => {
     try {
-      const userId = req.user.claims.sub;
+      const userId = await getCanonicalUserId(req);
       const { tenantId } = req.params;
       
       // Verify user has access to tenant
@@ -1206,7 +1206,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // CRITICAL MISSING ENDPOINT: Document approval processing
   app.put('/api/documents/approvals/:approvalId', isAuthenticated, async (req: any, res) => {
     try {
-      const userId = req.user.claims.sub;
+      const userId = await getCanonicalUserId(req);
       const { approvalId } = req.params;
       
       // SECURITY FIX: Comprehensive Zod validation for approval processing
@@ -1274,7 +1274,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // CRITICAL MISSING ENDPOINT: Electronic signature
   app.post('/api/documents/:documentId/sign', isAuthenticated, async (req: any, res) => {
     try {
-      const userId = req.user.claims.sub;
+      const userId = await getCanonicalUserId(req);
       const { documentId } = req.params;
       
       // SECURITY FIX: Comprehensive Zod validation for signature data
@@ -1382,7 +1382,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Audit log routes
   app.get('/api/tenants/:tenantId/audit-logs', isAuthenticated, async (req: any, res) => {
     try {
-      const userId = req.user.claims.sub;
+      const userId = await getCanonicalUserId(req);
       const { tenantId } = req.params;
       
       // Verify user has admin access to tenant
@@ -1404,7 +1404,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // RAG System Validation Routes (for testing and quality assurance)
   app.get('/api/validation/rag/policy-retrieval', isAuthenticated, async (req: any, res) => {
     try {
-      const userId = req.user.claims.sub;
+      const userId = await getCanonicalUserId(req);
       
       // Import validation service dynamically to avoid circular dependencies
       
@@ -1427,7 +1427,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.get('/api/validation/rag/ai-analysis', isAuthenticated, async (req: any, res) => {
     try {
-      const userId = req.user.claims.sub;
+      const userId = await getCanonicalUserId(req);
       
       // Import validation service dynamically
       
@@ -1450,7 +1450,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.get('/api/validation/rag/citation-generation', isAuthenticated, async (req: any, res) => {
     try {
-      const userId = req.user.claims.sub;
+      const userId = await getCanonicalUserId(req);
       
       // Import validation service dynamically
       
@@ -1473,7 +1473,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.get('/api/validation/rag/comprehensive', isAuthenticated, async (req: any, res) => {
     try {
-      const userId = req.user.claims.sub;
+      const userId = await getCanonicalUserId(req);
       
       // Import validation service dynamically
       
@@ -1497,7 +1497,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Individual RAG component testing endpoints
   app.post('/api/validation/rag/test-retrieval', isAuthenticated, async (req: any, res) => {
     try {
-      const userId = req.user.claims.sub;
+      const userId = await getCanonicalUserId(req);
       const { macRegion, woundType } = req.body;
 
       if (!macRegion || !woundType) {
@@ -1530,7 +1530,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.post('/api/validation/rag/test-analysis', isAuthenticated, async (req: any, res) => {
     try {
-      const userId = req.user.claims.sub;
+      const userId = await getCanonicalUserId(req);
       const analysisRequest = req.body;
 
       if (!analysisRequest.policyContext || !analysisRequest.patientInfo) {
@@ -1563,7 +1563,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // Client-side error reporting endpoint (requires authentication)
   app.post('/api/errors/client', isAuthenticated, asyncHandler(async (req: any, res) => {
-    const userId = req.user.claims.sub;
+    const userId = await getCanonicalUserId(req);
     
     // Validate request body to prevent malicious payloads
     const clientErrorSchema = z.object({
