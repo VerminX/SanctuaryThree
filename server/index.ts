@@ -2,51 +2,39 @@ import express, { type Request, Response, NextFunction } from "express";
 import { registerRoutes } from "./routes";
 import { setupVite, serveStatic, log } from "./vite";
 import { scheduledPolicyUpdate } from "./services/policyUpdater";
+import { 
+  setupGlobalErrorHandlers,
+  errorLogger,
+  AppError,
+  ErrorCategory,
+  ErrorSeverity
+} from "./services/errorManager";
+import {
+  addCorrelationId,
+  enhancedRequestLogger,
+  centralizedErrorHandler
+} from "./middleware/errorMiddleware";
+
+// Setup global error handling first
+setupGlobalErrorHandlers();
 
 const app = express();
-app.use(express.json());
+
+// Essential middleware
+app.use(express.json({ limit: '10mb' })); // Increased limit for document uploads
 app.use(express.urlencoded({ extended: false }));
 
-app.use((req, res, next) => {
-  const start = Date.now();
-  const path = req.path;
-  let capturedJsonResponse: Record<string, any> | undefined = undefined;
+// Add correlation ID to all requests
+app.use(addCorrelationId);
 
-  const originalResJson = res.json;
-  res.json = function (bodyJson, ...args) {
-    capturedJsonResponse = bodyJson;
-    return originalResJson.apply(res, [bodyJson, ...args]);
-  };
-
-  res.on("finish", () => {
-    const duration = Date.now() - start;
-    if (path.startsWith("/api")) {
-      let logLine = `${req.method} ${path} ${res.statusCode} in ${duration}ms`;
-      if (capturedJsonResponse) {
-        logLine += ` :: ${JSON.stringify(capturedJsonResponse)}`;
-      }
-
-      if (logLine.length > 80) {
-        logLine = logLine.slice(0, 79) + "…";
-      }
-
-      log(logLine);
-    }
-  });
-
-  next();
-});
+// Enhanced request logging
+app.use(enhancedRequestLogger);
 
 (async () => {
   const server = await registerRoutes(app);
 
-  app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
-    const status = err.status || err.statusCode || 500;
-    const message = err.message || "Internal Server Error";
-
-    res.status(status).json({ message });
-    throw err;
-  });
+  // Use centralized error handler
+  app.use(centralizedErrorHandler);
 
   // importantly only setup vite in development and after
   // setting up all the other routes so the catch-all route
