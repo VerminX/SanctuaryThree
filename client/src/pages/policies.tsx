@@ -4,6 +4,7 @@ import { useToast } from "@/hooks/use-toast";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { isUnauthorizedError } from "@/lib/authUtils";
 import { apiRequest } from "@/lib/queryClient";
+import { PolicySource } from "@shared/schema";
 import Sidebar from "@/components/layout/sidebar";
 import Header from "@/components/layout/header";
 import { Card, CardContent } from "@/components/ui/card";
@@ -37,7 +38,7 @@ export default function Policies() {
 
   const currentTenant = user?.tenants?.[0];
 
-  const { data: policies, isLoading: policiesLoading, error } = useQuery({
+  const { data: policies = [], isLoading: policiesLoading, error } = useQuery<PolicySource[]>({
     queryKey: ["/api/tenants", currentTenant?.id, "policies"],
     enabled: !!currentTenant?.id,
     retry: false,
@@ -86,13 +87,13 @@ export default function Policies() {
   }
 
   // Filter policies based on search term and status
-  const filteredPolicies = policies?.filter((policy: any) => {
+  const filteredPolicies = policies.filter((policy: PolicySource) => {
     const matchesSearch = policy.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
                          policy.mac.toLowerCase().includes(searchTerm.toLowerCase()) ||
                          policy.lcdId.toLowerCase().includes(searchTerm.toLowerCase());
     const matchesStatus = filterStatus === "all" || policy.status === filterStatus;
     return matchesSearch && matchesStatus;
-  }) || [];
+  });
 
   const getStatusColor = (status: string) => {
     switch (status) {
@@ -121,15 +122,15 @@ export default function Policies() {
   };
 
   // Calculate stats
-  const totalPolicies = policies?.length || 0;
-  const activePolicies = policies?.filter((p: any) => p.status === 'active').length || 0;
-  const postponedPolicies = policies?.filter((p: any) => p.status === 'postponed').length || 0;
-  const recentUpdates = policies?.filter((p: any) => {
-    const updateDate = new Date(p.updatedAt);
+  const totalPolicies = policies.length;
+  const activePolicies = policies.filter((p: PolicySource) => p.status === 'active').length;
+  const postponedPolicies = policies.filter((p: PolicySource) => p.status === 'postponed').length;
+  const recentUpdates = policies.filter((p: PolicySource) => {
+    const updateDate = new Date(p.updatedAt!);
     const oneWeekAgo = new Date();
     oneWeekAgo.setDate(oneWeekAgo.getDate() - 7);
     return updateDate >= oneWeekAgo;
-  }).length || 0;
+  }).length;
 
   return (
     <div className="min-h-screen flex bg-background" data-testid="page-policies">
@@ -273,9 +274,9 @@ export default function Policies() {
                       </div>
                     ))}
                   </div>
-                ) : policies && policies.length > 0 ? (
+                ) : policies.length > 0 ? (
                   <div className="space-y-4">
-                    {policies.slice(0, 5).map((policy: any) => (
+                    {policies.slice(0, 5).map((policy: PolicySource) => (
                       <div key={policy.id} className="border border-border rounded-lg p-4">
                         <div className="flex items-start justify-between">
                           <div className="flex-1">
@@ -364,7 +365,7 @@ export default function Policies() {
               <div className="flex items-center justify-between">
                 <h3 className="text-lg font-semibold text-foreground">Policy Database</h3>
                 <span className="text-sm text-muted-foreground">
-                  {filteredPolicies.length} of {policies?.length || 0} policies
+                  {filteredPolicies.length} of {policies.length} policies
                 </span>
               </div>
             </div>
@@ -399,7 +400,7 @@ export default function Policies() {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {filteredPolicies.map((policy: any) => (
+                    {filteredPolicies.map((policy: PolicySource) => (
                       <TableRow key={policy.id} data-testid={`row-policy-${policy.id}`}>
                         <TableCell>
                           <code className="text-sm bg-muted px-2 py-1 rounded font-mono">
