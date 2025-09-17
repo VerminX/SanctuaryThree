@@ -1,7 +1,6 @@
 import fs from 'fs';
-
 // @ts-ignore - pdf-parse doesn't have types
-const pdfParse = require('pdf-parse');
+import pdfParse from 'pdf-parse';
 
 export interface TextExtractionResult {
   text: string;
