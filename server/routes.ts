@@ -1491,6 +1491,270 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // File Upload Routes
+  // Basic PDF upload endpoint (server-side upload handling)
+  app.post('/api/upload/pdf', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      
+      // Enhanced tenant selection: accept tenantId from query or use first available
+      const requestedTenantId = req.query.tenantId as string;
+      const tenants = await storage.getTenantsByUser(userId);
+      if (tenants.length === 0) {
+        return res.status(400).json({ message: "User must be associated with a tenant to upload files" });
+      }
+      
+      let tenantId: string;
+      if (requestedTenantId) {
+        // Verify user has access to the requested tenant
+        const userTenantRole = await storage.getUserTenantRole(userId, requestedTenantId);
+        if (!userTenantRole) {
+          return res.status(403).json({ message: "Access denied to the specified tenant" });
+        }
+        tenantId = requestedTenantId;
+      } else {
+        // Use the first tenant as fallback
+        tenantId = tenants[0].id;
+      }
+      
+      const multer = (await import('multer')).default;
+      const upload = multer({ 
+        storage: multer.memoryStorage(),
+        limits: { 
+          fileSize: 10 * 1024 * 1024, // 10MB limit
+        },
+        fileFilter: (_req, file, cb) => {
+          if (file.mimetype === 'application/pdf') {
+            cb(null, true);
+          } else {
+            cb(new Error('Only PDF files are allowed'));
+          }
+        }
+      });
+
+      // Helper function to validate PDF magic bytes
+      const validatePDFMagicBytes = (buffer: Buffer): boolean => {
+        // PDF files start with %PDF-
+        const pdfHeader = buffer.subarray(0, 5);
+        return pdfHeader.toString() === '%PDF-';
+      };
+
+      upload.single('pdf')(req, res, async (err) => {
+        if (err) {
+          return res.status(400).json({ message: err.message });
+        }
+
+        if (!req.file) {
+          return res.status(400).json({ message: "No PDF file uploaded" });
+        }
+
+        // Validate PDF magic bytes for additional security
+        if (!validatePDFMagicBytes(req.file.buffer)) {
+          return res.status(400).json({ message: "Invalid PDF file format" });
+        }
+
+        try {
+          // Store file in object storage (HIPAA compliant - no original filename in path)
+          const { ObjectStorageService } = await import('./objectStorage');
+          const objectStorage = new ObjectStorageService();
+          const objectPath = await objectStorage.storeFile(
+            req.file.buffer,
+            'application/pdf'
+          );
+
+          // Set ACL policy for the uploaded file (private, owned by user)
+          try {
+            await objectStorage.trySetObjectEntityAclPolicy(objectPath, {
+              owner: userId,
+              visibility: 'private'
+            });
+          } catch (aclError) {
+            console.error('Error setting ACL policy:', aclError);
+            // Continue - ACL error shouldn't block upload, but log it
+          }
+
+          // Create file upload record
+          const fileUpload = await storage.createFileUpload({
+            tenantId,
+            userId,
+            filename: `${Date.now()}_${req.file.originalname}`,
+            originalFilename: req.file.originalname,
+            fileType: 'PDF',
+            fileSize: req.file.size,
+            objectPath,
+            status: 'uploaded'
+          });
+
+          // Log audit event
+          await storage.createAuditLog({
+            tenantId,
+            userId,
+            action: 'UPLOAD_PDF',
+            entity: 'FileUpload',
+            entityId: fileUpload.id,
+            ipAddress: req.ip,
+            userAgent: req.get('User-Agent'),
+            previousHash: '',
+          });
+
+          res.json({ 
+            success: true,
+            fileUpload: {
+              id: fileUpload.id,
+              filename: fileUpload.originalFilename,
+              status: fileUpload.status,
+              uploadedAt: fileUpload.createdAt
+            }
+          });
+        } catch (storageError) {
+          console.error('Error storing uploaded file:', storageError);
+          res.status(500).json({ message: "Failed to store uploaded file" });
+        }
+      });
+    } catch (error) {
+      console.error("Error in PDF upload:", error);
+      res.status(500).json({ message: "Failed to upload PDF" });
+    }
+  });
+
+  // Extract text from uploaded PDF
+  app.post('/api/upload/:uploadId/extract-text', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const { uploadId } = req.params;
+
+      const upload = await storage.getFileUpload(uploadId);
+      if (!upload) {
+        return res.status(404).json({ message: "Upload not found" });
+      }
+
+      // Verify user has access to this upload
+      const userTenantRole = await storage.getUserTenantRole(userId, upload.tenantId);
+      if (!userTenantRole) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+
+      if (upload.status !== 'uploaded') {
+        return res.status(400).json({ message: "File is not ready for text extraction" });
+      }
+
+      // Update status to processing
+      await storage.updateFileUploadStatus(uploadId, 'processing');
+
+      try {
+        // Get file from object storage
+        const { ObjectStorageService } = await import('./objectStorage');
+        const objectStorage = new ObjectStorageService();
+        const fileObject = await objectStorage.getObjectEntityFile(upload.objectPath);
+        
+        // Download file to buffer
+        const fileBuffer = await objectStorage.downloadFileToBuffer(fileObject);
+        
+        // Extract text from PDF
+        const { PdfTextExtractor } = await import('./services/pdfTextExtractor');
+        const extractionResult = await PdfTextExtractor.extractTextFromBuffer(fileBuffer);
+
+        // Update upload record with extracted text
+        await storage.updateFileUploadText(uploadId, extractionResult.text);
+        await storage.updateFileUploadStatus(uploadId, 'processed');
+
+        // Log audit event
+        await storage.createAuditLog({
+          tenantId: upload.tenantId,
+          userId,
+          action: 'EXTRACT_PDF_TEXT',
+          entity: 'FileUpload',
+          entityId: uploadId,
+          ipAddress: req.ip,
+          userAgent: req.get('User-Agent'),
+          previousHash: '',
+        });
+
+        res.json({
+          success: true,
+          extractionResult: {
+            textLength: extractionResult.text.length,
+            numPages: extractionResult.numPages,
+            confidence: extractionResult.confidence
+          }
+        });
+
+      } catch (extractionError) {
+        console.error('Error extracting text from PDF:', extractionError);
+        await storage.updateFileUploadStatus(uploadId, 'failed', (extractionError as Error).message);
+        res.status(500).json({ message: "Failed to extract text from PDF" });
+      }
+    } catch (error) {
+      console.error("Error in text extraction:", error);
+      res.status(500).json({ message: "Failed to extract text" });
+    }
+  });
+
+  // Get upload status and details
+  app.get('/api/uploads/:uploadId', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const { uploadId } = req.params;
+
+      const upload = await storage.getFileUpload(uploadId);
+      if (!upload) {
+        return res.status(404).json({ message: "Upload not found" });
+      }
+
+      // Verify user has access to this upload
+      const userTenantRole = await storage.getUserTenantRole(userId, upload.tenantId);
+      if (!userTenantRole) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+
+      res.json({
+        id: upload.id,
+        filename: upload.originalFilename,
+        fileType: upload.fileType,
+        fileSize: upload.fileSize,
+        status: upload.status,
+        processingError: upload.processingError,
+        textLength: upload.extractedText?.length || 0,
+        uploadedAt: upload.createdAt,
+        processedAt: upload.processedAt
+      });
+    } catch (error) {
+      console.error("Error fetching upload details:", error);
+      res.status(500).json({ message: "Failed to fetch upload details" });
+    }
+  });
+
+  // List uploads for current tenant
+  app.get('/api/uploads', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      
+      // Get user's tenants
+      const tenants = await storage.getTenantsByUser(userId);
+      if (tenants.length === 0) {
+        return res.json({ uploads: [] });
+      }
+
+      // Get uploads for the first tenant (could be enhanced for multi-tenant support)
+      const uploads = await storage.getFileUploadsByTenant(tenants[0].id);
+
+      res.json({
+        uploads: uploads.map(upload => ({
+          id: upload.id,
+          filename: upload.originalFilename,
+          fileType: upload.fileType,
+          fileSize: upload.fileSize,
+          status: upload.status,
+          uploadedAt: upload.createdAt,
+          processedAt: upload.processedAt,
+          hasText: !!upload.extractedText
+        }))
+      });
+    } catch (error) {
+      console.error("Error fetching uploads:", error);
+      res.status(500).json({ message: "Failed to fetch uploads" });
+    }
+  });
 
   const httpServer = createServer(app);
   return httpServer;

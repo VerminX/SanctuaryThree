@@ -12,6 +12,8 @@ import {
   documentSignatures,
   recentActivities,
   auditLogs,
+  fileUploads,
+  pdfExtractedData,
   type User,
   type UpsertUser,
   type InsertTenant,
@@ -38,6 +40,10 @@ import {
   type RecentActivity,
   type InsertAuditLog,
   type AuditLog,
+  type InsertFileUpload,
+  type FileUpload,
+  type InsertPdfExtractedData,
+  type PdfExtractedData,
 } from "@shared/schema";
 import { db } from "./db";
 import { eq, and, desc, asc, or, lte, gte, sql, inArray } from "drizzle-orm";
@@ -137,6 +143,21 @@ export interface IStorage {
   // Audit operations
   createAuditLog(log: InsertAuditLog): Promise<AuditLog>;
   getAuditLogsByTenant(tenantId: string, limit?: number): Promise<AuditLog[]>;
+  
+  // File Upload operations
+  createFileUpload(upload: InsertFileUpload): Promise<FileUpload>;
+  getFileUpload(id: string): Promise<FileUpload | undefined>;
+  getFileUploadsByTenant(tenantId: string): Promise<FileUpload[]>;
+  updateFileUploadStatus(id: string, status: string, processingError?: string): Promise<FileUpload>;
+  updateFileUploadText(id: string, extractedText: string): Promise<FileUpload>;
+  
+  // PDF Extracted Data operations
+  createPdfExtractedData(data: InsertPdfExtractedData): Promise<PdfExtractedData>;
+  getPdfExtractedData(id: string): Promise<PdfExtractedData | undefined>;
+  getPdfExtractedDataByFileUpload(fileUploadId: string): Promise<PdfExtractedData | undefined>;
+  getPdfExtractedDataByTenant(tenantId: string): Promise<PdfExtractedData[]>;
+  updatePdfExtractedDataValidation(id: string, status: string, reviewedBy: string, comments?: string): Promise<PdfExtractedData>;
+  linkPdfExtractedDataToRecords(id: string, patientId?: string, encounterId?: string): Promise<PdfExtractedData>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -772,6 +793,106 @@ export class DatabaseStorage implements IStorage {
   private generateAuditHash(log: InsertAuditLog): string {
     const data = `${log.tenantId}:${log.userId}:${log.action}:${log.entity}:${log.entityId}:${Date.now()}`;
     return crypto.createHash('sha256').update(data).digest('hex');
+  }
+
+  // File Upload operations
+  async createFileUpload(upload: InsertFileUpload): Promise<FileUpload> {
+    const [newUpload] = await db.insert(fileUploads).values(upload).returning();
+    return newUpload;
+  }
+
+  async getFileUpload(id: string): Promise<FileUpload | undefined> {
+    const [upload] = await db.select().from(fileUploads).where(eq(fileUploads.id, id));
+    return upload;
+  }
+
+  async getFileUploadsByTenant(tenantId: string): Promise<FileUpload[]> {
+    return await db
+      .select()
+      .from(fileUploads)
+      .where(eq(fileUploads.tenantId, tenantId))
+      .orderBy(desc(fileUploads.createdAt));
+  }
+
+  async updateFileUploadStatus(id: string, status: string, processingError?: string): Promise<FileUpload> {
+    const updates: any = { status };
+    if (status === 'processed') {
+      updates.processedAt = new Date();
+    }
+    if (processingError) {
+      updates.processingError = processingError;
+    }
+
+    const [updated] = await db
+      .update(fileUploads)
+      .set(updates)
+      .where(eq(fileUploads.id, id))
+      .returning();
+    return updated;
+  }
+
+  async updateFileUploadText(id: string, extractedText: string): Promise<FileUpload> {
+    const [updated] = await db
+      .update(fileUploads)
+      .set({ extractedText })
+      .where(eq(fileUploads.id, id))
+      .returning();
+    return updated;
+  }
+
+  // PDF Extracted Data operations
+  async createPdfExtractedData(data: InsertPdfExtractedData): Promise<PdfExtractedData> {
+    const [newData] = await db.insert(pdfExtractedData).values(data).returning();
+    return newData;
+  }
+
+  async getPdfExtractedData(id: string): Promise<PdfExtractedData | undefined> {
+    const [data] = await db.select().from(pdfExtractedData).where(eq(pdfExtractedData.id, id));
+    return data;
+  }
+
+  async getPdfExtractedDataByFileUpload(fileUploadId: string): Promise<PdfExtractedData | undefined> {
+    const [data] = await db.select().from(pdfExtractedData).where(eq(pdfExtractedData.fileUploadId, fileUploadId));
+    return data;
+  }
+
+  async getPdfExtractedDataByTenant(tenantId: string): Promise<PdfExtractedData[]> {
+    return await db
+      .select()
+      .from(pdfExtractedData)
+      .where(eq(pdfExtractedData.tenantId, tenantId))
+      .orderBy(desc(pdfExtractedData.createdAt));
+  }
+
+  async updatePdfExtractedDataValidation(id: string, status: string, reviewedBy: string, comments?: string): Promise<PdfExtractedData> {
+    const updates: any = { 
+      validationStatus: status, 
+      reviewedBy, 
+      reviewedAt: new Date() 
+    };
+    if (comments) {
+      updates.reviewComments = comments;
+    }
+
+    const [updated] = await db
+      .update(pdfExtractedData)
+      .set(updates)
+      .where(eq(pdfExtractedData.id, id))
+      .returning();
+    return updated;
+  }
+
+  async linkPdfExtractedDataToRecords(id: string, patientId?: string, encounterId?: string): Promise<PdfExtractedData> {
+    const updates: any = {};
+    if (patientId) updates.patientId = patientId;
+    if (encounterId) updates.encounterId = encounterId;
+
+    const [updated] = await db
+      .update(pdfExtractedData)
+      .set(updates)
+      .where(eq(pdfExtractedData.id, id))
+      .returning();
+    return updated;
   }
 }
 

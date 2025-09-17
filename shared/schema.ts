@@ -204,6 +204,41 @@ export const auditLogs = pgTable("audit_logs", {
   currentHash: varchar("current_hash", { length: 64 }).notNull(),
 });
 
+// File Uploads - Track uploaded files and processing status
+export const fileUploads = pgTable("file_uploads", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: uuid("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
+  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  filename: varchar("filename", { length: 255 }).notNull(),
+  originalFilename: varchar("original_filename", { length: 255 }).notNull(),
+  fileType: varchar("file_type", { length: 50 }).notNull(), // PDF, DOC, etc
+  fileSize: integer("file_size").notNull(), // File size in bytes
+  objectPath: varchar("object_path", { length: 500 }).notNull(), // Object storage path
+  status: varchar("status", { length: 20 }).notNull().default("uploaded"), // uploaded, processing, processed, failed
+  processingError: text("processing_error"), // Error message if processing failed
+  extractedText: text("extracted_text"), // Raw text extracted from PDF
+  createdAt: timestamp("created_at").defaultNow(),
+  processedAt: timestamp("processed_at"),
+});
+
+// PDF Extracted Data - Structured data extracted from PDFs before creating patient/encounter records
+export const pdfExtractedData = pgTable("pdf_extracted_data", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  fileUploadId: uuid("file_upload_id").notNull().references(() => fileUploads.id, { onDelete: "cascade" }),
+  tenantId: uuid("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
+  documentType: varchar("document_type", { length: 50 }).notNull(), // registration_form, medical_record, encounter_note
+  extractedPatientData: jsonb("extracted_patient_data"), // Patient demographics, insurance info
+  extractedEncounterData: jsonb("extracted_encounter_data"), // Encounter details, notes, procedures
+  extractionConfidence: decimal("extraction_confidence", { precision: 3, scale: 2 }), // 0.00 to 1.00
+  validationStatus: varchar("validation_status", { length: 20 }).notNull().default("pending"), // pending, reviewed, approved, rejected
+  reviewedBy: varchar("reviewed_by").references(() => users.id),
+  reviewComments: text("review_comments"),
+  patientId: uuid("patient_id").references(() => patients.id), // Set after patient is created
+  encounterId: uuid("encounter_id").references(() => encounters.id), // Set after encounter is created
+  createdAt: timestamp("created_at").defaultNow(),
+  reviewedAt: timestamp("reviewed_at"),
+});
+
 // Relations
 export const tenantsRelations = relations(tenants, ({ many }) => ({
   tenantUsers: many(tenantUsers),
@@ -269,6 +304,20 @@ export const auditLogsRelations = relations(auditLogs, ({ one }) => ({
   user: one(users, { fields: [auditLogs.userId], references: [users.id] }),
 }));
 
+export const fileUploadsRelations = relations(fileUploads, ({ one, many }) => ({
+  tenant: one(tenants, { fields: [fileUploads.tenantId], references: [tenants.id] }),
+  user: one(users, { fields: [fileUploads.userId], references: [users.id] }),
+  extractedData: many(pdfExtractedData),
+}));
+
+export const pdfExtractedDataRelations = relations(pdfExtractedData, ({ one }) => ({
+  fileUpload: one(fileUploads, { fields: [pdfExtractedData.fileUploadId], references: [fileUploads.id] }),
+  tenant: one(tenants, { fields: [pdfExtractedData.tenantId], references: [tenants.id] }),
+  reviewer: one(users, { fields: [pdfExtractedData.reviewedBy], references: [users.id] }),
+  patient: one(patients, { fields: [pdfExtractedData.patientId], references: [patients.id] }),
+  encounter: one(encounters, { fields: [pdfExtractedData.encounterId], references: [encounters.id] }),
+}));
+
 // Zod schemas for validation
 export const insertTenantSchema = createInsertSchema(tenants).omit({ id: true, createdAt: true, updatedAt: true });
 export const insertTenantUserSchema = createInsertSchema(tenantUsers).omit({ id: true, createdAt: true });
@@ -282,6 +331,8 @@ export const insertDocumentApprovalSchema = createInsertSchema(documentApprovals
 export const insertDocumentSignatureSchema = createInsertSchema(documentSignatures).omit({ id: true, signedAt: true });
 export const insertRecentActivitySchema = createInsertSchema(recentActivities).omit({ id: true, createdAt: true });
 export const insertAuditLogSchema = createInsertSchema(auditLogs).omit({ id: true, timestamp: true, currentHash: true });
+export const insertFileUploadSchema = createInsertSchema(fileUploads).omit({ id: true, createdAt: true, processedAt: true });
+export const insertPdfExtractedDataSchema = createInsertSchema(pdfExtractedData).omit({ id: true, createdAt: true, reviewedAt: true });
 
 // Types
 export type UpsertUser = typeof users.$inferInsert;
@@ -327,3 +378,7 @@ export type InsertRecentActivity = z.infer<typeof insertRecentActivitySchema>;
 export type RecentActivity = typeof recentActivities.$inferSelect;
 export type InsertAuditLog = z.infer<typeof insertAuditLogSchema>;
 export type AuditLog = typeof auditLogs.$inferSelect;
+export type InsertFileUpload = z.infer<typeof insertFileUploadSchema>;
+export type FileUpload = typeof fileUploads.$inferSelect;
+export type InsertPdfExtractedData = z.infer<typeof insertPdfExtractedDataSchema>;
+export type PdfExtractedData = typeof pdfExtractedData.$inferSelect;
