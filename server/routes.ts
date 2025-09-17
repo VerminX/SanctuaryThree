@@ -563,6 +563,71 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Document export routes
+  app.get('/api/documents/:documentId/export/:format', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const { documentId, format } = req.params;
+      
+      if (!['PDF', 'DOCX'].includes(format)) {
+        return res.status(400).json({ message: "Invalid export format. Use PDF or DOCX." });
+      }
+
+      const document = await storage.getDocument(documentId);
+      if (!document) {
+        return res.status(404).json({ message: "Document not found" });
+      }
+
+      const patient = await storage.getPatient(document.patientId);
+      if (!patient) {
+        return res.status(404).json({ message: "Patient not found" });
+      }
+
+      // Verify user has access to tenant
+      const userTenantRole = await storage.getUserTenantRole(userId, patient.tenantId);
+      if (!userTenantRole) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+
+      // Get current document version
+      const currentVersion = await storage.getCurrentDocumentVersion(documentId);
+      if (!currentVersion) {
+        return res.status(404).json({ message: "No document version found" });
+      }
+
+      // Get file path based on format
+      const filePath = format === 'PDF' ? currentVersion.pdfUrl : currentVersion.docxUrl;
+      
+      if (!filePath || !require('fs').existsSync(filePath)) {
+        return res.status(404).json({ message: `${format} file not found. Please regenerate the document.` });
+      }
+
+      // Log audit event
+      await storage.createAuditLog({
+        tenantId: patient.tenantId,
+        userId,
+        action: 'EXPORT_DOCUMENT',
+        entity: 'Document',
+        entityId: documentId,
+        ipAddress: req.ip,
+        userAgent: req.get('User-Agent'),
+        previousHash: '',
+      });
+
+      // Set appropriate headers and send file
+      const mimeType = format === 'PDF' ? 'application/pdf' : 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+      const fileName = `${document.title}.${format.toLowerCase()}`;
+      
+      res.setHeader('Content-Type', mimeType);
+      res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
+      res.sendFile(require('path').resolve(filePath));
+
+    } catch (error) {
+      console.error("Error exporting document:", error);
+      res.status(500).json({ message: "Failed to export document" });
+    }
+  });
+
   // Advanced Document Version Control routes
   
   // Get document versions

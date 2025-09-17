@@ -7,18 +7,21 @@ import { apiRequest } from "@/lib/queryClient";
 import Sidebar from "@/components/layout/sidebar";
 import Header from "@/components/layout/header";
 import DocumentGenerator from "@/components/documents/document-generator";
+import DocumentPreview from "@/components/documents/document-preview";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { FileText, Download, Search, Filter, File } from "lucide-react";
+import { FileText, Download, Search, Filter, File, Eye } from "lucide-react";
 
 export default function Documents() {
   const { toast } = useToast();
   const { isAuthenticated, isLoading, user } = useAuth();
   const queryClient = useQueryClient();
   const [searchTerm, setSearchTerm] = useState("");
+  const [selectedDocument, setSelectedDocument] = useState<any>(null);
+  const [documentVersions, setDocumentVersions] = useState<any>(null);
 
   // Redirect to home if not authenticated
   useEffect(() => {
@@ -182,9 +185,41 @@ export default function Documents() {
   const handleExportDocument = (documentId: string, format: 'PDF' | 'DOCX') => {
     // This would trigger a download in a real implementation
     toast({
-      title: "Export Started",
+      title: "Export Started", 
       description: `${format} export has been initiated`,
     });
+  };
+
+  const handleViewDocument = async (document: any) => {
+    try {
+      setSelectedDocument(document);
+      
+      // Fetch document versions
+      const versionsResponse = await fetch(`/api/documents/${document.id}/versions`, {
+        credentials: "include",
+      });
+      
+      if (versionsResponse.ok) {
+        const versions = await versionsResponse.json();
+        setDocumentVersions(versions[0] || null); // Get current version
+      }
+    } catch (error) {
+      toast({
+        title: "Failed to Load Document",
+        description: "Could not retrieve document details",
+        variant: "destructive",
+      });
+    }
+  };
+
+  const handleClosePreview = () => {
+    setSelectedDocument(null);
+    setDocumentVersions(null);
+  };
+
+  const handleSaveDocument = () => {
+    // Refresh documents list
+    queryClient.invalidateQueries({ queryKey: ["/api/all-documents"] });
   };
 
   if (isLoading || !isAuthenticated || !currentTenant) {
@@ -403,6 +438,15 @@ export default function Documents() {
                             <Button 
                               variant="outline" 
                               size="sm"
+                              onClick={() => handleViewDocument(document)}
+                              data-testid={`button-view-${document.id}`}
+                            >
+                              <Eye className="h-3 w-3 mr-1" />
+                              View
+                            </Button>
+                            <Button 
+                              variant="outline" 
+                              size="sm"
                               onClick={() => handleExportDocument(document.id, 'PDF')}
                               data-testid={`button-export-pdf-${document.id}`}
                             >
@@ -429,6 +473,16 @@ export default function Documents() {
           </Card>
         </div>
       </main>
+      
+      {/* Document Preview Modal */}
+      {selectedDocument && (
+        <DocumentPreview
+          document={selectedDocument}
+          currentVersion={documentVersions}
+          onClose={handleClosePreview}
+          onSave={handleSaveDocument}
+        />
+      )}
     </div>
   );
 }
