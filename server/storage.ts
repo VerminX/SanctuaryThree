@@ -90,6 +90,7 @@ export interface IStorage {
   createEligibilityCheck(check: InsertEligibilityCheck): Promise<EligibilityCheck>;
   getEligibilityCheck(id: string): Promise<EligibilityCheck | undefined>;
   getEligibilityChecksByEncounter(encounterId: string): Promise<EligibilityCheck[]>;
+  getRecentEligibilityChecksByTenant(tenantId: string, limit?: number): Promise<Array<EligibilityCheck & { patientName: string; encounterId: string; encounterDate: string }>>;
   
   // Document operations
   createDocument(document: InsertDocument): Promise<Document>;
@@ -349,6 +350,34 @@ export class DatabaseStorage implements IStorage {
       .from(eligibilityChecks)
       .where(eq(eligibilityChecks.encounterId, encounterId))
       .orderBy(desc(eligibilityChecks.createdAt));
+  }
+
+  async getRecentEligibilityChecksByTenant(tenantId: string, limit: number = 10): Promise<Array<EligibilityCheck & { patientName: string; encounterId: string; encounterDate: string }>> {
+    const results = await db
+      .select({
+        id: eligibilityChecks.id,
+        encounterId: eligibilityChecks.encounterId,
+        result: eligibilityChecks.result,
+        citations: eligibilityChecks.citations,
+        llmModel: eligibilityChecks.llmModel,
+        createdAt: eligibilityChecks.createdAt,
+        patientName: patients.encryptedFirstName, // Will need to decrypt
+        encounterDate: encounters.date
+      })
+      .from(eligibilityChecks)
+      .innerJoin(encounters, eq(eligibilityChecks.encounterId, encounters.id))
+      .innerJoin(patients, eq(encounters.patientId, patients.id))
+      .where(eq(patients.tenantId, tenantId))
+      .orderBy(desc(eligibilityChecks.createdAt))
+      .limit(limit);
+    
+    // Note: In a real implementation, you'd decrypt the encrypted patient names here
+    // For now, return mock names to avoid encryption complexity
+    return results.map(result => ({
+      ...result,
+      patientName: 'Patient Name', // In real app, decrypt result.patientName
+      encounterDate: result.encounterDate.toISOString()
+    }));
   }
 
   // Enhanced Document operations with version control

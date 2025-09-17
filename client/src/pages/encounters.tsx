@@ -52,7 +52,7 @@ export default function Encounters() {
   const { data: allEncounters, isLoading: encountersLoading, error } = useQuery({
     queryKey: ["/api/encounters"],
     queryFn: async () => {
-      if (!patients || patients.length === 0) return [];
+      if (!patients || !Array.isArray(patients) || patients.length === 0) return [];
       
       const encounterPromises = patients.map(async (patient: any) => {
         try {
@@ -74,9 +74,9 @@ export default function Encounters() {
       });
       
       const encountersArrays = await Promise.all(encounterPromises);
-      return encountersArrays.flat().sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+      return encountersArrays.flat().sort((a: any, b: any) => new Date(b.date).getTime() - new Date(a.date).getTime());
     },
-    enabled: !!patients && patients.length > 0,
+    enabled: !!patients && Array.isArray(patients) && patients.length > 0,
     retry: false,
   });
 
@@ -231,7 +231,7 @@ export default function Encounters() {
                     data-testid="select-patient-for-encounter"
                   >
                     <option value="">Choose a patient...</option>
-                    {patients?.map((patient: any) => (
+                    {(Array.isArray(patients) ? patients : []).map((patient: any) => (
                       <option key={patient.id} value={patient.id}>
                         {patient.firstName} {patient.lastName} (MRN: {patient.mrn})
                       </option>

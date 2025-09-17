@@ -23,7 +23,7 @@ export default function Eligibility() {
   const { toast } = useToast();
   const { isAuthenticated, isLoading, user } = useAuth();
   const queryClient = useQueryClient();
-  const [analysisResult, setAnalysisResult] = useState(null);
+  const [analysisResult, setAnalysisResult] = useState<any>(null);
 
   // Redirect to home if not authenticated
   useEffect(() => {
@@ -42,57 +42,67 @@ export default function Eligibility() {
 
   const currentTenant = user?.tenants?.[0];
 
-  const { data: patients, isLoading: patientsLoading } = useQuery({
+  const { data: patients, isLoading: patientsLoading, error: patientsError } = useQuery({
     queryKey: ["/api/tenants", currentTenant?.id, "patients"],
     enabled: !!currentTenant?.id,
     retry: false,
   });
 
   // Get all encounters with patient information
-  const { data: encounters, isLoading: encountersLoading } = useQuery({
-    queryKey: ["/api/encounters-with-patients"],
+  const { data: encounters, isLoading: encountersLoading, error: encountersError } = useQuery({
+    queryKey: ["/api/encounters-with-patients", currentTenant?.id],
     queryFn: async () => {
-      if (!patients || patients.length === 0) return [];
+      console.log('Fetching encounters, patients data:', patients);
+      if (!patients || !Array.isArray(patients) || patients.length === 0) {
+        console.log('No patients data available for encounters query');
+        return [];
+      }
       
+      console.log('Processing', patients.length, 'patients for encounters');
       const encounterPromises = patients.map(async (patient: any) => {
         try {
+          // Skip patients with decryption failures
+          if (!patient.firstName || !patient.lastName) {
+            console.log('Skipping patient with missing name data:', patient.id);
+            return [];
+          }
+          
+          console.log('Fetching encounters for patient:', patient.id, patient.firstName, patient.lastName);
           const response = await fetch(`/api/patients/${patient.id}/encounters`, {
             credentials: "include",
           });
           if (response.ok) {
             const encounters = await response.json();
+            console.log('Found', encounters.length, 'encounters for patient', patient.id);
             return encounters.map((encounter: any) => ({
               id: encounter.id,
               patientId: patient.id,
-              patientName: `${patient.firstName} ${patient.lastName}`,
+              patientName: `${patient.firstName} ${patient.lastName}`.trim(),
               woundType: encounter.woundDetails?.type || 'Unknown',
               date: encounter.date,
             }));
           }
+          console.log('Failed to fetch encounters for patient', patient.id, response.status);
           return [];
         } catch (error) {
+          console.error('Error fetching encounters for patient', patient.id, error);
           return [];
         }
       });
       
       const encountersArrays = await Promise.all(encounterPromises);
-      return encountersArrays.flat().sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+      const flattenedEncounters = encountersArrays.flat().sort((a: any, b: any) => new Date(b.date).getTime() - new Date(a.date).getTime());
+      console.log('Total encounters found:', flattenedEncounters.length);
+      return flattenedEncounters;
     },
-    enabled: !!patients && patients.length > 0,
+    enabled: !!patients && Array.isArray(patients) && patients.length > 0,
     retry: false,
   });
 
   // Get recent eligibility checks
   const { data: recentChecks, isLoading: checksLoading } = useQuery({
     queryKey: ["/api/recent-eligibility-checks"],
-    queryFn: async () => {
-      if (!encounters || encounters.length === 0) return [];
-      
-      // This would normally be a single API call, but for now we'll simulate it
-      // In a real implementation, you'd have a dedicated endpoint for recent checks
-      return [];
-    },
-    enabled: !!encounters && encounters.length > 0,
+    enabled: !!currentTenant?.id,
     retry: false,
   });
 
@@ -147,10 +157,11 @@ export default function Eligibility() {
   };
 
   // Calculate stats
-  const totalAnalyses = recentChecks?.length || 0;
-  const eligible = recentChecks?.filter((check: any) => check.result?.eligibility === 'Yes').length || 0;
-  const notEligible = recentChecks?.filter((check: any) => check.result?.eligibility === 'No').length || 0;
-  const unclear = recentChecks?.filter((check: any) => check.result?.eligibility === 'Unclear').length || 0;
+  const safeRecentChecks = Array.isArray(recentChecks) ? recentChecks : [];
+  const totalAnalyses = safeRecentChecks.length;
+  const eligible = safeRecentChecks.filter((check: any) => check.result?.eligibility === 'Yes').length;
+  const notEligible = safeRecentChecks.filter((check: any) => check.result?.eligibility === 'No').length;
+  const unclear = safeRecentChecks.filter((check: any) => check.result?.eligibility === 'Unclear').length;
 
   return (
     <div className="min-h-screen flex bg-background" data-testid="page-eligibility">
@@ -253,9 +264,9 @@ export default function Eligibility() {
                       </div>
                     ))}
                   </div>
-                ) : recentChecks && recentChecks.length > 0 ? (
+                ) : safeRecentChecks.length > 0 ? (
                   <div className="space-y-4">
-                    {recentChecks.slice(0, 5).map((check: any, index: number) => (
+                    {safeRecentChecks.slice(0, 5).map((check: any, index: number) => (
                       <div key={index} className="flex items-start space-x-3 p-3 border border-border rounded-lg">
                         <div className="flex-shrink-0">
                           {check.result?.eligibility === 'Yes' && <CheckCircle className="w-5 h-5 text-chart-2" />}

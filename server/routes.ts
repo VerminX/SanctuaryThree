@@ -564,6 +564,29 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Get recent eligibility checks for current tenant
+  app.get('/api/recent-eligibility-checks', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const limit = parseInt(req.query.limit as string) || 10;
+
+      // Get user's tenants
+      const tenants = await storage.getTenantsByUser(userId);
+      if (tenants.length === 0) {
+        return res.status(403).json({ message: "No tenant access" });
+      }
+
+      // Use the first tenant (in real app, might need to handle multiple tenants)
+      const currentTenant = tenants[0];
+
+      const recentChecks = await storage.getRecentEligibilityChecksByTenant(currentTenant.id, limit);
+      res.json(recentChecks);
+    } catch (error) {
+      console.error("Error fetching recent eligibility checks:", error);
+      res.status(500).json({ message: "Failed to fetch recent eligibility checks" });
+    }
+  });
+
   // Document generation routes
   app.post('/api/patients/:patientId/documents', isAuthenticated, async (req: any, res) => {
     try {
