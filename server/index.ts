@@ -15,6 +15,7 @@ import {
   centralizedErrorHandler
 } from "./middleware/errorMiddleware";
 import { performanceMonitor } from "./services/performanceMonitor";
+import { intelligentRateLimiter } from "./services/rateLimiter";
 
 // Setup global error handling first
 setupGlobalErrorHandlers();
@@ -36,6 +37,9 @@ app.use(performanceMonitor.createPerformanceMiddleware());
 
 (async () => {
   const server = await registerRoutes(app);
+  
+  // CRITICAL: Rate limiting is now properly integrated inside registerRoutes
+  // after authentication setup but before route definitions
 
   // Use centralized error handler
   app.use(centralizedErrorHandler);

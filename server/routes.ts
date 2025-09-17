@@ -18,6 +18,11 @@ import { analyzeEligibility, generateLetterContent } from "./services/openai";
 import { buildRAGContext } from "./services/ragService";
 import { generateDocument } from "./services/documentGenerator";
 import { performPolicyUpdate, performPolicyUpdateForMAC, scheduledPolicyUpdate, getPolicyUpdateStatus } from "./services/policyUpdater";
+import { intelligentRateLimiter } from "./services/rateLimiter";
+import { performanceMonitor } from "./services/performanceMonitor";
+import { healthAggregator } from "./services/healthAggregator";
+import { openAICircuitBreaker, cmsApiCircuitBreaker } from "./services/apiCircuitBreaker";
+import { validatePolicyRetrieval, validateAIAnalysis, validateCitationGeneration, runComprehensiveValidation } from "./services/ragValidation";
 import { z } from "zod";
 import { asyncHandler, createError, sendSuccess } from "./middleware/errorMiddleware";
 import { 
@@ -30,6 +35,27 @@ import {
   ValidationError, 
   DatabaseError 
 } from "./services/errorManager";
+
+// Input validation schemas for admin endpoints
+const rateLimitRuleUpdateSchema = z.object({
+  name: z.string().optional(),
+  windowMs: z.number().positive().optional(),
+  maxRequests: z.number().positive().optional(),
+  burstRequests: z.number().positive().optional(),
+  skipSuccessfulRequests: z.boolean().optional(),
+  skipFailedRequests: z.boolean().optional(),
+  enabled: z.boolean().optional(),
+  priority: z.number().int().min(0).optional(),
+}).strict();
+
+const tenantQuotaUpdateSchema = z.object({
+  requestsPerHour: z.number().positive(),
+  requestsPerDay: z.number().positive(),
+  burstLimit: z.number().positive(),
+  role: z.enum(['basic', 'pro', 'enterprise', 'admin']),
+  criticalEndpointsBypass: z.boolean().optional().default(false),
+  customLimits: z.record(z.string(), z.number().positive()).optional(),
+}).strict();
 
 // Helper function to track user activity (HIPAA-compliant, no PHI in descriptions)
 async function trackActivity(
@@ -58,6 +84,10 @@ async function trackActivity(
 export async function registerRoutes(app: Express): Promise<Server> {
   // Auth middleware
   await setupAuth(app);
+
+  // CRITICAL FIX: Rate limiting middleware must be applied AFTER authentication setup
+  // but BEFORE route definitions to properly intercept requests
+  app.use(intelligentRateLimiter.createRateLimitMiddleware());
 
   // Policy data is now managed by the scheduled CMS fetcher
 
@@ -1046,10 +1076,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Policy update management routes
+  // Policy update management routes (admin only)
   app.post('/api/admin/policies/update', isAuthenticated, async (req: any, res) => {
     try {
       const userId = req.user.claims.sub;
+      
+      // Check admin permissions
+      const userTenant = await storage.getUserTenantRole(userId, req.user.claims.tenantId);
+      if (!userTenant || userTenant.role.toLowerCase() !== 'admin') {
+        return res.status(403).json({ 
+          message: "Insufficient permissions to update policies",
+          requiredRole: 'admin',
+          userRole: userTenant?.role || 'none'
+        });
+      }
       
       // For now, allow any authenticated user to trigger policy updates
       // In production, this should be restricted to admin users
@@ -1081,6 +1121,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.get('/api/admin/policies/status', isAuthenticated, async (req: any, res) => {
     try {
+      // Check admin permissions
+      const userTenant = await storage.getUserTenantRole(req.user.claims.sub, req.user.claims.tenantId);
+      if (!userTenant || userTenant.role.toLowerCase() !== 'admin') {
+        return res.status(403).json({ 
+          message: "Insufficient permissions to view policy status",
+          requiredRole: 'admin',
+          userRole: userTenant?.role || 'none'
+        });
+      }
+      
       const status = await getPolicyUpdateStatus();
       res.json(status);
     } catch (error) {
@@ -1333,7 +1383,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const userId = req.user.claims.sub;
       
       // Import validation service dynamically to avoid circular dependencies
-      const { validatePolicyRetrieval } = await import('./services/ragValidation');
       
       console.log(`RAG policy retrieval validation requested by user: ${userId}`);
       const results = await validatePolicyRetrieval();
@@ -1357,7 +1406,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const userId = req.user.claims.sub;
       
       // Import validation service dynamically
-      const { validateAIAnalysis } = await import('./services/ragValidation');
       
       console.log(`RAG AI analysis validation requested by user: ${userId}`);
       const results = await validateAIAnalysis();
@@ -1381,7 +1429,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const userId = req.user.claims.sub;
       
       // Import validation service dynamically
-      const { validateCitationGeneration } = await import('./services/ragValidation');
       
       console.log(`RAG citation validation requested by user: ${userId}`);
       const results = await validateCitationGeneration();
@@ -1405,7 +1452,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const userId = req.user.claims.sub;
       
       // Import validation service dynamically
-      const { runComprehensiveValidation } = await import('./services/ragValidation');
       
       console.log(`Comprehensive RAG system validation requested by user: ${userId}`);
       const results = await runComprehensiveValidation();
@@ -1436,7 +1482,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
         });
       }
 
-      const { buildRAGContext } = await import('./services/ragService');
       
       console.log(`Testing RAG retrieval: MAC=${macRegion}, Wound=${woundType} by user: ${userId}`);
       const context = await buildRAGContext(macRegion, woundType);
@@ -1470,7 +1515,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
         });
       }
 
-      const { analyzeEligibility } = await import('./services/openai');
       
       console.log(`Testing AI analysis for MAC: ${analysisRequest.patientInfo.macRegion} by user: ${userId}`);
       const startTime = Date.now();
@@ -1566,7 +1610,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // PUBLIC health check endpoint - MINIMAL information only for monitoring systems
   app.get('/api/health', asyncHandler(async (req: any, res) => {
     try {
-      const { healthAggregator } = await import('./services/healthAggregator');
+
       
       // SECURITY: Only provide basic health status to unauthenticated users
       const publicHealth = await healthAggregator.getPublicHealth();
@@ -1606,7 +1650,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // AUTHENTICATED health diagnostics endpoint - DETAILED information for authorized users only
   app.get('/api/health/diagnostics', isAuthenticated, asyncHandler(async (req: any, res) => {
     try {
-      const { healthAggregator } = await import('./services/healthAggregator');
+
       
       // SECURITY: Full diagnostics only available to authenticated users
       const systemHealth = await healthAggregator.getSystemHealth(true);
@@ -1647,7 +1691,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Kubernetes/Docker readiness probe endpoint
   app.get('/api/health/ready', asyncHandler(async (req: any, res) => {
     try {
-      const { healthAggregator } = await import('./services/healthAggregator');
+
       const readinessStatus = await healthAggregator.getReadinessStatus();
       
       const statusCode = readinessStatus.ready ? 200 : 503;
@@ -1703,7 +1747,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Individual service health check endpoint
   app.get('/api/health/service/:serviceName', asyncHandler(async (req: any, res) => {
     try {
-      const { healthAggregator } = await import('./services/healthAggregator');
+
       const { serviceName } = req.params;
       
       const serviceHealth = await healthAggregator.getServiceHealth(serviceName);
@@ -1733,7 +1777,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       );
       
       errorLogger.logError(serviceError);
-      sendError(res, serviceError);
+      throw serviceError;
     }
   }));
 
@@ -1763,7 +1807,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       );
       
       errorLogger.logError(healthError);
-      sendError(res, healthError);
+      throw healthError;
     }
   }));
 
@@ -1830,14 +1874,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
       );
       
       errorLogger.logError(resetError);
-      sendError(res, resetError);
+      throw resetError;
     }
   }));
 
   // Performance monitoring and alerting endpoints
   app.get('/api/performance/metrics', isAuthenticated, asyncHandler(async (req: any, res) => {
     try {
-      const { performanceMonitor } = await import('./services/performanceMonitor');
+
       const summary = performanceMonitor.getPerformanceSummary();
       
       sendSuccess(res, {
@@ -1860,14 +1904,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
       );
       
       errorLogger.logError(metricsError);
-      sendError(res, metricsError);
+      throw metricsError;
     }
   }));
 
   // Performance alerts status endpoint
   app.get('/api/performance/alerts', isAuthenticated, asyncHandler(async (req: any, res) => {
     try {
-      const { performanceMonitor } = await import('./services/performanceMonitor');
+
       const alertStatus = performanceMonitor.getAlertStatus();
       
       sendSuccess(res, {
@@ -1889,14 +1933,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
       );
       
       errorLogger.logError(alertsError);
-      sendError(res, alertsError);
+      throw alertsError;
     }
   }));
 
   // Historical metrics endpoint for specific metric
   app.get('/api/performance/metrics/:metricName', isAuthenticated, asyncHandler(async (req: any, res) => {
     try {
-      const { performanceMonitor } = await import('./services/performanceMonitor');
+
       const { metricName } = req.params;
       const minutes = parseInt(req.query.minutes as string) || 60;
       
@@ -1925,7 +1969,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       );
       
       errorLogger.logError(historyError);
-      sendError(res, historyError);
+      throw historyError;
     }
   }));
 
@@ -1950,7 +1994,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         );
       }
 
-      const { performanceMonitor } = await import('./services/performanceMonitor');
+
       const alertRule = req.body;
       
       // Validate alert rule structure
@@ -2007,14 +2051,253 @@ export async function registerRoutes(app: Express): Promise<Server> {
       );
       
       errorLogger.logError(ruleError);
-      sendError(res, ruleError);
+      throw ruleError;
+    }
+  }));
+
+  // Intelligent rate limiting management endpoints
+  app.get('/api/rate-limit/status', isAuthenticated, asyncHandler(async (req: any, res) => {
+    try {
+
+      const rateLimitStatus = await intelligentRateLimiter.getRateLimitStatus(req);
+      
+      sendSuccess(res, {
+        rate_limits: rateLimitStatus,
+        user_id: req.user.claims.sub,
+        tenant_id: req.user.claims.tenantId,
+        timestamp: new Date().toISOString()
+      }, 'Rate limit status retrieved successfully');
+    } catch (error) {
+      const statusError = new AppError(
+        'Failed to get rate limit status',
+        ErrorCategory.SYSTEM,
+        ErrorSeverity.MEDIUM,
+        500,
+        {
+          error: error instanceof Error ? error.message : String(error),
+          userId: req.user?.claims?.sub,
+          tenantId: req.user?.claims?.tenantId
+        },
+        error instanceof Error ? error : undefined,
+        req.correlationId
+      );
+      
+      errorLogger.logError(statusError);
+      throw statusError;
+    }
+  }));
+
+  // Rate limiting usage analytics endpoint (admin only)
+  app.get('/api/rate-limit/analytics', isAuthenticated, asyncHandler(async (req: any, res) => {
+    try {
+      // Check admin permissions
+      const userTenant = await storage.getUserTenantRole(req.user.claims.sub, req.user.claims.tenantId);
+      if (!userTenant || userTenant.role.toLowerCase() !== 'admin') {
+        throw new AppError(
+          'Insufficient permissions to access rate limiting analytics',
+          ErrorCategory.AUTHORIZATION,
+          ErrorSeverity.MEDIUM,
+          403,
+          {
+            userId: req.user.claims.sub,
+            tenantId: req.user.claims.tenantId,
+            role: userTenant?.role
+          },
+          undefined,
+          req.correlationId
+        );
+      }
+
+
+      const analytics = intelligentRateLimiter.getUsageAnalytics();
+      
+      sendSuccess(res, {
+        analytics: analytics,
+        user_id: req.user.claims.sub,
+        tenant_id: req.user.claims.tenantId,
+        environment: process.env.NODE_ENV || 'development',
+        timestamp: new Date().toISOString()
+      }, 'Rate limiting analytics retrieved successfully');
+    } catch (error) {
+      const analyticsError = new AppError(
+        'Failed to get rate limiting analytics',
+        ErrorCategory.SYSTEM,
+        ErrorSeverity.MEDIUM,
+        500,
+        {
+          error: error instanceof Error ? error.message : String(error),
+          userId: req.user?.claims?.sub,
+          tenantId: req.user?.claims?.tenantId
+        },
+        error instanceof Error ? error : undefined,
+        req.correlationId
+      );
+      
+      errorLogger.logError(analyticsError);
+      throw analyticsError;
+    }
+  }));
+
+  // Update rate limit rule (admin only)
+  app.post('/api/rate-limit/rules/:ruleId', isAuthenticated, asyncHandler(async (req: any, res) => {
+    try {
+      // Check admin permissions
+      const userTenant = await storage.getUserTenantRole(req.user.claims.sub, req.user.claims.tenantId);
+      if (!userTenant || userTenant.role.toLowerCase() !== 'admin') {
+        throw new AppError(
+          'Insufficient permissions to modify rate limit rules',
+          ErrorCategory.AUTHORIZATION,
+          ErrorSeverity.MEDIUM,
+          403,
+          {
+            userId: req.user.claims.sub,
+            tenantId: req.user.claims.tenantId,
+            role: userTenant?.role
+          },
+          undefined,
+          req.correlationId
+        );
+      }
+
+
+      const { ruleId } = req.params;
+      
+      // Validate request body using Zod schema
+      const ruleUpdates = rateLimitRuleUpdateSchema.parse(req.body);
+      
+      const success = intelligentRateLimiter.updateRateLimitRule(ruleId, ruleUpdates);
+      
+      if (!success) {
+        throw new AppError(
+          `Rate limit rule not found: ${ruleId}`,
+          ErrorCategory.VALIDATION,
+          ErrorSeverity.MEDIUM,
+          404,
+          {
+            ruleId: ruleId,
+            userId: req.user.claims.sub,
+            tenantId: req.user.claims.tenantId
+          },
+          undefined,
+          req.correlationId
+        );
+      }
+      
+      // Audit log for rate limit rule changes
+      const auditLog = {
+        tenantId: req.user.claims.tenantId,
+        userId: req.user.claims.sub,
+        action: 'RATE_LIMIT_RULE_UPDATE',
+        entityType: 'RATE_LIMIT_RULE',
+        entityId: ruleId,
+        changes: { rule_updates: ruleUpdates },
+        ipAddress: req.ip,
+        userAgent: req.get('User-Agent')
+      };
+      
+      await storage.createAuditLog(auditLog);
+      
+      sendSuccess(res, {
+        rule_id: ruleId,
+        updates_applied: ruleUpdates,
+        updated_by: req.user.claims.sub,
+        timestamp: new Date().toISOString()
+      }, 'Rate limit rule updated successfully');
+    } catch (error) {
+      const ruleError = new AppError(
+        'Failed to update rate limit rule',
+        ErrorCategory.SYSTEM,
+        ErrorSeverity.HIGH,
+        500,
+        {
+          ruleId: req.params.ruleId,
+          error: error instanceof Error ? error.message : String(error),
+          userId: req.user?.claims?.sub,
+          tenantId: req.user?.claims?.tenantId
+        },
+        error instanceof Error ? error : undefined,
+        req.correlationId
+      );
+      
+      errorLogger.logError(ruleError);
+      throw ruleError;
+    }
+  }));
+
+  // Update tenant quota (admin only)
+  app.post('/api/rate-limit/quotas/:tenantId', isAuthenticated, asyncHandler(async (req: any, res) => {
+    try {
+      // Check admin permissions
+      const userTenant = await storage.getUserTenantRole(req.user.claims.sub, req.user.claims.tenantId);
+      if (!userTenant || userTenant.role.toLowerCase() !== 'admin') {
+        throw new AppError(
+          'Insufficient permissions to modify tenant quotas',
+          ErrorCategory.AUTHORIZATION,
+          ErrorSeverity.MEDIUM,
+          403,
+          {
+            userId: req.user.claims.sub,
+            tenantId: req.user.claims.tenantId,
+            role: userTenant?.role
+          },
+          undefined,
+          req.correlationId
+        );
+      }
+
+
+      const { tenantId } = req.params;
+      
+      // Validate request body using Zod schema
+      const quota = tenantQuotaUpdateSchema.parse(req.body);
+      
+      quota.tenantId = tenantId; // Ensure tenant ID matches URL
+      intelligentRateLimiter.updateTenantQuota(tenantId, quota);
+      
+      // Audit log for tenant quota changes
+      const auditLog = {
+        tenantId: req.user.claims.tenantId,
+        userId: req.user.claims.sub,
+        action: 'TENANT_QUOTA_UPDATE',
+        entityType: 'TENANT_QUOTA',
+        entityId: tenantId,
+        changes: { quota: quota },
+        ipAddress: req.ip,
+        userAgent: req.get('User-Agent')
+      };
+      
+      await storage.createAuditLog(auditLog);
+      
+      sendSuccess(res, {
+        tenant_id: tenantId,
+        quota: quota,
+        updated_by: req.user.claims.sub,
+        timestamp: new Date().toISOString()
+      }, 'Tenant quota updated successfully');
+    } catch (error) {
+      const quotaError = new AppError(
+        'Failed to update tenant quota',
+        ErrorCategory.SYSTEM,
+        ErrorSeverity.HIGH,
+        500,
+        {
+          tenantId: req.params.tenantId,
+          error: error instanceof Error ? error.message : String(error),
+          userId: req.user?.claims?.sub
+        },
+        error instanceof Error ? error : undefined,
+        req.correlationId
+      );
+      
+      errorLogger.logError(quotaError);
+      throw quotaError;
     }
   }));
 
   // External API health check endpoints for monitoring circuit breakers
   app.get('/api/health/external', isAuthenticated, asyncHandler(async (req: any, res) => {
     try {
-      const { openAICircuitBreaker, cmsApiCircuitBreaker } = await import('./services/apiCircuitBreaker');
+
       
       const openAIHealth = openAICircuitBreaker.getStatus();
       const cmsApiHealth = cmsApiCircuitBreaker.getStatus();
@@ -2055,7 +2338,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       );
       
       errorLogger.logError(healthError);
-      sendError(res, healthError);
+      throw healthError;
     }
   }));
 
@@ -2083,7 +2366,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
 
     try {
-      const { openAICircuitBreaker, cmsApiCircuitBreaker } = await import('./services/apiCircuitBreaker');
+
       
       let resetCircuitBreaker;
       if (service === 'openai') {
@@ -2146,7 +2429,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       );
       
       errorLogger.logError(resetError);
-      sendError(res, resetError);
+      throw resetError;
     }
   }));
 
