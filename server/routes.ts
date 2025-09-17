@@ -610,13 +610,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ message: "Tenant not found" });
       }
 
-      // Generate letter content using AI
+      // Generate letter content using AI with new signature
       const decryptedPatientData = decryptPatientData(patient);
+      const eligibilityResult = eligibilityCheck.result as any;
+      
+      // Prepare patient info for letter generation
+      const patientInfo = {
+        ...decryptedPatientData,
+        tenant: tenant
+      };
+      
       const letterContent = await generateLetterContent(
-        type,
-        decryptedPatientData,
-        eligibilityCheck.result as any,
-        tenant
+        eligibilityResult,
+        patientInfo,
+        req.correlationId
       );
 
       // Generate document files
@@ -1626,9 +1633,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // Manual circuit breaker reset endpoint (admin only)
   app.post('/api/health/database/reset', isAuthenticated, asyncHandler(async (req: any, res) => {
-    // Only allow admins to reset circuit breaker
+    // Only allow admins to reset circuit breaker (case-insensitive)
     const userTenant = await storage.getUserTenantRole(req.user.claims.sub, req.user.claims.tenantId);
-    if (!userTenant || userTenant.role !== 'admin') {
+    if (!userTenant || userTenant.role.toLowerCase() !== 'admin') {
       throw new AppError(
         'Insufficient permissions to reset circuit breaker',
         ErrorCategory.AUTHORIZATION,
@@ -1647,19 +1654,24 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       storage.resetCircuitBreaker?.();
       
-      // Log the manual reset for audit purposes
-      const auditLog = {
-        tenantId: req.user.claims.tenantId,
-        userId: req.user.claims.sub,
-        action: 'CIRCUIT_BREAKER_RESET',
-        entityType: 'DATABASE',
-        entityId: 'database-resilience',
-        changes: { manual_reset: true },
-        ipAddress: req.ip,
-        userAgent: req.get('User-Agent')
-      };
-      
-      await storage.createAuditLog(auditLog);
+      // Log the manual reset for audit purposes (with error handling)
+      try {
+        const auditLog = {
+          tenantId: req.user.claims.tenantId,
+          userId: req.user.claims.sub,
+          action: 'CIRCUIT_BREAKER_RESET',
+          entity: 'DATABASE',
+          entityId: 'database-resilience',
+          previousHash: '',
+          ipAddress: req.ip,
+          userAgent: req.get('User-Agent')
+        };
+        
+        await storage.createAuditLog(auditLog);
+      } catch (auditError) {
+        console.error('Failed to log database circuit breaker reset audit event:', auditError);
+        // Continue with reset operation even if audit fails
+      }
       
       sendSuccess(res, {
         message: 'Database circuit breaker reset successfully',
@@ -1674,6 +1686,145 @@ export async function registerRoutes(app: Express): Promise<Server> {
         500,
         {
           error: error instanceof Error ? error.message : String(error),
+          userId: req.user.claims.sub,
+          tenantId: req.user.claims.tenantId
+        },
+        error instanceof Error ? error : undefined,
+        req.correlationId
+      );
+      
+      errorLogger.logError(resetError);
+      sendError(res, resetError);
+    }
+  }));
+
+  // External API health check endpoints for monitoring circuit breakers
+  app.get('/api/health/external', isAuthenticated, asyncHandler(async (req: any, res) => {
+    try {
+      const { openAICircuitBreaker, cmsApiCircuitBreaker } = await import('./services/apiCircuitBreaker');
+      
+      const openAIHealth = openAICircuitBreaker.getStatus();
+      const cmsApiHealth = cmsApiCircuitBreaker.getStatus();
+      
+      const overallHealthy = openAIHealth.isHealthy && cmsApiHealth.isHealthy;
+      
+      const healthData = {
+        overall: {
+          healthy: overallHealthy,
+          timestamp: new Date().toISOString()
+        },
+        services: {
+          openai: openAIHealth,
+          cms_api: cmsApiHealth
+        }
+      };
+      
+      if (overallHealthy) {
+        sendSuccess(res, healthData, 'External services are healthy');
+      } else {
+        res.status(503).json({
+          ...healthData,
+          message: 'One or more external services are unhealthy'
+        });
+      }
+    } catch (error) {
+      const healthError = new AppError(
+        'Failed to get external services health status',
+        ErrorCategory.SYSTEM,
+        ErrorSeverity.HIGH,
+        503,
+        {
+          error: error instanceof Error ? error.message : String(error),
+          userId: req.user?.claims?.sub
+        },
+        error instanceof Error ? error : undefined,
+        req.correlationId
+      );
+      
+      errorLogger.logError(healthError);
+      sendError(res, healthError);
+    }
+  }));
+
+  // Manual external API circuit breaker reset (admin only)
+  app.post('/api/health/external/reset/:service', isAuthenticated, asyncHandler(async (req: any, res) => {
+    const { service } = req.params;
+    
+    // Only allow admins to reset circuit breakers (case-insensitive)
+    const userTenant = await storage.getUserTenantRole(req.user.claims.sub, req.user.claims.tenantId);
+    if (!userTenant || userTenant.role.toLowerCase() !== 'admin') {
+      throw new AppError(
+        'Insufficient permissions to reset circuit breaker',
+        ErrorCategory.AUTHORIZATION,
+        ErrorSeverity.MEDIUM,
+        403,
+        {
+          userId: req.user.claims.sub,
+          tenantId: req.user.claims.tenantId,
+          role: userTenant?.role,
+          requestedService: service
+        },
+        undefined,
+        req.correlationId
+      );
+    }
+
+    try {
+      const { openAICircuitBreaker, cmsApiCircuitBreaker } = await import('./services/apiCircuitBreaker');
+      
+      let resetCircuitBreaker;
+      if (service === 'openai') {
+        resetCircuitBreaker = openAICircuitBreaker;
+      } else if (service === 'cms') {
+        resetCircuitBreaker = cmsApiCircuitBreaker;
+      } else {
+        throw new AppError(
+          `Invalid service name: ${service}`,
+          ErrorCategory.VALIDATION,
+          ErrorSeverity.MEDIUM,
+          400,
+          { requestedService: service, validServices: ['openai', 'cms'] },
+          undefined,
+          req.correlationId
+        );
+      }
+      
+      resetCircuitBreaker.reset();
+      
+      // Log the manual reset for audit purposes (with error handling)
+      try {
+        const auditLog = {
+          tenantId: req.user.claims.tenantId,
+          userId: req.user.claims.sub,
+          action: 'EXTERNAL_API_CIRCUIT_BREAKER_RESET',
+          entity: 'API_SERVICE',
+          entityId: service,
+          previousHash: '',
+          ipAddress: req.ip,
+          userAgent: req.get('User-Agent')
+        };
+        
+        await storage.createAuditLog(auditLog);
+      } catch (auditError) {
+        console.error('Failed to log circuit breaker reset audit event:', auditError);
+        // Continue with reset operation even if audit fails
+      }
+      
+      sendSuccess(res, {
+        message: `${service.toUpperCase()} circuit breaker reset successfully`,
+        service: service,
+        timestamp: new Date().toISOString(),
+        resetBy: req.user.claims.sub
+      }, 'Circuit breaker reset completed');
+    } catch (error) {
+      const resetError = new AppError(
+        `Failed to reset ${service} circuit breaker`,
+        ErrorCategory.SYSTEM,
+        ErrorSeverity.HIGH,
+        500,
+        {
+          error: error instanceof Error ? error.message : String(error),
+          service,
           userId: req.user.claims.sub,
           tenantId: req.user.claims.tenantId
         },
