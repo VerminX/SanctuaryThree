@@ -775,4 +775,7 @@ export class DatabaseStorage implements IStorage {
   }
 }
 
-export const storage = new DatabaseStorage();
+import { ResilientStorage } from './services/resilitientStorage';
+
+// Use resilient storage wrapper for production-grade database reliability
+export const storage = new ResilientStorage();

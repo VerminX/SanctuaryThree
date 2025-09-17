@@ -1556,6 +1556,136 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }, 'Client error logged successfully');
   }));
 
+  // Database health check endpoints for monitoring and alerting
+  app.get('/api/health', asyncHandler(async (req: any, res) => {
+    try {
+      const health = await storage.healthCheck?.() || { isHealthy: false, error: 'Health check not implemented' };
+      
+      if (health.isHealthy) {
+        sendSuccess(res, {
+          status: 'healthy',
+          database: {
+            healthy: health.isHealthy,
+            latency: health.latency,
+            lastCheck: health.lastCheck,
+            poolStats: health.poolStats
+          },
+          timestamp: new Date().toISOString(),
+          environment: app.get('env')
+        }, 'System is healthy');
+      } else {
+        res.status(503).json({
+          status: 'unhealthy',
+          database: {
+            healthy: false,
+            error: health.error,
+            lastCheck: health.lastCheck
+          },
+          timestamp: new Date().toISOString(),
+          environment: app.get('env')
+        });
+      }
+    } catch (error) {
+      res.status(503).json({
+        status: 'error',
+        error: error instanceof Error ? error.message : 'Unknown error',
+        timestamp: new Date().toISOString()
+      });
+    }
+  }));
+
+  // Database resilience status endpoint (authenticated)
+  app.get('/api/health/database', isAuthenticated, asyncHandler(async (req: any, res) => {
+    try {
+      const resilienceStatus = storage.getResilienceStatus?.() || { error: 'Resilience status not available' };
+      const health = await storage.healthCheck?.() || { isHealthy: false, error: 'Health check not implemented' };
+      
+      sendSuccess(res, {
+        health,
+        resilience: resilienceStatus,
+        timestamp: new Date().toISOString()
+      }, 'Database resilience status retrieved');
+    } catch (error) {
+      const healthError = new AppError(
+        'Failed to get database resilience status',
+        ErrorCategory.DATABASE,
+        ErrorSeverity.HIGH,
+        503,
+        {
+          error: error instanceof Error ? error.message : String(error),
+          userId: req.user?.claims?.sub
+        },
+        error instanceof Error ? error : undefined,
+        req.correlationId
+      );
+      
+      errorLogger.logError(healthError);
+      sendError(res, healthError);
+    }
+  }));
+
+  // Manual circuit breaker reset endpoint (admin only)
+  app.post('/api/health/database/reset', isAuthenticated, asyncHandler(async (req: any, res) => {
+    // Only allow admins to reset circuit breaker
+    const userTenant = await storage.getUserTenantRole(req.user.claims.sub, req.user.claims.tenantId);
+    if (!userTenant || userTenant.role !== 'admin') {
+      throw new AppError(
+        'Insufficient permissions to reset circuit breaker',
+        ErrorCategory.AUTHORIZATION,
+        ErrorSeverity.MEDIUM,
+        403,
+        {
+          userId: req.user.claims.sub,
+          tenantId: req.user.claims.tenantId,
+          role: userTenant?.role
+        },
+        undefined,
+        req.correlationId
+      );
+    }
+
+    try {
+      storage.resetCircuitBreaker?.();
+      
+      // Log the manual reset for audit purposes
+      const auditLog = {
+        tenantId: req.user.claims.tenantId,
+        userId: req.user.claims.sub,
+        action: 'CIRCUIT_BREAKER_RESET',
+        entityType: 'DATABASE',
+        entityId: 'database-resilience',
+        changes: { manual_reset: true },
+        ipAddress: req.ip,
+        userAgent: req.get('User-Agent')
+      };
+      
+      await storage.createAuditLog(auditLog);
+      
+      sendSuccess(res, {
+        message: 'Database circuit breaker reset successfully',
+        timestamp: new Date().toISOString(),
+        resetBy: req.user.claims.sub
+      }, 'Circuit breaker reset completed');
+    } catch (error) {
+      const resetError = new AppError(
+        'Failed to reset database circuit breaker',
+        ErrorCategory.SYSTEM,
+        ErrorSeverity.HIGH,
+        500,
+        {
+          error: error instanceof Error ? error.message : String(error),
+          userId: req.user.claims.sub,
+          tenantId: req.user.claims.tenantId
+        },
+        error instanceof Error ? error : undefined,
+        req.correlationId
+      );
+      
+      errorLogger.logError(resetError);
+      sendError(res, resetError);
+    }
+  }));
+
   // Helper function to sanitize URLs for PHI compliance
   function sanitizeErrorUrl(url: string): string {
     if (!url) return url;
