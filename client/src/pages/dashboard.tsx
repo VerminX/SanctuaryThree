@@ -207,9 +207,9 @@ export default function Dashboard() {
                       </div>
                     ))}
                   </div>
-                ) : stats?.recentActivity?.length > 0 ? (
+                ) : stats?.recentActivity?.length ? (
                   <div className="space-y-4">
-                    {stats.recentActivity.map((activity: any, index: number) => (
+                    {stats?.recentActivity?.map((activity: any, index: number) => (
                       <div key={index} className="flex items-center justify-between text-sm">
                         <div className="flex items-center space-x-2">
                           <Clock className="text-muted-foreground w-4 h-4" />
@@ -243,6 +243,7 @@ export default function Dashboard() {
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <button 
                     className="p-4 border border-border rounded-lg text-left hover:bg-muted/50 transition-colors"
+                    onClick={() => setLocation("/patients")}
                     data-testid="button-new-patient"
                   >
                     <div className="flex items-center space-x-3">
@@ -258,6 +259,7 @@ export default function Dashboard() {
 
                   <button 
                     className="p-4 border border-border rounded-lg text-left hover:bg-muted/50 transition-colors"
+                    onClick={() => setLocation("/encounters")}
                     data-testid="button-new-encounter"
                   >
                     <div className="flex items-center space-x-3">
@@ -273,6 +275,7 @@ export default function Dashboard() {
 
                   <button 
                     className="p-4 border border-border rounded-lg text-left hover:bg-muted/50 transition-colors"
+                    onClick={() => setLocation("/eligibility")}
                     data-testid="button-bulk-analysis"
                   >
                     <div className="flex items-center space-x-3">
@@ -288,6 +291,7 @@ export default function Dashboard() {
 
                   <button 
                     className="p-4 border border-border rounded-lg text-left hover:bg-muted/50 transition-colors"
+                    onClick={() => setLocation("/audit")}
                     data-testid="button-export-reports"
                   >
                     <div className="flex items-center space-x-3">
