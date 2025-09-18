@@ -1769,6 +1769,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
         // Store extraction results in the database with comprehensive PHI encryption
         const { PDF_VALIDATION_STATUS } = await import('../shared/schema');
+        
+        // Automatically approve high-confidence extractions for immediate record creation
+        const autoValidationStatus = validation.score >= 0.7 
+          ? PDF_VALIDATION_STATUS.APPROVED 
+          : PDF_VALIDATION_STATUS.PENDING;
+        
         const extractedData = await storage.createPdfExtractedData({
           fileUploadId: upload.id,
           tenantId: upload.tenantId,
@@ -1779,7 +1785,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           extractedEncounterData: encryptedEncounterData, // Encrypted encounter PHI
           extractionConfidence: extractionResult.confidence.toString(), // Convert to string for decimal type
           validationScore: validation.score.toString(), // Convert to string for decimal type
-          validationStatus: PDF_VALIDATION_STATUS.PENDING // Use proper enum constant
+          validationStatus: autoValidationStatus // Auto-approve high confidence extractions
         });
 
         // Step 5: CRITICAL HIPAA FIX - Replace plaintext extracted_text with encrypted version
