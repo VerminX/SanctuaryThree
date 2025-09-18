@@ -185,7 +185,15 @@ export function encryptEncounterNotes(notes: string[]): string[] {
 }
 
 export function decryptEncounterNotes(encryptedNotes: string[]): string[] {
-  return encryptedNotes.map(note => decryptPHI(note));
+  return encryptedNotes.map((note, index) => {
+    try {
+      return decryptPHI(note);
+    } catch (error) {
+      console.error(`Error decrypting encounter note ${index}:`, error instanceof Error ? error.message : 'Unknown error');
+      // Return placeholder text instead of throwing to allow analysis to continue
+      return '[DECRYPTION_ERROR: Note could not be decrypted]';
+    }
+  });
 }
 
 // Helper functions for signature data (CRITICAL: PHI in signatures must be encrypted)

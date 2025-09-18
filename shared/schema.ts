@@ -393,7 +393,15 @@ export const insertTenantSchema = createInsertSchema(tenants).omit({ id: true, c
 export const insertTenantUserSchema = createInsertSchema(tenantUsers).omit({ id: true, createdAt: true });
 export const insertPatientSchema = createInsertSchema(patients).omit({ id: true, createdAt: true, updatedAt: true });
 export const insertEncounterSchema = createInsertSchema(encounters).omit({ id: true, createdAt: true, updatedAt: true });
-export const insertEpisodeSchema = createInsertSchema(episodes).omit({ id: true, createdAt: true, updatedAt: true });
+export const insertEpisodeSchema = createInsertSchema(episodes).omit({ id: true, createdAt: true, updatedAt: true })
+  .extend({
+    episodeStartDate: z.union([z.date(), z.string()]).pipe(
+      z.coerce.date()
+    ),
+    episodeEndDate: z.union([z.date(), z.string(), z.null()]).pipe(
+      z.coerce.date().nullable()
+    ).optional()
+  });
 export const insertPolicySourceSchema = createInsertSchema(policySources).omit({ id: true, createdAt: true, updatedAt: true });
 export const insertEligibilityCheckSchema = createInsertSchema(eligibilityChecks).omit({ id: true, createdAt: true });
 export const insertDocumentSchema = createInsertSchema(documents).omit({ id: true, createdAt: true, updatedAt: true });
