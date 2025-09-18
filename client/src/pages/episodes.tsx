@@ -12,9 +12,10 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Calendar, Plus, Search, Filter, Edit, AlertCircle } from "lucide-react";
+import { Calendar, Plus, Search, Filter, Edit, Trash2, AlertCircle } from "lucide-react";
 import { Episode } from "@shared/schema";
 
 export default function Episodes() {
@@ -92,7 +93,7 @@ export default function Episodes() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/episodes"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/patients"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/tenants", currentTenant?.id, "patients"] });
       setIsCreateDialogOpen(false);
       setSelectedPatientId("");
       toast({
@@ -126,7 +127,7 @@ export default function Episodes() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/episodes"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/patients"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/tenants", currentTenant?.id, "patients"] });
       setIsEditDialogOpen(false);
       setSelectedEpisode(null);
       toast({
@@ -149,6 +150,38 @@ export default function Episodes() {
       toast({
         title: "Error",
         description: "Failed to update episode",
+        variant: "destructive",
+      });
+    },
+  });
+
+  const deleteEpisodeMutation = useMutation({
+    mutationFn: async (episodeId: string) => {
+      await apiRequest("DELETE", `/api/episodes/${episodeId}`, {});
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/episodes"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/tenants", currentTenant?.id, "patients"] });
+      toast({
+        title: "Success",
+        description: "Episode deleted successfully",
+      });
+    },
+    onError: (error) => {
+      if (isUnauthorizedError(error)) {
+        toast({
+          title: "Unauthorized",
+          description: "You are logged out. Logging in again...",
+          variant: "destructive",
+        });
+        setTimeout(() => {
+          window.location.href = "/api/login";
+        }, 500);
+        return;
+      }
+      toast({
+        title: "Error",
+        description: "Failed to delete episode",
         variant: "destructive",
       });
     },
@@ -240,6 +273,10 @@ export default function Episodes() {
                   {selectedPatientId && (
                     <EpisodeForm
                       onSubmit={(data) => createEpisodeMutation.mutate(data)}
+                      onCancel={() => {
+                        setIsCreateDialogOpen(false);
+                        setSelectedPatientId("");
+                      }}
                       isLoading={createEpisodeMutation.isPending}
                       patientId={selectedPatientId}
                       mode="create"
@@ -372,17 +409,52 @@ export default function Episodes() {
                             }
                           </TableCell>
                           <TableCell>
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              onClick={() => {
-                                setSelectedEpisode(episode);
-                                setIsEditDialogOpen(true);
-                              }}
-                              data-testid={`button-edit-episode-${episode.id}`}
-                            >
-                              <Edit className="h-4 w-4" />
-                            </Button>
+                            <div className="flex items-center space-x-2">
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => {
+                                  setSelectedEpisode(episode);
+                                  setIsEditDialogOpen(true);
+                                }}
+                                data-testid={`button-edit-episode-${episode.id}`}
+                              >
+                                <Edit className="h-4 w-4" />
+                              </Button>
+                              <AlertDialog>
+                                <AlertDialogTrigger asChild>
+                                  <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    data-testid={`button-delete-episode-${episode.id}`}
+                                  >
+                                    <Trash2 className="h-4 w-4 text-destructive" />
+                                  </Button>
+                                </AlertDialogTrigger>
+                                <AlertDialogContent>
+                                  <AlertDialogHeader>
+                                    <AlertDialogTitle>Delete Episode</AlertDialogTitle>
+                                    <AlertDialogDescription>
+                                      Are you sure you want to delete this episode for {episode.patientName}? 
+                                      This action cannot be undone and will also delete all associated encounters, 
+                                      documents, and eligibility checks.
+                                    </AlertDialogDescription>
+                                  </AlertDialogHeader>
+                                  <AlertDialogFooter>
+                                    <AlertDialogCancel data-testid={`button-cancel-delete-${episode.id}`}>
+                                      Cancel
+                                    </AlertDialogCancel>
+                                    <AlertDialogAction
+                                      onClick={() => deleteEpisodeMutation.mutate(episode.id)}
+                                      className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                                      data-testid={`button-confirm-delete-${episode.id}`}
+                                    >
+                                      Delete Episode
+                                    </AlertDialogAction>
+                                  </AlertDialogFooter>
+                                </AlertDialogContent>
+                              </AlertDialog>
+                            </div>
                           </TableCell>
                         </TableRow>
                       ))}
@@ -404,6 +476,10 @@ export default function Episodes() {
           {selectedEpisode && (
             <EpisodeForm
               onSubmit={(data) => updateEpisodeMutation.mutate(data)}
+              onCancel={() => {
+                setIsEditDialogOpen(false);
+                setSelectedEpisode(null);
+              }}
               isLoading={updateEpisodeMutation.isPending}
               patientId={selectedEpisode.patientId}
               episode={selectedEpisode}

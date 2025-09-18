@@ -18,13 +18,14 @@ type EpisodeFormData = z.infer<typeof episodeFormSchema>;
 
 interface EpisodeFormProps {
   onSubmit: (data: EpisodeFormData) => void;
+  onCancel?: () => void;
   isLoading: boolean;
   patientId: string;
   episode?: any; // For editing mode
   mode?: 'create' | 'edit';
 }
 
-export default function EpisodeForm({ onSubmit, isLoading, patientId, episode, mode = 'create' }: EpisodeFormProps) {
+export default function EpisodeForm({ onSubmit, onCancel, isLoading, patientId, episode, mode = 'create' }: EpisodeFormProps) {
   const isEditing = mode === 'edit' && episode;
 
   const form = useForm<EpisodeFormData>({
@@ -216,7 +217,13 @@ export default function EpisodeForm({ onSubmit, isLoading, patientId, episode, m
         </Card>
 
         <div className="flex justify-end space-x-2">
-          <Button type="button" variant="outline" disabled={isLoading} data-testid="button-cancel-episode">
+          <Button 
+            type="button" 
+            variant="outline" 
+            disabled={isLoading}
+            onClick={onCancel}
+            data-testid="button-cancel-episode"
+          >
             Cancel
           </Button>
           <Button 
