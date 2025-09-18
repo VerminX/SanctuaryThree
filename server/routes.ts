@@ -8,6 +8,7 @@ import {
   insertTenantSchema, 
   insertPatientSchema, 
   insertEncounterSchema,
+  insertEpisodeSchema,
   insertEligibilityCheckSchema,
   insertDocumentSchema,
   insertDocumentVersionSchema,
@@ -440,6 +441,148 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error("Error fetching episodes:", error);
       res.status(500).json({ message: "Failed to fetch episodes" });
+    }
+  });
+
+  // Create episode
+  app.post('/api/patients/:patientId/episodes', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const { patientId } = req.params;
+      
+      const patient = await storage.getPatient(patientId);
+      if (!patient) {
+        return res.status(404).json({ message: "Patient not found" });
+      }
+
+      // Verify user has access to tenant
+      const userTenantRole = await storage.getUserTenantRole(userId, patient.tenantId);
+      if (!userTenantRole) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+
+      // Validate request body
+      const episodeData = insertEpisodeSchema.parse(req.body);
+
+      // Create episode
+      const episode = await storage.createEpisode(episodeData);
+
+      // Track activity
+      await trackActivity(patient.tenantId, userId, 'CREATE_EPISODE', 'Episode', episode.id, `${episodeData.woundType} episode`);
+
+      res.status(201).json(episode);
+    } catch (error) {
+      console.error("Error creating episode:", error);
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ message: "Invalid episode data", errors: error.errors });
+      }
+      res.status(500).json({ message: "Failed to create episode" });
+    }
+  });
+
+  // Get single episode
+  app.get('/api/episodes/:episodeId', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const { episodeId } = req.params;
+      
+      const episode = await storage.getEpisode(episodeId);
+      if (!episode) {
+        return res.status(404).json({ message: "Episode not found" });
+      }
+
+      const patient = await storage.getPatient(episode.patientId);
+      if (!patient) {
+        return res.status(404).json({ message: "Patient not found" });
+      }
+
+      // Verify user has access to tenant
+      const userTenantRole = await storage.getUserTenantRole(userId, patient.tenantId);
+      if (!userTenantRole) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+
+      res.json(episode);
+    } catch (error) {
+      console.error("Error fetching episode:", error);
+      res.status(500).json({ message: "Failed to fetch episode" });
+    }
+  });
+
+  // Update episode
+  app.put('/api/episodes/:episodeId', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const { episodeId } = req.params;
+      
+      const episode = await storage.getEpisode(episodeId);
+      if (!episode) {
+        return res.status(404).json({ message: "Episode not found" });
+      }
+
+      const patient = await storage.getPatient(episode.patientId);
+      if (!patient) {
+        return res.status(404).json({ message: "Patient not found" });
+      }
+
+      // Verify user has access to tenant
+      const userTenantRole = await storage.getUserTenantRole(userId, patient.tenantId);
+      if (!userTenantRole) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+
+      // Create update schema that omits patientId (cannot be changed)
+      const episodeUpdateSchema = insertEpisodeSchema.omit({ patientId: true });
+      const episodeData = episodeUpdateSchema.parse(req.body);
+
+      // Update episode
+      const updatedEpisode = await storage.updateEpisode(episodeId, episodeData);
+
+      // Track activity
+      await trackActivity(patient.tenantId, userId, 'UPDATE_EPISODE', 'Episode', episode.id, `${episodeData.woundType} episode`);
+
+      res.json(updatedEpisode);
+    } catch (error) {
+      console.error("Error updating episode:", error);
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ message: "Invalid episode data", errors: error.errors });
+      }
+      res.status(500).json({ message: "Failed to update episode" });
+    }
+  });
+
+  // Delete episode
+  app.delete('/api/episodes/:episodeId', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const { episodeId } = req.params;
+      
+      const episode = await storage.getEpisode(episodeId);
+      if (!episode) {
+        return res.status(404).json({ message: "Episode not found" });
+      }
+
+      const patient = await storage.getPatient(episode.patientId);
+      if (!patient) {
+        return res.status(404).json({ message: "Patient not found" });
+      }
+
+      // Verify user has access to tenant
+      const userTenantRole = await storage.getUserTenantRole(userId, patient.tenantId);
+      if (!userTenantRole) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+
+      // Delete episode (cascade will handle encounters)
+      await storage.deleteEpisode(episodeId);
+
+      // Track activity
+      await trackActivity(patient.tenantId, userId, 'DELETE_EPISODE', 'Episode', episode.id, `${episode.woundType} episode`);
+
+      res.status(204).send();
+    } catch (error) {
+      console.error("Error deleting episode:", error);
+      res.status(500).json({ message: "Failed to delete episode" });
     }
   });
 

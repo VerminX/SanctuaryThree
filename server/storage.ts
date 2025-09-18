@@ -95,6 +95,7 @@ export interface IStorage {
   getEpisode(id: string): Promise<Episode | undefined>;
   getEpisodesByPatient(patientId: string): Promise<Episode[]>;
   updateEpisode(id: string, episode: Partial<InsertEpisode>): Promise<Episode>;
+  deleteEpisode(id: string): Promise<void>;
   getEncountersByEpisode(episodeId: string): Promise<Encounter[]>;
   getEligibilityChecksByEpisode(episodeId: string): Promise<EligibilityCheck[]>;
   getDocumentsByEpisode(episodeId: string): Promise<Document[]>;
@@ -487,6 +488,10 @@ export class DatabaseStorage implements IStorage {
       .where(eq(episodes.id, id))
       .returning();
     return updatedEpisode;
+  }
+
+  async deleteEpisode(id: string): Promise<void> {
+    await db.delete(episodes).where(eq(episodes.id, id));
   }
 
   async getEncountersByEpisode(episodeId: string): Promise<Encounter[]> {

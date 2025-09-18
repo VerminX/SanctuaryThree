@@ -9,6 +9,7 @@ import Landing from "@/pages/landing";
 import Dashboard from "@/pages/dashboard";
 import Patients from "@/pages/patients";
 import PatientDetail from "@/components/patients/patient-detail";
+import Episodes from "@/pages/episodes";
 import Encounters from "@/pages/encounters";
 import Eligibility from "@/pages/eligibility";
 import Documents from "@/pages/documents";
@@ -32,6 +33,7 @@ function Router() {
           <Route path="/tenant-setup" component={TenantSetup} />
           <Route path="/patients/:patientId" component={PatientDetail} />
           <Route path="/patients" component={Patients} />
+          <Route path="/episodes" component={Episodes} />
           <Route path="/encounters" component={Encounters} />
           <Route path="/eligibility" component={Eligibility} />
           <Route path="/documents" component={Documents} />
