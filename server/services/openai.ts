@@ -1,4 +1,5 @@
 import OpenAI from "openai";
+import { EpisodeWithFullHistory } from "@shared/schema";
 
 // Using GPT-4o-mini for AI-powered medical eligibility analysis with JSON mode support
 const openai = new OpenAI({ 
@@ -219,6 +220,225 @@ Respond with JSON in this exact format:
   } catch (error) {
     console.error('Error in AI episode eligibility analysis:', error);
     throw new Error('Failed to analyze episode eligibility: ' + (error as Error).message);
+  }
+}
+
+// Enhanced episode analysis request that includes full patient history
+interface EnhancedEpisodeAnalysisRequest {
+  targetEpisode: EpisodeWithDecryptedHistory;
+  allPatientEpisodes: EpisodeWithDecryptedHistory[];
+  patientEligibilityHistory: Array<{
+    id: string;
+    encounterId: string;
+    episodeId: string | null;
+    result: any;
+    citations: any;
+    llmModel: string;
+    createdAt: Date | null;
+  }>;
+  patientInfo: {
+    payerType: string;
+    macRegion: string;
+  };
+  policyContext: string;
+}
+
+// Episode with decrypted encounter notes for AI analysis
+interface EpisodeWithDecryptedHistory {
+  id: string;
+  patientId: string;
+  woundType: string;
+  woundLocation: string;
+  episodeStartDate: Date;
+  episodeEndDate: Date | null;
+  status: string;
+  primaryDiagnosis: string | null;
+  createdAt: Date | null;
+  updatedAt: Date | null;
+  encounters: Array<{
+    id: string;
+    date: Date;
+    notes: string[]; // Decrypted notes ready for analysis
+    woundDetails: any;
+    conservativeCare: any;
+    infectionStatus: string | null;
+    comorbidities: any;
+  }>;
+  eligibilityChecks: Array<{
+    id: string;
+    encounterId: string;
+    episodeId: string | null;
+    result: any;
+    citations: any;
+    llmModel: string;
+    createdAt: Date | null;
+  }>;
+  patient: {
+    id: string;
+    payerType: string;
+    macRegion: string | null;
+    // Other patient fields as needed
+  };
+}
+
+// Enhanced episode eligibility analysis with full patient history - THIS IS NOW THE DEFAULT
+export async function analyzeEpisodeEligibilityWithFullHistory(request: EnhancedEpisodeAnalysisRequest): Promise<EligibilityAnalysisResponse> {
+  const { targetEpisode, allPatientEpisodes, patientEligibilityHistory, patientInfo, policyContext } = request;
+
+  // Aggregate all encounters chronologically across ALL patient episodes
+  const allPatientEncounters = allPatientEpisodes
+    .flatMap(episode => 
+      episode.encounters.map(encounter => ({
+        ...encounter,
+        episodeId: episode.id,
+        episodeWoundType: episode.woundType,
+        episodeWoundLocation: episode.woundLocation,
+        episodeStartDate: episode.episodeStartDate
+      }))
+    )
+    .sort((a, b) => a.date.getTime() - b.date.getTime());
+
+  // Create encounter timeline with episode context
+  const encounterTimeline = allPatientEncounters.map((encounter, index) => {
+    const encounterDate = encounter.date.toISOString().split('T')[0];
+    const episodeContext = encounter.episodeId === targetEpisode.id ? "[TARGET EPISODE]" : "[PREVIOUS EPISODE]";
+    return `=== ENCOUNTER ${index + 1} (${encounterDate}) ${episodeContext} ===\nEpisode: ${encounter.episodeWoundType} at ${encounter.episodeWoundLocation}\n${encounter.notes ? encounter.notes.join('\n') : 'No notes available'}`;
+  });
+
+  // Create historical eligibility decisions context
+  const eligibilityHistoryContext = patientEligibilityHistory
+    .sort((a, b) => (a.createdAt?.getTime() || 0) - (b.createdAt?.getTime() || 0))
+    .map((check, index) => {
+      const checkDate = check.createdAt?.toISOString().split('T')[0] || 'Unknown date';
+      const eligibilityResult = check.result ? JSON.stringify(check.result) : 'No result available';
+      return `=== PREVIOUS ELIGIBILITY ANALYSIS ${index + 1} (${checkDate}) ===\nModel: ${check.llmModel}\nResult: ${eligibilityResult}`;
+    });
+
+  // Create comprehensive episode comparison
+  const episodeComparison = allPatientEpisodes.map(episode => ({
+    episodeId: episode.id,
+    isTargetEpisode: episode.id === targetEpisode.id,
+    woundType: episode.woundType,
+    woundLocation: episode.woundLocation,
+    primaryDiagnosis: episode.primaryDiagnosis,
+    episodeStartDate: episode.episodeStartDate.toISOString().split('T')[0],
+    episodeEndDate: episode.episodeEndDate?.toISOString().split('T')[0] || 'Ongoing',
+    status: episode.status,
+    encounterCount: episode.encounters.length,
+    eligibilityChecksCount: episode.eligibilityChecks.length,
+    lastEligibilityResult: episode.eligibilityChecks[0]?.result || null
+  }));
+
+  // Focus on target episode encounters for detailed analysis
+  const targetEpisodeEncounters = targetEpisode.encounters
+    .sort((a, b) => a.date.getTime() - b.date.getTime())
+    .map((encounter, index) => {
+      const encounterDate = encounter.date.toISOString().split('T')[0];
+      return `=== TARGET EPISODE ENCOUNTER ${index + 1} (${encounterDate}) ===\n${encounter.notes ? encounter.notes.join('\n') : 'No notes available'}`;
+    });
+
+  const systemPrompt = `You are a compliance-focused clinical coverage assistant. Task: assess eligibility for non-analogous skin substitute/CTP use for DFU/VLU based on COMPREHENSIVE PATIENT HISTORY spanning ALL episodes, encounters, and previous eligibility decisions over time.
+
+COMPREHENSIVE PATIENT HISTORY ANALYSIS RULES:
+- Analyze the COMPLETE patient journey across all episodes and encounters over time
+- Consider the TARGET EPISODE in context of the patient's full medical history
+- Review previous eligibility decisions and their outcomes to ensure consistency
+- Assess patterns of wound healing, conservative care compliance, and treatment response across ALL episodes
+- Identify any recurring issues, treatment failures, or progressive conditions
+- Consider cross-episode patterns that may affect current eligibility determination
+- Use ONLY the provided policy context (LCDs, Articles, MAC pages, CMS documentation)
+- Align to the patient's MAC: ${patientInfo.macRegion}, payer type: ${patientInfo.payerType}
+- Focus on comprehensive medical necessity assessment rather than isolated episode evaluation
+
+PATIENT OVERVIEW:
+- Total Episodes: ${allPatientEpisodes.length}
+- Total Encounters: ${allPatientEncounters.length}
+- Previous Eligibility Checks: ${patientEligibilityHistory.length}
+
+TARGET EPISODE DETAILS:
+- Episode ID: ${targetEpisode.id}
+- Wound Type: ${targetEpisode.woundType}
+- Wound Location: ${targetEpisode.woundLocation}
+- Primary Diagnosis: ${targetEpisode.primaryDiagnosis}
+- Episode Start Date: ${targetEpisode.episodeStartDate.toISOString().split('T')[0]}
+- Episode Status: ${targetEpisode.status}
+- Encounters in Target Episode: ${targetEpisode.encounters.length}
+
+Policy Context:
+${policyContext}
+
+Patient Information:
+- Payer Type: ${patientInfo.payerType}
+- MAC Region: ${patientInfo.macRegion}
+
+ALL PATIENT EPISODES COMPARISON:
+${JSON.stringify(episodeComparison, null, 2)}
+
+COMPLETE PATIENT ENCOUNTER TIMELINE (All Episodes):
+${encounterTimeline.join('\n\n')}
+
+TARGET EPISODE DETAILED ENCOUNTERS:
+${targetEpisodeEncounters.join('\n\n')}
+
+PREVIOUS ELIGIBILITY DECISIONS HISTORY:
+${eligibilityHistoryContext.length > 0 ? eligibilityHistoryContext.join('\n\n') : 'No previous eligibility checks found'}
+
+TARGET EPISODE WOUND PROGRESSION:
+${JSON.stringify({
+  episodeWoundType: targetEpisode.woundType,
+  episodeWoundLocation: targetEpisode.woundLocation,
+  episodePrimaryDiagnosis: targetEpisode.primaryDiagnosis,
+  episodeStartDate: targetEpisode.episodeStartDate.toISOString().split('T')[0],
+  episodeStatus: targetEpisode.status,
+  encounterDetails: targetEpisode.encounters.map(enc => ({
+    date: enc.date.toISOString().split('T')[0],
+    woundDetails: enc.woundDetails,
+    infectionStatus: enc.infectionStatus,
+    comorbidities: enc.comorbidities
+  }))
+}, null, 2)}
+
+TARGET EPISODE CONSERVATIVE CARE HISTORY:
+${JSON.stringify({
+  episodeConservativeCare: targetEpisode.encounters.map(enc => ({
+    date: enc.date.toISOString().split('T')[0],
+    conservativeCare: enc.conservativeCare
+  }))
+}, null, 2)}
+
+Respond with JSON in this exact format:
+{
+  "eligibility": "Yes" | "No" | "Unclear",
+  "rationale": "Comprehensive patient history analysis considering all episodes, encounters, and previous decisions over time. Reference specific patterns, previous outcomes, and cross-episode context...",
+  "requiredDocumentationGaps": ["..."],
+  "citations": [{"title": "...","url": "...","section": "...","effectiveDate": "YYYY-MM-DD"}],
+  "letterBullets": ["..."]
+}`;
+
+  try {
+    const response = await openai.chat.completions.create({
+      model: "gpt-4o-mini",
+      messages: [
+        {
+          role: "system",
+          content: systemPrompt,
+        }
+      ],
+      response_format: { type: "json_object" },
+      temperature: 0.1, // Low temperature for consistency
+    });
+
+    const result = JSON.parse(response.choices[0].message.content || '{}');
+    
+    // Validate the response structure
+    if (!result.eligibility || !result.rationale || !Array.isArray(result.citations)) {
+      throw new Error('Invalid response format from AI analysis');
+    }
+
+    return result as EligibilityAnalysisResponse;
+  } catch (error) {
+    console.error('Error in enhanced AI eligibility analysis:', error);
+    throw new Error('Failed to analyze eligibility with full history: ' + (error as Error).message);
   }
 }
 
