@@ -521,6 +521,53 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Get encounters for a specific episode
+  app.get('/api/episodes/:episodeId/encounters', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const { episodeId } = req.params;
+      
+      const episode = await storage.getEpisode(episodeId);
+      if (!episode) {
+        return res.status(404).json({ message: "Episode not found" });
+      }
+
+      const patient = await storage.getPatient(episode.patientId);
+      if (!patient) {
+        return res.status(404).json({ message: "Patient not found" });
+      }
+
+      // Verify user has access to tenant
+      const userTenantRole = await storage.getUserTenantRole(userId, patient.tenantId);
+      if (!userTenantRole) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+
+      const encounters = await storage.getEncountersByEpisode(episodeId);
+      
+      // Decrypt encounter notes with safe error handling
+      const decryptedEncounters = encounters.map(encounter => {
+        try {
+          return {
+            ...encounter,
+            notes: decryptEncounterNotes(encounter.encryptedNotes as string[]),
+          };
+        } catch (error: any) {
+          console.error(`Error decrypting encounter ${encounter.id} notes:`, error.message);
+          return {
+            ...encounter,
+            notes: ['[DECRYPTION ERROR - ENCRYPTED DATA CORRUPTED]'],
+          };
+        }
+      });
+
+      res.json(decryptedEncounters);
+    } catch (error) {
+      console.error("Error fetching episode encounters:", error);
+      res.status(500).json({ message: "Failed to fetch episode encounters" });
+    }
+  });
+
   // Update episode
   app.put('/api/episodes/:episodeId', isAuthenticated, async (req: any, res) => {
     try {
