@@ -1351,6 +1351,39 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Patient de-duplication endpoint
+  app.post('/api/admin/deduplicate-patients', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      
+      console.log(`Patient de-duplication triggered by user: ${userId}`);
+      
+      const result = await storage.deduplicatePatients();
+      
+      // Log audit event for system-level operation
+      await storage.createAuditLog({
+        tenantId: null, // System-level audit log
+        userId,
+        action: 'DEDUPLICATE_PATIENTS',
+        entity: 'Patient',
+        entityId: 'system',
+        ipAddress: req.ip,
+        userAgent: req.get('User-Agent'),
+        previousHash: '',
+      });
+
+      console.log(`De-duplication completed: ${result.mergedGroups} groups merged, ${result.removedPatients} duplicates removed, ${result.preservedData.encounters} encounters moved, ${result.preservedData.episodes} episodes moved`);
+
+      res.json({
+        message: 'Patient de-duplication completed successfully',
+        ...result
+      });
+    } catch (error) {
+      console.error("Error performing patient de-duplication:", error);
+      res.status(500).json({ message: "Failed to deduplicate patients" });
+    }
+  });
+
   app.get('/api/tenants/:tenantId/dashboard-stats', isAuthenticated, async (req: any, res) => {
     try {
       const userId = req.user.claims.sub;

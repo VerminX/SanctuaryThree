@@ -368,6 +368,93 @@ export class DatabaseStorage implements IStorage {
     return date.toISOString().split('T')[0];
   }
 
+  // De-duplication methods
+  async findDuplicatePatients(): Promise<{ tenantId: string; mrn: string; patientIds: string[] }[]> {
+    const duplicates = await db
+      .select({
+        tenantId: patients.tenantId,
+        mrn: patients.mrn,
+        patientIds: sql<string>`STRING_AGG(${patients.id}::text, ',')`,
+        count: sql<number>`COUNT(*)`
+      })
+      .from(patients)
+      .groupBy(patients.tenantId, patients.mrn)
+      .having(sql`COUNT(*) > 1`);
+
+    return duplicates.map(d => ({
+      tenantId: d.tenantId,
+      mrn: d.mrn,
+      patientIds: d.patientIds.split(',')
+    }));
+  }
+
+  async getDuplicatePatientDetails(tenantId: string, mrn: string): Promise<Patient[]> {
+    return await db
+      .select()
+      .from(patients)
+      .where(and(eq(patients.tenantId, tenantId), eq(patients.mrn, mrn)))
+      .orderBy(patients.createdAt); // Oldest first
+  }
+
+  async moveEncountersToPatient(fromPatientId: string, toPatientId: string): Promise<number> {
+    const result = await db
+      .update(encounters)
+      .set({ patientId: toPatientId })
+      .where(eq(encounters.patientId, fromPatientId));
+    return result.rowCount || 0;
+  }
+
+  async moveEpisodesToPatient(fromPatientId: string, toPatientId: string): Promise<number> {
+    const result = await db
+      .update(episodes)
+      .set({ patientId: toPatientId })
+      .where(eq(episodes.patientId, fromPatientId));
+    return result.rowCount || 0;
+  }
+
+  async deletePatient(patientId: string): Promise<void> {
+    await db.delete(patients).where(eq(patients.id, patientId));
+  }
+
+  async deduplicatePatients(): Promise<{ mergedGroups: number; removedPatients: number; preservedData: { encounters: number; episodes: number } }> {
+    const duplicateGroups = await this.findDuplicatePatients();
+    let removedPatients = 0;
+    let totalEncountersMoved = 0;
+    let totalEpisodesMoved = 0;
+
+    for (const group of duplicateGroups) {
+      const duplicatePatients = await this.getDuplicatePatientDetails(group.tenantId, group.mrn);
+      
+      if (duplicatePatients.length <= 1) continue;
+
+      // Keep the oldest patient (first in the ordered list)
+      const keepPatient = duplicatePatients[0];
+      const duplicatesToRemove = duplicatePatients.slice(1);
+
+      // Move all encounters and episodes from duplicates to the kept patient
+      for (const duplicate of duplicatesToRemove) {
+        const encountsMoved = await this.moveEncountersToPatient(duplicate.id, keepPatient.id);
+        const episodesMoved = await this.moveEpisodesToPatient(duplicate.id, keepPatient.id);
+        
+        totalEncountersMoved += encountsMoved;
+        totalEpisodesMoved += episodesMoved;
+
+        // Delete the duplicate patient
+        await this.deletePatient(duplicate.id);
+        removedPatients++;
+      }
+    }
+
+    return {
+      mergedGroups: duplicateGroups.length,
+      removedPatients,
+      preservedData: {
+        encounters: totalEncountersMoved,
+        episodes: totalEpisodesMoved
+      }
+    };
+  }
+
   // Episode operations
   async createEpisode(episode: InsertEpisode): Promise<Episode> {
     const [newEpisode] = await db.insert(episodes).values(episode).returning();
