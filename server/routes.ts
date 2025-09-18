@@ -543,6 +543,99 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Episode-level eligibility analysis
+  app.post('/api/episodes/:episodeId/analyze-eligibility', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const { episodeId } = req.params;
+      
+      const episode = await storage.getEpisode(episodeId);
+      if (!episode) {
+        return res.status(404).json({ message: "Episode not found" });
+      }
+
+      const patient = await storage.getPatient(episode.patientId);
+      if (!patient) {
+        return res.status(404).json({ message: "Patient not found" });
+      }
+
+      // Verify user has access to tenant
+      const userTenantRole = await storage.getUserTenantRole(userId, patient.tenantId);
+      if (!userTenantRole) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+
+      // Get all encounters for this episode
+      const encounters = await storage.getEncountersByEpisode(episodeId);
+      if (encounters.length === 0) {
+        return res.status(400).json({ message: "No encounters found for this episode" });
+      }
+
+      // Build RAG context from policy database
+      const ragContext = await buildRAGContext(
+        patient.macRegion || 'default',
+        episode.woundType || 'DFU'
+      );
+
+      // Decrypt encounter notes for all encounters in the episode
+      const { decryptEncounterNotes } = await import('./services/encryption');
+      const processedEncounters = encounters.map(encounter => ({
+        id: encounter.id,
+        date: encounter.date,
+        notes: decryptEncounterNotes(encounter.encryptedNotes as string[]),
+        woundDetails: encounter.woundDetails,
+        conservativeCare: encounter.conservativeCare,
+        infectionStatus: encounter.infectionStatus || 'None',
+        comorbidities: Array.isArray(encounter.comorbidities) ? encounter.comorbidities : []
+      }));
+
+      // Perform AI episode-level eligibility analysis
+      const { analyzeEpisodeEligibility } = await import('./services/openai');
+      const analysisResult = await analyzeEpisodeEligibility({
+        episodeInfo: {
+          id: episode.id,
+          woundType: episode.woundType || 'General Wound Care',
+          woundLocation: episode.woundLocation || 'Not specified',
+          primaryDiagnosis: episode.primaryDiagnosis || 'Wound care episode',
+          episodeStartDate: episode.episodeStartDate,
+          status: episode.status || 'active'
+        },
+        encounters: processedEncounters,
+        patientInfo: {
+          payerType: patient.payerType,
+          macRegion: patient.macRegion || 'default',
+        },
+        policyContext: ragContext.content,
+      });
+
+      // Store eligibility check result with episodeId
+      const eligibilityCheck = await storage.createEligibilityCheck({
+        encounterId: encounters[0].id, // Link to the primary/latest encounter
+        episodeId: episode.id, // Link to the episode for episode-level analysis
+        result: analysisResult,
+        citations: [...ragContext.citations, ...analysisResult.citations],
+        llmModel: 'gpt-4o-mini',
+      });
+
+      // Log audit event
+      await storage.createAuditLog({
+        tenantId: patient.tenantId,
+        userId,
+        action: 'AI_EPISODE_ELIGIBILITY_ANALYSIS',
+        entity: 'EligibilityCheck',
+        entityId: eligibilityCheck.id,
+        ipAddress: req.ip,
+        userAgent: req.get('User-Agent'),
+        previousHash: '',
+      });
+
+      res.json(eligibilityCheck);
+    } catch (error) {
+      console.error("Error analyzing episode eligibility:", error);
+      res.status(500).json({ message: "Failed to analyze episode eligibility" });
+    }
+  });
+
   // Get eligibility checks for an encounter
   app.get('/api/encounters/:encounterId/eligibility-checks', isAuthenticated, async (req: any, res) => {
     try {
@@ -570,6 +663,36 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error("Error fetching eligibility checks:", error);
       res.status(500).json({ message: "Failed to fetch eligibility checks" });
+    }
+  });
+
+  // Get eligibility checks for an episode
+  app.get('/api/episodes/:episodeId/eligibility-checks', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const { episodeId } = req.params;
+      
+      const episode = await storage.getEpisode(episodeId);
+      if (!episode) {
+        return res.status(404).json({ message: "Episode not found" });
+      }
+
+      const patient = await storage.getPatient(episode.patientId);
+      if (!patient) {
+        return res.status(404).json({ message: "Patient not found" });
+      }
+
+      // Verify user has access to tenant
+      const userTenantRole = await storage.getUserTenantRole(userId, patient.tenantId);
+      if (!userTenantRole) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+
+      const eligibilityChecks = await storage.getEligibilityChecksByEpisode(episodeId);
+      res.json(eligibilityChecks);
+    } catch (error) {
+      console.error("Error fetching episode eligibility checks:", error);
+      res.status(500).json({ message: "Failed to fetch episode eligibility checks" });
     }
   });
 
