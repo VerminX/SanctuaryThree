@@ -1,5 +1,7 @@
 import OpenAI from "openai";
 import { EpisodeWithFullHistory } from "@shared/schema";
+import { IStorage } from "../storage";
+import { decryptEncounterNotes } from "./encryption";
 
 // Using GPT-4o-mini for AI-powered medical eligibility analysis with JSON mode support
 const openai = new OpenAI({ 
@@ -305,9 +307,8 @@ export async function analyzeEpisodeEligibilityWithFullHistory(request: Enhanced
     return `=== ENCOUNTER ${index + 1} (${encounterDate}) ${episodeContext} ===\nEpisode: ${encounter.episodeWoundType} at ${encounter.episodeWoundLocation}\n${encounter.notes ? encounter.notes.join('\n') : 'No notes available'}`;
   });
 
-  // Create historical eligibility decisions context
+  // Create historical eligibility decisions context (already sorted in service function, but ensure most recent first)
   const eligibilityHistoryContext = patientEligibilityHistory
-    .sort((a, b) => (a.createdAt?.getTime() || 0) - (b.createdAt?.getTime() || 0))
     .map((check, index) => {
       const checkDate = check.createdAt?.toISOString().split('T')[0] || 'Unknown date';
       const eligibilityResult = check.result ? JSON.stringify(check.result) : 'No result available';
@@ -439,6 +440,107 @@ Respond with JSON in this exact format:
   } catch (error) {
     console.error('Error in enhanced AI eligibility analysis:', error);
     throw new Error('Failed to analyze eligibility with full history: ' + (error as Error).message);
+  }
+}
+
+// Service function to prepare and execute enhanced episode analysis with full patient history
+export async function prepareAndAnalyzeEpisodeWithFullHistory(
+  storage: IStorage,
+  episodeId: string,
+  patientId: string,
+  patientInfo: { payerType: string; macRegion: string },
+  policyContext: string
+): Promise<EligibilityAnalysisResponse> {
+  try {
+    // Get comprehensive patient data
+    const [allPatientEpisodes, patientEligibilityHistory] = await Promise.all([
+      storage.getEpisodesWithFullHistoryByPatient(patientId),
+      storage.getPatientEligibilityHistory(patientId)
+    ]);
+
+    if (allPatientEpisodes.length === 0) {
+      throw new Error('No episodes found for patient');
+    }
+
+    // Find the target episode
+    const targetEpisodeRaw = allPatientEpisodes.find(ep => ep.id === episodeId);
+    if (!targetEpisodeRaw) {
+      throw new Error('Target episode not found in patient episodes');
+    }
+
+    // Transform episodes to the format expected by enhanced analysis function
+    const transformEpisode = (episode: EpisodeWithFullHistory): EpisodeWithDecryptedHistory => {
+      // Ensure date objects (handle potential string dates from JSON)
+      const episodeStartDate = episode.episodeStartDate instanceof Date 
+        ? episode.episodeStartDate 
+        : new Date(episode.episodeStartDate);
+      const episodeEndDate = episode.episodeEndDate 
+        ? (episode.episodeEndDate instanceof Date ? episode.episodeEndDate : new Date(episode.episodeEndDate))
+        : null;
+
+      return {
+        id: episode.id,
+        patientId: episode.patientId,
+        woundType: episode.woundType,
+        woundLocation: episode.woundLocation,
+        episodeStartDate,
+        episodeEndDate,
+        status: episode.status,
+        primaryDiagnosis: episode.primaryDiagnosis,
+        createdAt: episode.createdAt,
+        updatedAt: episode.updatedAt,
+        encounters: episode.encounters.map(encounter => {
+          // Ensure date objects for encounters
+          const encounterDate = encounter.date instanceof Date 
+            ? encounter.date 
+            : new Date(encounter.date);
+
+          return {
+            id: encounter.id,
+            date: encounterDate,
+            notes: decryptEncounterNotes(encounter.encryptedNotes as string[]),
+            woundDetails: encounter.woundDetails,
+            conservativeCare: encounter.conservativeCare,
+            infectionStatus: encounter.infectionStatus,
+            comorbidities: encounter.comorbidities,
+          };
+        }).sort((a, b) => a.date.getTime() - b.date.getTime()), // Sort encounters chronologically
+        eligibilityChecks: episode.eligibilityChecks
+          .map(check => ({
+            ...check,
+            createdAt: check.createdAt instanceof Date ? check.createdAt : (check.createdAt ? new Date(check.createdAt) : null)
+          }))
+          .sort((a, b) => (b.createdAt?.getTime() || 0) - (a.createdAt?.getTime() || 0)), // Sort by most recent first
+        patient: episode.patient
+      };
+    };
+
+    // Transform all episodes with proper date handling and sorting
+    const transformedEpisodes = allPatientEpisodes.map(transformEpisode);
+    const targetEpisode = transformedEpisodes.find(ep => ep.id === episodeId)!;
+
+    // Sort patient eligibility history by date (most recent first) 
+    const sortedEligibilityHistory = patientEligibilityHistory
+      .map(check => ({
+        ...check,
+        createdAt: check.createdAt instanceof Date ? check.createdAt : (check.createdAt ? new Date(check.createdAt) : null)
+      }))
+      .sort((a, b) => (b.createdAt?.getTime() || 0) - (a.createdAt?.getTime() || 0));
+
+    // Call the enhanced analysis function
+    const enhancedRequest: EnhancedEpisodeAnalysisRequest = {
+      targetEpisode,
+      allPatientEpisodes: transformedEpisodes,
+      patientEligibilityHistory: sortedEligibilityHistory,
+      patientInfo,
+      policyContext
+    };
+
+    return await analyzeEpisodeEligibilityWithFullHistory(enhancedRequest);
+    
+  } catch (error) {
+    console.error('Error in enhanced episode analysis preparation:', error);
+    throw new Error('Failed to prepare enhanced episode analysis: ' + (error as Error).message);
   }
 }
 

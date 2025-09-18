@@ -583,7 +583,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(403).json({ message: "Access denied" });
       }
 
-      // Get all encounters for this episode
+      // Get encounters first to validate episode before expensive analysis
       const encounters = await storage.getEncountersByEpisode(episodeId);
       if (encounters.length === 0) {
         return res.status(400).json({ message: "No encounters found for this episode" });
@@ -595,40 +595,26 @@ export async function registerRoutes(app: Express): Promise<Server> {
         episode.woundType || 'DFU'
       );
 
-      // Decrypt encounter notes for all encounters in the episode
-      const { decryptEncounterNotes } = await import('./services/encryption');
-      const processedEncounters = encounters.map(encounter => ({
-        id: encounter.id,
-        date: encounter.date,
-        notes: decryptEncounterNotes(encounter.encryptedNotes as string[]),
-        woundDetails: encounter.woundDetails,
-        conservativeCare: encounter.conservativeCare,
-        infectionStatus: encounter.infectionStatus || 'None',
-        comorbidities: Array.isArray(encounter.comorbidities) ? encounter.comorbidities : []
-      }));
-
-      // Perform AI episode-level eligibility analysis
-      const { analyzeEpisodeEligibility } = await import('./services/openai');
-      const analysisResult = await analyzeEpisodeEligibility({
-        episodeInfo: {
-          id: episode.id,
-          woundType: episode.woundType || 'General Wound Care',
-          woundLocation: episode.woundLocation || 'Not specified',
-          primaryDiagnosis: episode.primaryDiagnosis || 'Wound care episode',
-          episodeStartDate: episode.episodeStartDate,
-          status: episode.status || 'active'
-        },
-        encounters: processedEncounters,
-        patientInfo: {
+      // Perform enhanced AI episode-level eligibility analysis with full patient history (NEW DEFAULT)
+      const { prepareAndAnalyzeEpisodeWithFullHistory } = await import('./services/openai');
+      const analysisResult = await prepareAndAnalyzeEpisodeWithFullHistory(
+        storage,
+        episodeId,
+        patient.id,
+        {
           payerType: patient.payerType,
           macRegion: patient.macRegion || 'default',
         },
-        policyContext: ragContext.content,
-      });
+        ragContext.content
+      );
+
+      // Get latest encounter for eligibility check linking (with safe date handling)
+      const toTime = (date: any) => new Date(date as any).getTime();
+      const latestEncounter = encounters.sort((a, b) => toTime(b.date) - toTime(a.date))[0];
 
       // Store eligibility check result with episodeId
       const eligibilityCheck = await storage.createEligibilityCheck({
-        encounterId: encounters[0].id, // Link to the primary/latest encounter
+        encounterId: latestEncounter.id, // Link to the latest encounter
         episodeId: episode.id, // Link to the episode for episode-level analysis
         result: analysisResult,
         citations: [...ragContext.citations, ...analysisResult.citations],
