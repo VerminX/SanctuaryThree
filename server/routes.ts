@@ -2218,21 +2218,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
           macRegion: patientData?.macRegion
         };
 
-        // Check if patient already exists by MRN
+        // Check if patient already exists by MRN using proper duplicate prevention
         let existingPatient = null;
         if (decryptedPatientData.mrn) {
-          const patients = await storage.getPatientsByTenant(upload.tenantId);
-          for (const patient of patients) {
-            try {
-              const decryptedMrn = patient.encryptedFirstName ? decryptPHI(patient.mrn) : patient.mrn;
-              if (decryptedMrn === decryptedPatientData.mrn) {
-                existingPatient = patient;
-                break;
-              }
-            } catch {
-              // Skip patients with decryption issues
-              continue;
-            }
+          const isDuplicate = await storage.checkPatientDuplicate(decryptedPatientData.mrn, upload.tenantId);
+          if (isDuplicate) {
+            existingPatient = await storage.getPatientByMrnAndTenant(decryptedPatientData.mrn, upload.tenantId);
           }
         }
 
