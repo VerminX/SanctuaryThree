@@ -612,25 +612,26 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const encounterRequestSchema = z.object({
         date: z.string().or(z.date()).transform((val) => {
           return typeof val === 'string' ? new Date(val) : val;
-        }),
-        notes: z.array(z.string()),
-        woundDetails: z.any(), // JSONB field
-        conservativeCare: z.any(), // JSONB field
+        }).optional(),
+        notes: z.array(z.string()).optional(),
+        woundDetails: z.any().optional(), // JSONB field
+        conservativeCare: z.any().optional(), // JSONB field
         infectionStatus: z.string().optional(),
         comorbidities: z.any().optional(), // JSONB field
         attachmentMetadata: z.any().optional(), // JSONB field
+        episodeId: z.string().uuid().nullable().optional(), // Allow assigning/unassigning episodes
       });
       
       const { notes, ...encounterData } = encounterRequestSchema.parse(req.body);
       
-      // Encrypt encounter notes
-      const encryptedNotes = encryptEncounterNotes(notes);
+      // Only encrypt notes if they are provided
+      const updateData: any = { ...encounterData };
+      if (notes && notes.length > 0) {
+        updateData.encryptedNotes = encryptEncounterNotes(notes);
+      }
       
       // Update encounter
-      const updatedEncounter = await storage.updateEncounter(encounterId, {
-        ...encounterData,
-        encryptedNotes,
-      });
+      const updatedEncounter = await storage.updateEncounter(encounterId, updateData);
 
       // Log audit event
       await storage.createAuditLog({
