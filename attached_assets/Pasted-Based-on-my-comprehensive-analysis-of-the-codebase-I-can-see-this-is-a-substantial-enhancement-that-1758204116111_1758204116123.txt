@@ -1,0 +1,133 @@
+Based on my comprehensive analysis of the codebase, I can see this is a substantial enhancement that will significantly improve the clinical workflow. Let me break down the current architecture and provide a detailed implementation plan.
+
+🔍 Current Architecture Analysis
+Current Data Model:
+Patients → Encounters (1:many relationship)
+Documents & EligibilityChecks → Individual Encounters
+FileUploads → PdfExtractedData (extraction results stored separately)
+No "episode" concept - each encounter is independent
+Current PDF Workflow:
+PDF Upload → Text Extraction → AI Data Extraction → Manual Record Creation
+Each encounter analyzed in isolation
+Documents/eligibility tied to single encounters only
+🎯 Enhanced Architecture Plan
+Phase 1: Data Model Enhancement
+New episodes Table:
+
+// Episodes - Group related encounters for the same wound/condition
+export const episodes = pgTable("episodes", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  patientId: uuid("patient_id").notNull().references(() => patients.id),
+  woundType: varchar("wound_type", { length: 100 }).notNull(), // DFU, VLU, etc.
+  woundLocation: varchar("wound_location", { length: 100 }).notNull(),
+  episodeStartDate: timestamp("episode_start_date").notNull(),
+  episodeEndDate: timestamp("episode_end_date"), // Null if ongoing
+  status: varchar("status", { length: 20 }).default("active"), // active, resolved, chronic
+  primaryDiagnosis: varchar("primary_diagnosis", { length: 255 }),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+Updated encounters Table:
+
+// Add episodeId to existing encounters
+episodeId: uuid("episode_id").references(() => episodes.id),
+Enhanced eligibilityChecks:
+
+// Update to reference episodes instead of individual encounters
+episodeId: uuid("episode_id").notNull().references(() => episodes.id),
+encounterId: uuid("encounter_id").references(() => encounters.id), // Optional specific encounter
+Enhanced documents:
+
+// Add episode-level document generation
+episodeId: uuid("episode_id").references(() => episodes.id),
+Phase 2: Enhanced PDF Upload Workflow
+Automatic Patient/Episode/Encounter Creation:
+
+// New workflow in create-records endpoint:
+1. Extract patient data → Create/find patient by MRN
+2. Extract wound details → Create/find episode by wound type/location
+3. Extract encounter data → Create new encounter within episode
+4. Link PDF to patient/episode/encounter via pdfExtractedData
+5. Auto-trigger eligibility analysis using FULL episode context
+PDF Attachment System:
+
+// Enhanced pdfExtractedData linking
+export const pdfExtractedData = pgTable("pdf_extracted_data", {
+  // ... existing fields ...
+  episodeId: uuid("episode_id").references(() => episodes.id), // New field
+  isAttachedToChart: boolean("is_attached_to_chart").default(true), // New field
+});
+Phase 3: Holistic Analysis Enhancement
+Episode-Aware Eligibility Analysis:
+
+// Modified analyzeEligibility to use full episode context
+export async function analyzeEpisodeEligibility(request: {
+  episodeId: string,
+  patientInfo: PatientInfo,
+  policyContext: string
+}): Promise<EligibilityAnalysisResponse> {
+  // 1. Gather ALL encounters in the episode
+  // 2. Aggregate wound progression, conservative care history
+  // 3. Build comprehensive clinical narrative
+  // 4. Analyze against policies with full context
+}
+Enhanced Document Generation:
+
+// Episode-level document generation
+export async function generateEpisodeDocument(request: {
+  episodeId: string,
+  type: 'PreDetermination' | 'LMN',
+  includeAllEncounters: boolean
+}): Promise<GeneratedDocument> {
+  // Use complete episode history for more accurate letters
+}
+📋 Implementation Steps
+Step 1: Database Schema Updates ⭐
+// Add episodes table and update relationships
+// Run: npm run db:push --force
+Step 2: Storage Layer Updates ⭐
+// Add episode CRUD operations to storage.ts
+// Update existing patient/encounter operations
+// Add episode-aware query methods
+Step 3: Enhanced PDF Processing ⭐
+// Modify create-records endpoint:
+// - Auto-create episode logic
+// - Enhanced encounter creation within episodes
+// - PDF attachment to chart records
+Step 4: Episode-Aware AI Analysis
+// Update eligibility analysis to consider full episode
+// Aggregate multiple encounters for comprehensive assessment
+// Enhanced citation and rationale based on episode progression
+Step 5: Enhanced Document Generation
+// Update document templates for episode-level information
+// Include wound progression timeline
+// Comprehensive conservative care history
+Step 6: Frontend Updates
+// Update patient charts to show episodes
+// Episode timeline view with attached documents
+// Enhanced upload workflow with automatic record creation
+🚀 Benefits of This Architecture
+Clinical Benefits:
+Holistic Patient View: Episodes group related encounters for better clinical context
+Comprehensive Analysis: AI considers full wound care history, not just single visits
+Better Documentation: Generated letters include complete episode narrative
+Streamlined Workflow: Automatic patient/encounter creation from PDF uploads
+Technical Benefits:
+HIPAA Compliant: Maintains existing encryption and security patterns
+Scalable: Episodes can accommodate complex, multi-visit wound care scenarios
+Backward Compatible: Existing encounters can be migrated to episodes
+Flexible: Supports both single-encounter and multi-encounter episodes
+✅ Feasibility Assessment
+This enhancement is absolutely feasible with the current codebase because:
+
+Solid Foundation: Existing patient/encounter/document architecture is well-designed
+Encryption Patterns: PHI encryption is already implemented and can be extended
+AI Integration: OpenAI/Azure OpenAI integration is already working
+Object Storage: PDF attachment system is already functional
+Database Schema: PostgreSQL with Drizzle ORM makes schema changes straightforward
+🎯 Recommended Implementation Priority
+Phase 1 (Core): Database schema + basic episode functionality
+Phase 2 (Essential): Enhanced PDF workflow with auto-record creation
+Phase 3 (Advanced): Episode-aware analysis and document generation
+Phase 4 (Polish): Frontend episode timeline and enhanced UI
+Would you like me to proceed with implementing any specific phase, or would you prefer to see the detailed code changes for the database schema first?
