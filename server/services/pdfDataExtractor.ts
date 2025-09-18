@@ -197,8 +197,34 @@ Return JSON in this exact format:
 
     const result = JSON.parse(response.choices[0].message.content || '{}');
     
-    // Validate the response structure
-    if (!result.patientData || !result.encounterData || !Array.isArray(result.encounterData) || result.encounterData.length === 0 || typeof result.confidence !== 'number') {
+    // Handle both array and object formats for encounterData
+    if (!result.patientData || !result.encounterData || typeof result.confidence !== 'number') {
+      throw new Error('Invalid response format from AI data extraction');
+    }
+
+    // Convert object format {"0": encounter1, "1": encounter2} to array format [encounter1, encounter2]
+    if (!Array.isArray(result.encounterData)) {
+      const encounterObj = result.encounterData as any;
+      const encounters = [];
+      
+      // Extract numbered encounters (0, 1, 2, etc.) and convert to array
+      const keys = Object.keys(encounterObj).filter(key => /^\d+$/.test(key)).sort();
+      for (const key of keys) {
+        if (encounterObj[key] && typeof encounterObj[key] === 'object') {
+          encounters.push(encounterObj[key]);
+        }
+      }
+      
+      if (encounters.length === 0) {
+        throw new Error('No valid encounters found in extraction result');
+      }
+      
+      result.encounterData = encounters;
+      console.log(`Converted ${encounters.length} encounters from object to array format`);
+    }
+
+    // Final validation
+    if (!Array.isArray(result.encounterData) || result.encounterData.length === 0) {
       throw new Error('Invalid response format from AI data extraction - encounterData must be a non-empty array');
     }
 
