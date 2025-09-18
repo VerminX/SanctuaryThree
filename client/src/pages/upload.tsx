@@ -7,7 +7,7 @@ import { Progress } from "@/components/ui/progress";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { CheckCircle, FileUp, Upload, AlertCircle, Clock, FileText, ArrowLeft, Users, Calendar } from "lucide-react";
+import { CheckCircle, FileUp, Upload, AlertCircle, Clock, FileText, ArrowLeft, Users, Calendar, Brain } from "lucide-react";
 import { apiRequest } from "@/lib/queryClient";
 import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
@@ -369,6 +369,58 @@ export default function UploadPage() {
                     </Alert>
                   )}
 
+                  {/* Workflow Steps Indicator */}
+                  <div className="mb-4 p-3 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg">
+                    <h4 className="font-medium text-blue-900 dark:text-blue-100 mb-2">Processing Workflow</h4>
+                    <div className="flex items-center gap-4 text-sm">
+                      <div className={`flex items-center gap-2 ${
+                        upload.status === 'uploaded' ? 'text-blue-600 dark:text-blue-400 font-medium' : 
+                        upload.status === 'processed' || extractionResults[upload.id] ? 'text-green-600 dark:text-green-400' : 
+                        'text-gray-400'
+                      }`}>
+                        <div className={`w-6 h-6 rounded-full flex items-center justify-center text-xs ${
+                          upload.status === 'uploaded' ? 'bg-blue-100 dark:bg-blue-800 text-blue-600 dark:text-blue-300' :
+                          upload.status === 'processed' || extractionResults[upload.id] ? 'bg-green-100 dark:bg-green-800 text-green-600 dark:text-green-300' :
+                          'bg-gray-100 dark:bg-gray-700 text-gray-500'
+                        }`}>
+                          {upload.status === 'processed' || extractionResults[upload.id] ? '✓' : '1'}
+                        </div>
+                        Step 1: Extract Text
+                      </div>
+                      <div className="w-8 h-px bg-gray-300 dark:bg-gray-600"></div>
+                      <div className={`flex items-center gap-2 ${
+                        upload.status === 'processed' && !extractionResults[upload.id] ? 'text-blue-600 dark:text-blue-400 font-medium' :
+                        extractionResults[upload.id] ? 'text-green-600 dark:text-green-400' :
+                        'text-gray-400'
+                      }`}>
+                        <div className={`w-6 h-6 rounded-full flex items-center justify-center text-xs ${
+                          upload.status === 'processed' && !extractionResults[upload.id] ? 'bg-blue-100 dark:bg-blue-800 text-blue-600 dark:text-blue-300' :
+                          extractionResults[upload.id] ? 'bg-green-100 dark:bg-green-800 text-green-600 dark:text-green-300' :
+                          'bg-gray-100 dark:bg-gray-700 text-gray-500'
+                        }`}>
+                          {extractionResults[upload.id] ? '✓' : '2'}
+                        </div>
+                        Step 2: AI Analysis
+                      </div>
+                      <div className="w-8 h-px bg-gray-300 dark:bg-gray-600"></div>
+                      <div className={`flex items-center gap-2 ${
+                        extractionResults[upload.id] && extractionResults[upload.id].canCreateRecords ? 'text-blue-600 dark:text-blue-400 font-medium' :
+                        createdRecords[upload.id] ? 'text-green-600 dark:text-green-400' :
+                        'text-gray-400'
+                      }`}>
+                        <div className={`w-6 h-6 rounded-full flex items-center justify-center text-xs ${
+                          extractionResults[upload.id] && extractionResults[upload.id].canCreateRecords ? 'bg-blue-100 dark:bg-blue-800 text-blue-600 dark:text-blue-300' :
+                          createdRecords[upload.id] ? 'bg-green-100 dark:bg-green-800 text-green-600 dark:text-green-300' :
+                          'bg-gray-100 dark:bg-gray-700 text-gray-500'
+                        }`}>
+                          {createdRecords[upload.id] ? '✓' : '3'}
+                        </div>
+                        Step 3: Create Records
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Action Buttons */}
                   <div className="flex gap-2">
                     {upload.status === 'uploaded' && (
                       <Button
@@ -376,14 +428,18 @@ export default function UploadPage() {
                         onClick={() => handleExtractText(upload.id)}
                         disabled={extractTextMutation.isPending}
                         data-testid={`extract-text-${upload.id}`}
+                        className="flex items-center gap-2"
                       >
                         {extractTextMutation.isPending ? (
                           <>
-                            <Clock className="w-4 h-4 mr-2 animate-spin" />
-                            Extracting Text...
+                            <Clock className="w-4 h-4 animate-spin" />
+                            Step 1: Extracting Text...
                           </>
                         ) : (
-                          'Extract Text'
+                          <>
+                            <FileText className="w-4 h-4" />
+                            Step 1: Extract Text from PDF
+                          </>
                         )}
                       </Button>
                     )}
@@ -394,14 +450,18 @@ export default function UploadPage() {
                         onClick={() => handleExtractData(upload.id)}
                         disabled={extractDataMutation.isPending}
                         data-testid={`extract-data-${upload.id}`}
+                        className="flex items-center gap-2"
                       >
                         {extractDataMutation.isPending ? (
                           <>
-                            <Clock className="w-4 h-4 mr-2 animate-spin" />
-                            Analyzing with AI...
+                            <Clock className="w-4 h-4 animate-spin" />
+                            Step 2: AI Analyzing...
                           </>
                         ) : (
-                          'Extract Data'
+                          <>
+                            <Brain className="w-4 h-4" />
+                            Step 2: Analyze with AI
+                          </>
                         )}
                       </Button>
                     )}
@@ -412,9 +472,10 @@ export default function UploadPage() {
                         variant="outline"
                         disabled
                         data-testid={`data-extracted-${upload.id}`}
+                        className="flex items-center gap-2"
                       >
-                        <CheckCircle className="w-4 h-4 mr-2" />
-                        Data Extracted
+                        <CheckCircle className="w-4 h-4" />
+                        Data Analysis Complete
                       </Button>
                     )}
                   </div>
@@ -486,22 +547,34 @@ export default function UploadPage() {
                       )}
 
                       {extractionResults[upload.id].canCreateRecords && (
-                        <Button 
-                          size="sm" 
-                          className="w-full" 
-                          data-testid={`create-records-${upload.id}`}
-                          onClick={() => createRecordsMutation.mutate(upload.id)}
-                          disabled={createRecordsMutation.isPending}
-                        >
-                          {createRecordsMutation.isPending ? (
-                            <>
-                              <Clock className="w-4 h-4 mr-2 animate-spin" />
-                              Creating Records...
-                            </>
-                          ) : (
-                            'Create Patient & Encounter Records'
-                          )}
-                        </Button>
+                        <div className="mt-4 p-3 bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-lg">
+                          <div className="flex items-center gap-2 mb-2">
+                            <CheckCircle className="w-5 h-5 text-green-600" />
+                            <h4 className="font-medium text-green-800 dark:text-green-200">Ready to Create Records</h4>
+                          </div>
+                          <p className="text-sm text-green-700 dark:text-green-300 mb-3">
+                            Data analysis is complete! Click below to create patient and encounter records in the system.
+                          </p>
+                          <Button 
+                            size="sm" 
+                            className="w-full" 
+                            data-testid={`create-records-${upload.id}`}
+                            onClick={() => createRecordsMutation.mutate(upload.id)}
+                            disabled={createRecordsMutation.isPending}
+                          >
+                            {createRecordsMutation.isPending ? (
+                              <>
+                                <Clock className="w-4 h-4 mr-2 animate-spin" />
+                                Step 3: Creating Records...
+                              </>
+                            ) : (
+                              <>
+                                <Users className="w-4 h-4 mr-2" />
+                                Step 3: Create Patient & Encounter Records
+                              </>
+                            )}
+                          </Button>
+                        </div>
                       )}
 
                       {/* Success confirmation when records are created */}
