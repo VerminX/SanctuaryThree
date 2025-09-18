@@ -89,6 +89,65 @@ export default function Eligibility() {
     retry: false,
   });
 
+  // Get all episodes with patient information
+  const { data: episodes, isLoading: episodesLoading, error: episodesError } = useQuery({
+    queryKey: ["/api/episodes-with-patients", currentTenant?.id],
+    queryFn: async () => {
+      if (!patients || !Array.isArray(patients) || patients.length === 0) {
+        return [];
+      }
+      
+      const episodePromises = patients.map(async (patient: any) => {
+        try {
+          // Skip patients with decryption failures
+          if (!patient.firstName || !patient.lastName) {
+            return [];
+          }
+          
+          const response = await fetch(`/api/patients/${patient.id}/episodes`, {
+            credentials: "include",
+          });
+          if (response.ok) {
+            const episodes = await response.json();
+            // Get encounter count for each episode
+            const episodesWithCounts = await Promise.all(episodes.map(async (episode: any) => {
+              try {
+                const encountersResponse = await fetch(`/api/episodes/${episode.id}/encounters`, {
+                  credentials: "include",
+                });
+                const encounterCount = encountersResponse.ok ? (await encountersResponse.json()).length : 0;
+                
+                return {
+                  id: episode.id,
+                  patientId: patient.id,
+                  patientName: `${patient.firstName} ${patient.lastName}`.trim(),
+                  woundType: episode.woundType || 'Unknown',
+                  woundLocation: episode.woundLocation || 'Unknown location',
+                  episodeStartDate: episode.episodeStartDate,
+                  status: episode.status || 'active',
+                  encounterCount
+                };
+              } catch {
+                return null;
+              }
+            }));
+            return episodesWithCounts.filter(ep => ep !== null);
+          }
+          return [];
+        } catch (error) {
+          return [];
+        }
+      });
+      
+      const episodesArrays = await Promise.all(episodePromises);
+      return episodesArrays.flat().sort((a: any, b: any) => 
+        new Date(b.episodeStartDate).getTime() - new Date(a.episodeStartDate).getTime()
+      );
+    },
+    enabled: !!patients && Array.isArray(patients) && patients.length > 0,
+    retry: false,
+  });
+
   // Get recent eligibility checks
   const { data: recentChecks, isLoading: checksLoading } = useQuery({
     queryKey: ["/api/recent-eligibility-checks"],
@@ -96,6 +155,7 @@ export default function Eligibility() {
     retry: false,
   });
 
+  // Single encounter analysis mutation
   const analyzeEligibilityMutation = useMutation({
     mutationFn: async ({ encounterId, macRegion }: { encounterId: string; macRegion: string }) => {
       const response = await apiRequest("POST", `/api/encounters/${encounterId}/analyze-eligibility`, {
@@ -108,7 +168,7 @@ export default function Eligibility() {
       queryClient.invalidateQueries({ queryKey: ["/api/recent-eligibility-checks"] });
       toast({
         title: "Analysis Complete",
-        description: "Eligibility analysis has been completed successfully",
+        description: "Single encounter eligibility analysis completed successfully",
       });
     },
     onError: (error) => {
@@ -125,7 +185,43 @@ export default function Eligibility() {
       }
       toast({
         title: "Analysis Failed",
-        description: "Failed to analyze eligibility. Please try again.",
+        description: "Failed to analyze encounter eligibility. Please try again.",
+        variant: "destructive",
+      });
+    },
+  });
+
+  // Episode analysis mutation with full patient history (NEW DEFAULT)
+  const analyzeEpisodeEligibilityMutation = useMutation({
+    mutationFn: async ({ episodeId, macRegion }: { episodeId: string; macRegion: string }) => {
+      const response = await apiRequest("POST", `/api/episodes/${episodeId}/analyze-eligibility`, {
+        macRegion,
+      });
+      return await response.json();
+    },
+    onSuccess: (data) => {
+      setAnalysisResult(data);
+      queryClient.invalidateQueries({ queryKey: ["/api/recent-eligibility-checks"] });
+      toast({
+        title: "Analysis Complete",
+        description: "Episode eligibility analysis with full patient history completed successfully",
+      });
+    },
+    onError: (error) => {
+      if (isUnauthorizedError(error)) {
+        toast({
+          title: "Unauthorized",
+          description: "You are logged out. Logging in again...",
+          variant: "destructive",
+        });
+        setTimeout(() => {
+          window.location.href = "/api/login";
+        }, 500);
+        return;
+      }
+      toast({
+        title: "Analysis Failed",
+        description: "Failed to analyze episode eligibility. Please try again.",
         variant: "destructive",
       });
     },
@@ -142,8 +238,14 @@ export default function Eligibility() {
     );
   }
 
-  const handleAnalyze = async (encounterId: string, macRegion: string) => {
-    await analyzeEligibilityMutation.mutateAsync({ encounterId, macRegion });
+  const handleAnalyze = async (params: { mode: 'episode' | 'encounter'; id: string; macRegion: string }) => {
+    const { mode, id, macRegion } = params;
+    
+    if (mode === 'episode') {
+      await analyzeEpisodeEligibilityMutation.mutateAsync({ episodeId: id, macRegion });
+    } else {
+      await analyzeEligibilityMutation.mutateAsync({ encounterId: id, macRegion });
+    }
   };
 
   // Calculate stats
@@ -232,10 +334,11 @@ export default function Eligibility() {
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
             <AnalysisPanel
               encounters={encounters || []}
+              episodes={episodes || []}
               macRegions={MAC_REGIONS}
               onAnalyze={handleAnalyze}
               result={analysisResult?.result}
-              isLoading={analyzeEligibilityMutation.isPending}
+              isLoading={analyzeEligibilityMutation.isPending || analyzeEpisodeEligibilityMutation.isPending}
             />
 
             {/* Recent Analyses */}
