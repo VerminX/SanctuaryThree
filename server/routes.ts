@@ -788,6 +788,119 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Episode-level document generation
+  app.post('/api/episodes/:episodeId/documents', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const { episodeId } = req.params;
+      
+      // Validate request body
+      const requestSchema = z.object({
+        type: z.enum(['PreDetermination', 'LMN']),
+      });
+      const { type } = requestSchema.parse(req.body);
+      
+      // Get episode and validate access
+      const episode = await storage.getEpisode(episodeId);
+      if (!episode) {
+        return res.status(404).json({ message: "Episode not found" });
+      }
+
+      const patient = await storage.getPatient(episode.patientId);
+      if (!patient) {
+        return res.status(404).json({ message: "Patient not found" });
+      }
+
+      // Verify user has access to tenant
+      const userTenantRole = await storage.getUserTenantRole(userId, patient.tenantId);
+      if (!userTenantRole) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+
+      const tenant = await storage.getTenant(patient.tenantId);
+      if (!tenant) {
+        return res.status(404).json({ message: "Tenant not found" });
+      }
+
+      // Get episode-level eligibility analysis (most recent one)
+      const episodeEligibilityChecks = await storage.getEligibilityChecksByEpisode(episodeId);
+      const latestEligibilityCheck = episodeEligibilityChecks
+        .filter(check => check.episodeId === episodeId)
+        .sort((a, b) => {
+          const aTime = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+          const bTime = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+          return bTime - aTime;
+        })[0];
+
+      if (!latestEligibilityCheck) {
+        return res.status(400).json({ message: "No eligibility analysis found for this episode. Please run episode-level eligibility analysis first." });
+      }
+
+      // Get all encounters for comprehensive episode timeline
+      const episodeEncounters = await storage.getEncountersByEpisode(episodeId);
+
+      // Generate episode-aware letter content using existing AI service
+      const { generateLetterContent } = await import('./services/openai');
+      const decryptedPatientData = decryptPatientData(patient);
+      
+      // Enhance patient data with episode context for richer content generation
+      const episodeEnhancedPatientData = {
+        ...decryptedPatientData,
+        episodeContext: {
+          woundType: episode.woundType,
+          woundLocation: episode.woundLocation,
+          episodeStartDate: episode.episodeStartDate,
+          status: episode.status,
+          primaryDiagnosis: episode.primaryDiagnosis,
+          totalEncounters: episodeEncounters.length,
+          encounterTimeline: episodeEncounters.map(enc => ({
+            date: enc.date,
+            woundDetails: enc.woundDetails,
+            conservativeCare: enc.conservativeCare,
+            infectionStatus: enc.infectionStatus || 'None'
+          })).sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
+        }
+      };
+
+      const letterContent = await generateLetterContent(
+        type,
+        episodeEnhancedPatientData,
+        latestEligibilityCheck.result as any,
+        tenant
+      );
+
+      // Generate document with episode context and use existing eligibility check to avoid duplication
+      const generatedDocument = await generateDocument({
+        type,
+        patientId: episode.patientId,
+        tenantId: patient.tenantId,
+        eligibilityCheckId: latestEligibilityCheck.id, // Use existing eligibility check to avoid refetching
+        episodeId,
+        content: letterContent,
+      });
+
+      // Log audit event
+      await storage.createAuditLog({
+        tenantId: patient.tenantId,
+        userId,
+        action: 'GENERATE_EPISODE_DOCUMENT',
+        entity: 'Document',
+        entityId: generatedDocument.id,
+        ipAddress: req.ip,
+        userAgent: req.get('User-Agent'),
+        previousHash: '',
+      });
+
+      // Track recent activity
+      await trackActivity(patient.tenantId, userId, `Generated episode-level ${type} document`, 'Document', generatedDocument.id, `Episode ${type} Document`);
+
+      res.json(generatedDocument);
+    } catch (error) {
+      console.error("Error generating episode document:", error);
+      res.status(500).json({ message: "Failed to generate episode document" });
+    }
+  });
+
   app.get('/api/patients/:patientId/documents', isAuthenticated, async (req: any, res) => {
     try {
       const userId = req.user.claims.sub;
