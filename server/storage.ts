@@ -47,6 +47,7 @@ import {
   type FileUpload,
   type InsertPdfExtractedData,
   type PdfExtractedData,
+  type EpisodeWithFullHistory,
 } from "@shared/schema";
 import { db } from "./db";
 import { eq, and, desc, asc, or, lte, gte, sql, inArray } from "drizzle-orm";
@@ -119,6 +120,11 @@ export interface IStorage {
   getEligibilityCheck(id: string): Promise<EligibilityCheck | undefined>;
   getEligibilityChecksByEncounter(encounterId: string): Promise<EligibilityCheck[]>;
   getRecentEligibilityChecksByTenant(tenantId: string, limit?: number): Promise<Array<EligibilityCheck & { patientName: string; encounterId: string; encounterDate: string }>>;
+  
+  // Enhanced patient history analysis operations
+  getPatientEligibilityHistory(patientId: string): Promise<EligibilityCheck[]>;
+  getEpisodeWithEnrichedHistory(episodeId: string): Promise<EpisodeWithFullHistory>;
+  getPatientEpisodesWithHistory(patientId: string): Promise<EpisodeWithFullHistory[]>;
   
   // Document operations
   createDocument(document: InsertDocument): Promise<Document>;
@@ -700,6 +706,81 @@ export class DatabaseStorage implements IStorage {
       patientName: 'Patient Name', // In real app, decrypt result.patientName
       encounterDate: result.encounterDate.toISOString()
     }));
+  }
+
+  // Enhanced patient history analysis operations
+  async getPatientEligibilityHistory(patientId: string): Promise<EligibilityCheck[]> {
+    const results = await db
+      .select({
+        id: eligibilityChecks.id,
+        encounterId: eligibilityChecks.encounterId,
+        episodeId: eligibilityChecks.episodeId,
+        result: eligibilityChecks.result,
+        citations: eligibilityChecks.citations,
+        llmModel: eligibilityChecks.llmModel,
+        createdAt: eligibilityChecks.createdAt,
+      })
+      .from(eligibilityChecks)
+      .innerJoin(encounters, eq(eligibilityChecks.encounterId, encounters.id))
+      .where(eq(encounters.patientId, patientId))
+      .orderBy(desc(eligibilityChecks.createdAt));
+    
+    return results;
+  }
+
+  async getEpisodeWithEnrichedHistory(episodeId: string): Promise<EpisodeWithFullHistory> {
+    // Get the episode
+    const episode = await this.getEpisode(episodeId);
+    if (!episode) {
+      throw new Error('Episode not found');
+    }
+
+    // Get the patient
+    const patient = await this.getPatient(episode.patientId);
+    if (!patient) {
+      throw new Error('Patient not found');
+    }
+
+    // Get all encounters for this episode
+    const encounters = await this.getEncountersByEpisode(episodeId);
+
+    // Get all eligibility checks for this episode
+    const eligibilityChecks = await this.getEligibilityChecksByEpisode(episodeId);
+
+    return {
+      ...episode,
+      encounters,
+      eligibilityChecks,
+      patient
+    };
+  }
+
+  async getPatientEpisodesWithHistory(patientId: string): Promise<EpisodeWithFullHistory[]> {
+    // Get all episodes for the patient
+    const episodes = await this.getEpisodesByPatient(patientId);
+    
+    // Get the patient data
+    const patient = await this.getPatient(patientId);
+    if (!patient) {
+      throw new Error('Patient not found');
+    }
+
+    // Enrich each episode with full history
+    const enrichedEpisodes = await Promise.all(
+      episodes.map(async (episode) => {
+        const encounters = await this.getEncountersByEpisode(episode.id);
+        const eligibilityChecks = await this.getEligibilityChecksByEpisode(episode.id);
+        
+        return {
+          ...episode,
+          encounters,
+          eligibilityChecks,
+          patient
+        };
+      })
+    );
+
+    return enrichedEpisodes;
   }
 
   // Enhanced Document operations with version control

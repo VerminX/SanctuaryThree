@@ -469,3 +469,10 @@ export type InsertFileUpload = z.infer<typeof insertFileUploadSchema>;
 export type FileUpload = typeof fileUploads.$inferSelect;
 export type InsertPdfExtractedData = z.infer<typeof insertPdfExtractedDataSchema>;
 export type PdfExtractedData = typeof pdfExtractedData.$inferSelect;
+
+// Enhanced types for comprehensive patient history analysis
+export type EpisodeWithFullHistory = Episode & {
+  encounters: Encounter[];
+  eligibilityChecks: EligibilityCheck[];
+  patient: Patient;
+};
