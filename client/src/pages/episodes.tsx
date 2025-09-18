@@ -375,6 +375,7 @@ export default function Episodes() {
                         <TableHead>Start Date</TableHead>
                         <TableHead>End Date</TableHead>
                         <TableHead>Primary Diagnosis</TableHead>
+                        <TableHead>Encounters</TableHead>
                         <TableHead>Actions</TableHead>
                       </TableRow>
                     </TableHeader>
@@ -407,6 +408,11 @@ export default function Episodes() {
                             {episode.primaryDiagnosis || 
                               <span className="text-muted-foreground">Not specified</span>
                             }
+                          </TableCell>
+                          <TableCell>
+                            <Badge variant="secondary" className="font-mono">
+                              {episode.encounterCount || 0}
+                            </Badge>
                           </TableCell>
                           <TableCell>
                             <div className="flex items-center space-x-2">

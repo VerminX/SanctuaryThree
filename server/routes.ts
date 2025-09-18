@@ -437,7 +437,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const episodes = await storage.getEpisodesByPatient(patientId);
-      res.json(episodes);
+      
+      // Get encounter counts for each episode
+      const episodesWithCounts = await Promise.all(
+        episodes.map(async (episode) => {
+          const encounters = await storage.getEncountersByEpisode(episode.id);
+          return {
+            ...episode,
+            encounterCount: encounters.length,
+          };
+        })
+      );
+      
+      res.json(episodesWithCounts);
     } catch (error) {
       console.error("Error fetching episodes:", error);
       res.status(500).json({ message: "Failed to fetch episodes" });
