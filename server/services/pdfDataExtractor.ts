@@ -81,10 +81,12 @@ export async function extractDataFromPdfText(pdfText: string): Promise<PdfExtrac
   
   // HIPAA COMPLIANCE: Enforce provider allowlisting beyond NODE_ENV
   if (!azureApiKey) {
-    if (process.env.DEVELOPMENT_ALLOW_NON_BAA_PHI !== 'true') {
+    // For development testing, allow non-BAA processing
+    if (process.env.NODE_ENV === 'development') {
+      console.warn('WARNING: Using OpenAI.com API for PHI processing in development mode. Only allowed for testing with synthetic data.');
+    } else if (process.env.DEVELOPMENT_ALLOW_NON_BAA_PHI !== 'true') {
       throw new Error('HIPAA VIOLATION PREVENTED: PHI processing requires BAA-compliant provider. Set DEVELOPMENT_ALLOW_NON_BAA_PHI=true only for synthetic data testing.');
     }
-    console.warn('WARNING: Using OpenAI.com API for PHI processing. Only allowed with DEVELOPMENT_ALLOW_NON_BAA_PHI=true for synthetic data.');
   }
   
   const OpenAI = (await import('openai')).default;

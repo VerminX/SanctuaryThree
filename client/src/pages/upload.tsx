@@ -7,10 +7,11 @@ import { Progress } from "@/components/ui/progress";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { CheckCircle, FileUp, Upload, AlertCircle, Clock, FileText } from "lucide-react";
+import { CheckCircle, FileUp, Upload, AlertCircle, Clock, FileText, ArrowLeft, Users, Calendar } from "lucide-react";
 import { apiRequest } from "@/lib/queryClient";
 import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
+import { Link } from "wouter";
 
 interface FileUpload {
   id: string;
@@ -87,6 +88,7 @@ export default function UploadPage() {
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
   const [uploadProgress, setUploadProgress] = useState<Record<string, number>>({});
   const [extractionResults, setExtractionResults] = useState<Record<string, ExtractionResult>>({});
+  const [createdRecords, setCreatedRecords] = useState<Record<string, {patientId: string, encounterId: string, wasNewPatient: boolean}>>({});
 
   // Fetch recent uploads
   const { data: uploads, refetch: refetchUploads } = useQuery<UploadsResponse>({
@@ -180,7 +182,16 @@ export default function UploadPage() {
       const response = await apiRequest('POST', `/api/upload/${uploadId}/create-records`);
       return response.json();
     },
-    onSuccess: (data) => {
+    onSuccess: (data, uploadId) => {
+      // Store the created record information
+      setCreatedRecords(prev => ({
+        ...prev,
+        [uploadId]: {
+          patientId: data.patientId,
+          encounterId: data.encounterId, 
+          wasNewPatient: data.wasNewPatient
+        }
+      }));
       refetchUploads();
       const patientText = data.wasNewPatient ? "New patient created" : "Existing patient updated";
       toast({
@@ -234,11 +245,19 @@ export default function UploadPage() {
 
   return (
     <div className="container mx-auto p-6 space-y-6">
-      <div>
-        <h1 className="text-3xl font-bold text-gray-900 dark:text-white">PDF Upload & Data Extraction</h1>
-        <p className="text-gray-600 dark:text-gray-300 mt-2">
-          Upload patient registration forms and medical records to automatically extract patient and encounter data.
-        </p>
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-3xl font-bold text-gray-900 dark:text-white">PDF Upload & Data Extraction</h1>
+          <p className="text-gray-600 dark:text-gray-300 mt-2">
+            Upload patient registration forms and medical records to automatically extract patient and encounter data.
+          </p>
+        </div>
+        <Link href="/">
+          <Button variant="outline" className="flex items-center gap-2" data-testid="back-to-dashboard">
+            <ArrowLeft className="w-4 h-4" />
+            Back to Dashboard
+          </Button>
+        </Link>
       </div>
 
       {/* Upload Area */}
@@ -447,6 +466,43 @@ export default function UploadPage() {
                             'Create Patient & Encounter Records'
                           )}
                         </Button>
+                      )}
+
+                      {/* Success confirmation when records are created */}
+                      {createdRecords[upload.id] && (
+                        <div className="mt-4 p-4 bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-lg">
+                          <div className="flex items-start gap-3">
+                            <CheckCircle className="w-5 h-5 text-green-600 mt-0.5" />
+                            <div className="flex-1">
+                              <h4 className="font-medium text-green-800 dark:text-green-200 mb-2">
+                                Records Created Successfully!
+                              </h4>
+                              <p className="text-sm text-green-700 dark:text-green-300 mb-3">
+                                {createdRecords[upload.id].wasNewPatient ? 'New patient' : 'Existing patient'} and encounter records have been added to the system.
+                              </p>
+                              <div className="flex flex-wrap gap-2">
+                                <Link href={`/patients/${createdRecords[upload.id].patientId}`}>
+                                  <Button size="sm" variant="outline" className="flex items-center gap-2">
+                                    <Users className="w-4 h-4" />
+                                    View Patient
+                                  </Button>
+                                </Link>
+                                <Link href={`/patients/${createdRecords[upload.id].patientId}/encounters/${createdRecords[upload.id].encounterId}`}>
+                                  <Button size="sm" variant="outline" className="flex items-center gap-2">
+                                    <Calendar className="w-4 h-4" />
+                                    View Encounter
+                                  </Button>
+                                </Link>
+                                <Link href="/">
+                                  <Button size="sm" variant="default" className="flex items-center gap-2">
+                                    <ArrowLeft className="w-4 h-4" />
+                                    Dashboard
+                                  </Button>
+                                </Link>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
                       )}
                     </div>
                   )}
