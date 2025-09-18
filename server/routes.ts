@@ -419,6 +419,30 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  app.get('/api/patients/:patientId/episodes', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const { patientId } = req.params;
+      
+      const patient = await storage.getPatient(patientId);
+      if (!patient) {
+        return res.status(404).json({ message: "Patient not found" });
+      }
+
+      // Verify user has access to tenant
+      const userTenantRole = await storage.getUserTenantRole(userId, patient.tenantId);
+      if (!userTenantRole) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+
+      const episodes = await storage.getEpisodesByPatient(patientId);
+      res.json(episodes);
+    } catch (error) {
+      console.error("Error fetching episodes:", error);
+      res.status(500).json({ message: "Failed to fetch episodes" });
+    }
+  });
+
   // Update encounter
   app.put('/api/encounters/:encounterId', isAuthenticated, async (req: any, res) => {
     try {
