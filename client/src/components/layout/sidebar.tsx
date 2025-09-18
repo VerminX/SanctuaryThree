@@ -13,7 +13,8 @@ import {
   ChevronDown,
   Moon,
   TestTube2,
-  Upload
+  Upload,
+  Calendar
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -21,6 +22,7 @@ import { cn } from "@/lib/utils";
 const navigationItems = [
   { href: "/", label: "Dashboard", icon: BarChart3 },
   { href: "/patients", label: "Patients", icon: Users },
+  { href: "/episodes", label: "Episodes", icon: Calendar },
   { href: "/encounters", label: "Encounters", icon: ClipboardList },
   { href: "/upload", label: "PDF Upload", icon: Upload },
   { href: "/eligibility", label: "Eligibility Analysis", icon: SearchCheck },
