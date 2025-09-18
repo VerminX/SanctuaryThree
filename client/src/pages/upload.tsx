@@ -54,7 +54,7 @@ interface ExtractionResult {
     comorbidities?: string[];
     assessment?: string;
     plan?: string;
-  };
+  }[];
   canCreateRecords: boolean;
 }
 
@@ -88,7 +88,7 @@ export default function UploadPage() {
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
   const [uploadProgress, setUploadProgress] = useState<Record<string, number>>({});
   const [extractionResults, setExtractionResults] = useState<Record<string, ExtractionResult>>({});
-  const [createdRecords, setCreatedRecords] = useState<Record<string, {patientId: string, encounterId: string, wasNewPatient: boolean}>>({});
+  const [createdRecords, setCreatedRecords] = useState<Record<string, {patientId: string, encounterIds: string[], episodeId?: string, wasNewPatient: boolean, wasNewEpisode?: boolean}>>({});
 
   // Fetch recent uploads
   const { data: uploads, refetch: refetchUploads } = useQuery<UploadsResponse>({
@@ -193,20 +193,29 @@ export default function UploadPage() {
       return response.json();
     },
     onSuccess: (data, uploadId) => {
-      // Store the created record information
+      // Store the created record information - handle both new multi-encounter and legacy single encounter format
+      const encounterIds = data.encounterIds || (data.encounterId ? [data.encounterId] : []);
+      const encountersCreated = data.encountersCreated || encounterIds.length || 1;
+      
       setCreatedRecords(prev => ({
         ...prev,
         [uploadId]: {
           patientId: data.patientId,
-          encounterId: data.encounterId, 
-          wasNewPatient: data.wasNewPatient
+          encounterIds: encounterIds,
+          episodeId: data.episodeId,
+          wasNewPatient: data.wasNewPatient,
+          wasNewEpisode: data.wasNewEpisode
         }
       }));
       refetchUploads();
+      
       const patientText = data.wasNewPatient ? "New patient created" : "Existing patient updated";
+      const encounterText = encountersCreated > 1 ? `${encountersCreated} encounter records` : "encounter record";
+      const episodeText = data.wasNewEpisode && data.episodeId ? ` Episode ID: ${data.episodeId}` : "";
+      
       toast({
         title: "Records Created Successfully",
-        description: `${patientText} and encounter record added. Patient ID: ${data.patientId}`,
+        description: `${patientText} and ${encounterText} added. Patient ID: ${data.patientId}${episodeText}`,
       });
     },
     onError: (error: any) => {
@@ -519,20 +528,36 @@ export default function UploadPage() {
                         </div>
                       )}
 
-                      {extractionResults[upload.id].encounterData && (
+                      {extractionResults[upload.id].encounterData && extractionResults[upload.id].encounterData.length > 0 && (
                         <div className="mb-4">
-                          <h5 className="font-medium text-sm text-gray-700 dark:text-gray-300 mb-2">Encounter Information</h5>
-                          <div className="text-sm space-y-1">
-                            {extractionResults[upload.id].encounterData.encounterDate && (
-                              <div data-testid={`encounter-date-${upload.id}`}>
-                                <strong>Date:</strong> {extractionResults[upload.id].encounterData.encounterDate}
+                          <h5 className="font-medium text-sm text-gray-700 dark:text-gray-300 mb-2">
+                            Encounter Information ({extractionResults[upload.id].encounterData.length} encounter{extractionResults[upload.id].encounterData.length > 1 ? 's' : ''})
+                          </h5>
+                          <div className="text-sm space-y-3">
+                            {extractionResults[upload.id].encounterData.map((encounter, index) => (
+                              <div key={index} className={`${index > 0 ? 'border-t border-gray-200 dark:border-gray-600 pt-2' : ''}`}>
+                                {extractionResults[upload.id].encounterData.length > 1 && (
+                                  <div className="font-medium text-gray-600 dark:text-gray-400 mb-1">
+                                    Encounter {index + 1}
+                                  </div>
+                                )}
+                                {encounter.encounterDate && (
+                                  <div data-testid={`encounter-date-${upload.id}-${index}`}>
+                                    <strong>Date:</strong> {encounter.encounterDate}
+                                  </div>
+                                )}
+                                {encounter.woundDetails?.type && (
+                                  <div data-testid={`wound-type-${upload.id}-${index}`}>
+                                    <strong>Wound Type:</strong> {encounter.woundDetails.type}
+                                  </div>
+                                )}
+                                {encounter.woundDetails?.location && (
+                                  <div data-testid={`wound-location-${upload.id}-${index}`}>
+                                    <strong>Location:</strong> {encounter.woundDetails.location}
+                                  </div>
+                                )}
                               </div>
-                            )}
-                            {extractionResults[upload.id].encounterData.woundDetails?.type && (
-                              <div data-testid={`wound-type-${upload.id}`}>
-                                <strong>Wound Type:</strong> {extractionResults[upload.id].encounterData.woundDetails.type}
-                              </div>
-                            )}
+                            ))}
                           </div>
                         </div>
                       )}
@@ -596,10 +621,10 @@ export default function UploadPage() {
                                     View Patient
                                   </Button>
                                 </Link>
-                                <Link href={`/patients/${createdRecords[upload.id].patientId}/encounters/${createdRecords[upload.id].encounterId}`}>
+                                <Link href={`/patients/${createdRecords[upload.id].patientId}/encounters/${createdRecords[upload.id].encounterIds[0]}`}>
                                   <Button size="sm" variant="outline" className="flex items-center gap-2">
                                     <Calendar className="w-4 h-4" />
-                                    View Encounter
+                                    View Encounters ({createdRecords[upload.id].encounterIds.length})
                                   </Button>
                                 </Link>
                                 <Link href="/">

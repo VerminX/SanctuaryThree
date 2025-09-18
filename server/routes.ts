@@ -2242,76 +2242,97 @@ export async function registerRoutes(app: Express): Promise<Server> {
           console.log(`Created new patient: ${patientId}`);
         }
 
-        // Decrypt and process encounter data
+        // Process multiple encounters from PDF
         const { decryptEncounterNotes } = await import('./services/encryption');
         
-        const decryptedEncounterData = {
-          date: encounterData?.encounterDate ? new Date(encounterData.encounterDate) : new Date(),
-          notes: encounterData?.notes ? decryptEncounterNotes(encounterData.notes) : [],
-          assessment: encounterData?.assessment ? decryptPHI(encounterData.assessment) : '',
-          plan: encounterData?.plan ? decryptPHI(encounterData.plan) : '',
-          woundDetails: encounterData?.woundDetails ? JSON.parse(decryptPHI(encounterData.woundDetails)) : {},
-          conservativeCare: encounterData?.conservativeCare ? JSON.parse(decryptPHI(encounterData.conservativeCare)) : {},
-          infectionStatus: encounterData?.infectionStatus || 'None',
-          comorbidities: encounterData?.comorbidities || []
-        };
-
-        // Episode creation logic - determine if new episode needed or use existing
-        let episodeId: string | null = null;
+        // Ensure encounterData is an array (handle both old single encounter and new multiple encounter formats)
+        const encountersArray = Array.isArray(encounterData) ? encounterData : [encounterData];
         
-        if (decryptedEncounterData.woundDetails && Object.keys(decryptedEncounterData.woundDetails).length > 0) {
-          const woundType = decryptedEncounterData.woundDetails.type || 'General Wound Care';
-          const woundLocation = decryptedEncounterData.woundDetails.location || 'Not specified';
-          const primaryDiagnosis = decryptedEncounterData.assessment || 'Wound care assessment';
-          
-          // Check for existing active episodes for this patient with similar wound characteristics
-          const existingEpisodes = await storage.getEpisodesByPatient(patientId);
-          let matchingEpisode = null;
-          
-          for (const episode of existingEpisodes) {
-            // Match on wound type and location, and episode is still active (no end date)
-            if (episode.status === 'active' && 
-                episode.woundType === woundType && 
-                episode.woundLocation === woundLocation &&
-                !episode.episodeEndDate) {
-              matchingEpisode = episode;
-              break;
-            }
-          }
-          
-          if (matchingEpisode) {
-            // Use existing episode
-            episodeId = matchingEpisode.id;
-            console.log(`Using existing episode: ${episodeId} for wound type: ${woundType}`);
-          } else {
-            // Create new episode
-            const newEpisode = await storage.createEpisode({
-              patientId,
-              woundType,
-              woundLocation,
-              episodeStartDate: decryptedEncounterData.date,
-              status: 'active',
-              primaryDiagnosis
-            });
-            
-            episodeId = newEpisode.id;
-            console.log(`Created new episode: ${episodeId} for wound type: ${woundType}, location: ${woundLocation}`);
-          }
+        if (encountersArray.length === 0) {
+          return res.status(400).json({ message: "No encounter data found in PDF" });
         }
 
-        // Create encounter with encrypted data
-        const { encryptEncounterNotes, encryptPHI } = await import('./services/encryption');
+        // Decrypt all encounters
+        const decryptedEncounters = encountersArray.map((encounter, index) => ({
+          date: encounter?.encounterDate ? new Date(encounter.encounterDate) : new Date(),
+          notes: encounter?.notes ? decryptEncounterNotes(encounter.notes) : [],
+          assessment: encounter?.assessment ? decryptPHI(encounter.assessment) : '',
+          plan: encounter?.plan ? decryptPHI(encounter.plan) : '',
+          woundDetails: encounter?.woundDetails ? JSON.parse(decryptPHI(encounter.woundDetails)) : {},
+          conservativeCare: encounter?.conservativeCare ? JSON.parse(decryptPHI(encounter.conservativeCare)) : {},
+          infectionStatus: encounter?.infectionStatus || 'None',
+          comorbidities: encounter?.comorbidities || [],
+          originalIndex: index
+        }));
+
+        console.log(`Processing ${decryptedEncounters.length} encounters from PDF`);
+
+        // Episode creation logic - ALWAYS create episode for multi-encounter PDFs
+        let episodeId: string | null = null;
         
-        const newEncounter = await storage.createEncounter({
-          patientId,
-          episodeId,
-          date: decryptedEncounterData.date,
-          encryptedNotes: encryptEncounterNotes(decryptedEncounterData.notes),
-          woundDetails: decryptedEncounterData.woundDetails,
-          conservativeCare: decryptedEncounterData.conservativeCare,
-          infectionStatus: decryptedEncounterData.infectionStatus,
-          comorbidities: decryptedEncounterData.comorbidities
-        });
+        // Use the first encounter with wound details, or fallback to first encounter with safe defaults
+        const firstEncounterWithWound = decryptedEncounters.find(enc => 
+          enc.woundDetails && Object.keys(enc.woundDetails).length > 0
+        ) || decryptedEncounters[0];
+        
+        // ALWAYS create episode - use wound details if available, safe defaults if not
+        const woundType = firstEncounterWithWound.woundDetails?.type || 'General Wound Care';
+        const woundLocation = firstEncounterWithWound.woundDetails?.location || 'Not specified';
+        const primaryDiagnosis = firstEncounterWithWound.assessment || 'Wound care assessment';
+        
+        // Check for existing active episodes for this patient with similar wound characteristics
+        const existingEpisodes = await storage.getEpisodesByPatient(patientId);
+        let matchingEpisode = null;
+        
+        for (const episode of existingEpisodes) {
+          // Match on wound type and location, and episode is still active (no end date)
+          if (episode.status === 'active' && 
+              episode.woundType === woundType && 
+              episode.woundLocation === woundLocation &&
+              !episode.episodeEndDate) {
+            matchingEpisode = episode;
+            break;
+          }
+        }
+        
+        if (matchingEpisode) {
+          // Use existing episode
+          episodeId = matchingEpisode.id;
+          console.log(`Using existing episode: ${episodeId} for wound type: ${woundType}`);
+        } else {
+          // Create new episode for all encounters
+          const newEpisode = await storage.createEpisode({
+            patientId,
+            woundType,
+            woundLocation,
+            episodeStartDate: firstEncounterWithWound.date,
+            status: 'active',
+            primaryDiagnosis
+          });
+          
+          episodeId = newEpisode.id;
+          console.log(`Created new episode: ${episodeId} for wound type: ${woundType}, location: ${woundLocation}`);
+        }
+
+        // Create all encounters and link them to the same episode
+        const { encryptEncounterNotes, encryptPHI } = await import('./services/encryption');
+        const createdEncounters = [];
+        
+        for (const encounter of decryptedEncounters) {
+          const newEncounter = await storage.createEncounter({
+            patientId,
+            episodeId,
+            date: encounter.date,
+            encryptedNotes: encryptEncounterNotes(encounter.notes),
+            woundDetails: encounter.woundDetails,
+            conservativeCare: encounter.conservativeCare,
+            infectionStatus: encounter.infectionStatus,
+            comorbidities: encounter.comorbidities
+          });
+          
+          createdEncounters.push(newEncounter);
+          console.log(`Created encounter ${newEncounter.id} for episode ${episodeId} on ${encounter.date.toDateString()}`);
+        }
 
         // Update extraction data status to completed and link to episode if created
         if (episodeId) {
@@ -2329,13 +2350,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
         decryptedPatientData.address = '';
         decryptedPatientData.insuranceId = '';
         
-        decryptedEncounterData.notes = [];
-        decryptedEncounterData.assessment = '';
-        decryptedEncounterData.plan = '';
+        // Clear PHI from all decrypted encounters
+        decryptedEncounters.forEach(encounter => {
+          encounter.notes = [];
+          encounter.assessment = '';
+          encounter.plan = '';
+          Object.keys(encounter).forEach(key => { (encounter as any)[key] = null; });
+        });
         
         // Null out the objects to ensure garbage collection
         Object.keys(decryptedPatientData).forEach(key => { (decryptedPatientData as any)[key] = null; });
-        Object.keys(decryptedEncounterData).forEach(key => { (decryptedEncounterData as any)[key] = null; });
 
         // Log audit event for patient/encounter creation
         await storage.createAuditLog({
@@ -2364,9 +2388,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
 
         res.status(201).json({
-          message: "Patient and encounter records created successfully",
+          message: `Patient and ${createdEncounters.length} encounter records created successfully`,
           patientId,
-          encounterId: newEncounter.id,
+          encounterIds: createdEncounters.map(enc => enc.id),
+          encountersCreated: createdEncounters.length,
           episodeId: episodeId || null,
           wasNewPatient: !existingPatient,
           wasNewEpisode: episodeId !== null,

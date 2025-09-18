@@ -59,7 +59,7 @@ export interface ExtractedEncounterData {
 
 export interface PdfExtractionResult {
   patientData: ExtractedPatientData;
-  encounterData: ExtractedEncounterData;
+  encounterData: ExtractedEncounterData[]; // Array to support multiple encounters from single PDF
   confidence: number; // 0-1 score of extraction confidence
   extractedText: string; // The raw text that was processed
   warnings: string[]; // Any issues or missing data warnings
@@ -114,8 +114,11 @@ export async function extractDataFromPdfText(pdfText: string): Promise<PdfExtrac
     : pdfText;
   const systemPrompt = `You are a medical document data extraction specialist. Extract structured patient and encounter data from medical documents.
 
+CRITICAL: If the document contains MULTIPLE ENCOUNTERS/VISITS (different dates), extract them as separate encounter objects in an array.
+
 Instructions:
 - Extract ONLY data that is explicitly stated in the document
+- If multiple encounters/visits with different dates exist, create separate encounter objects for each
 - Use null/undefined for missing fields rather than making assumptions
 - Provide a confidence score (0-1) based on data completeness and clarity
 - Include warnings for any missing critical information
@@ -137,37 +140,39 @@ Return JSON in this exact format:
     "address": "string | null",
     "insuranceId": "string | null"
   },
-  "encounterData": {
-    "encounterDate": "YYYY-MM-DD | null",
-    "notes": ["string"] | null,
-    "woundDetails": {
-      "type": "string | null",
-      "location": "string | null", 
-      "measurements": {
-        "length": number | null,
-        "width": number | null,
-        "depth": number | null,
-        "area": number | null
+  "encounterData": [
+    {
+      "encounterDate": "YYYY-MM-DD | null",
+      "notes": ["string"] | null,
+      "woundDetails": {
+        "type": "string | null",
+        "location": "string | null", 
+        "measurements": {
+          "length": number | null,
+          "width": number | null,
+          "depth": number | null,
+          "area": number | null
+        },
+        "duration": "string | null",
+        "woundBed": "string | null",
+        "drainage": "string | null",
+        "periwoundSkin": "string | null"
       },
-      "duration": "string | null",
-      "woundBed": "string | null",
-      "drainage": "string | null",
-      "periwoundSkin": "string | null"
-    },
-    "conservativeCare": {
-      "offloading": ["string"] | null,
-      "woundCare": ["string"] | null,
-      "debridement": ["string"] | null,
-      "infectionControl": ["string"] | null,
-      "vascularAssessment": ["string"] | null,
-      "glycemicControl": ["string"] | null,
-      "duration": "string | null"
-    },
-    "infectionStatus": "string | null",
-    "comorbidities": ["string"] | null,
-    "assessment": "string | null",
-    "plan": "string | null"
-  },
+      "conservativeCare": {
+        "offloading": ["string"] | null,
+        "woundCare": ["string"] | null,
+        "debridement": ["string"] | null,
+        "infectionControl": ["string"] | null,
+        "vascularAssessment": ["string"] | null,
+        "glycemicControl": ["string"] | null,
+        "duration": "string | null"
+      },
+      "infectionStatus": "string | null",
+      "comorbidities": ["string"] | null,
+      "assessment": "string | null",
+      "plan": "string | null"
+    }
+  ],
   "confidence": number, // 0.0 to 1.0
   "warnings": ["string"]
 }`;
@@ -193,8 +198,8 @@ Return JSON in this exact format:
     const result = JSON.parse(response.choices[0].message.content || '{}');
     
     // Validate the response structure
-    if (!result.patientData || !result.encounterData || typeof result.confidence !== 'number') {
-      throw new Error('Invalid response format from AI data extraction');
+    if (!result.patientData || !result.encounterData || !Array.isArray(result.encounterData) || result.encounterData.length === 0 || typeof result.confidence !== 'number') {
+      throw new Error('Invalid response format from AI data extraction - encounterData must be a non-empty array');
     }
 
     // Add the original text and return structured result
@@ -223,14 +228,23 @@ export function validateExtractionCompleteness(result: PdfExtractionResult): {
   if (!result.patientData.dateOfBirth) missingCriticalFields.push('Date of Birth');
   if (!result.patientData.mrn) missingCriticalFields.push('Medical Record Number');
   
-  // Check critical encounter fields
-  if (!result.encounterData.encounterDate) missingCriticalFields.push('Encounter Date');
-  if (!result.encounterData.woundDetails?.type) missingCriticalFields.push('Wound Type');
-  if (!result.encounterData.woundDetails?.location) missingCriticalFields.push('Wound Location');
+  // Check critical encounter fields for each encounter
+  if (!result.encounterData || result.encounterData.length === 0) {
+    missingCriticalFields.push('No encounters found');
+  } else {
+    for (let i = 0; i < result.encounterData.length; i++) {
+      const encounter = result.encounterData[i];
+      if (!encounter.encounterDate) missingCriticalFields.push(`Encounter ${i + 1} Date`);
+      if (!encounter.woundDetails?.type) missingCriticalFields.push(`Encounter ${i + 1} Wound Type`);
+      if (!encounter.woundDetails?.location) missingCriticalFields.push(`Encounter ${i + 1} Wound Location`);
+    }
+  }
   
-  const totalCriticalFields = 7;
-  const foundCriticalFields = totalCriticalFields - missingCriticalFields.length;
-  const completenessScore = foundCriticalFields / totalCriticalFields;
+  const basePatientFields = 4; // firstName, lastName, dateOfBirth, mrn
+  const encounterFieldsPerEncounter = 3; // date, woundType, woundLocation
+  const totalCriticalFields = basePatientFields + (result.encounterData.length * encounterFieldsPerEncounter);
+  const foundCriticalFields = Math.max(0, totalCriticalFields - missingCriticalFields.length);
+  const completenessScore = totalCriticalFields > 0 ? foundCriticalFields / totalCriticalFields : 0;
   
   return {
     isComplete: missingCriticalFields.length === 0,
