@@ -1971,6 +1971,28 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const { extractDataFromPdfText, validateExtractionCompleteness } = await import('./services/pdfDataExtractor');
         let extractionResult = await extractDataFromPdfText(extractedText);
 
+        // Step 2.5: Normalize encounterData to array format (handles both object and array formats)
+        if (!Array.isArray(extractionResult.encounterData)) {
+          const encounterObj = extractionResult.encounterData as any;
+          const encounters = [];
+          
+          // Check if it's object format with numbered keys
+          const keys = Object.keys(encounterObj).filter(key => /^\d+$/.test(key)).sort();
+          if (keys.length > 0) {
+            // Convert object format to array
+            for (const key of keys) {
+              if (encounterObj[key] && typeof encounterObj[key] === 'object') {
+                encounters.push(encounterObj[key]);
+              }
+            }
+            extractionResult.encounterData = encounters;
+            console.log(`Normalized ${encounters.length} encounters from object to array format in extract-data`);
+          } else {
+            // Single encounter object (legacy format)
+            extractionResult.encounterData = [encounterObj];
+          }
+        }
+
         // Step 3: Validate completeness of extraction
         const validation = validateExtractionCompleteness(extractionResult);
 
@@ -1993,15 +2015,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
         };
 
         // Encrypt encounter PHI data (notes, wound details with potential patient identifiers)
-        const encryptedEncounterData = {
-          ...extractionResult.encounterData,
-          notes: extractionResult.encounterData.notes ? encryptEncounterNotes(extractionResult.encounterData.notes) : null,
-          assessment: extractionResult.encounterData.assessment ? encryptPHI(extractionResult.encounterData.assessment) : null,
-          plan: extractionResult.encounterData.plan ? encryptPHI(extractionResult.encounterData.plan) : null,
+        // Handle array of encounters
+        const encryptedEncounterData = extractionResult.encounterData.map((encounter: any) => ({
+          ...encounter,
+          notes: encounter.notes ? encryptEncounterNotes(encounter.notes) : null,
+          assessment: encounter.assessment ? encryptPHI(encounter.assessment) : null,
+          plan: encounter.plan ? encryptPHI(encounter.plan) : null,
           // Wound details, conservative care, etc. may contain PHI - encrypt as JSON strings
-          woundDetails: extractionResult.encounterData.woundDetails ? encryptPHI(JSON.stringify(extractionResult.encounterData.woundDetails)) : null,
-          conservativeCare: extractionResult.encounterData.conservativeCare ? encryptPHI(JSON.stringify(extractionResult.encounterData.conservativeCare)) : null,
-        };
+          woundDetails: encounter.woundDetails ? encryptPHI(JSON.stringify(encounter.woundDetails)) : null,
+          conservativeCare: encounter.conservativeCare ? encryptPHI(JSON.stringify(encounter.conservativeCare)) : null,
+        }));
 
         // Store extraction results in the database with comprehensive PHI encryption
         const { PDF_VALIDATION_STATUS } = await import('../shared/schema');
@@ -2057,7 +2080,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         // Clear plaintext from memory AFTER response is sent (HIPAA security)
         extractedText = '';
         extractionResult.patientData = {};
-        extractionResult.encounterData = {};
+        extractionResult.encounterData = [];
         extractionResult = null as any;
 
       } catch (extractionError) {
@@ -2245,8 +2268,29 @@ export async function registerRoutes(app: Express): Promise<Server> {
         // Process multiple encounters from PDF
         const { decryptEncounterNotes } = await import('./services/encryption');
         
-        // Ensure encounterData is an array (handle both old single encounter and new multiple encounter formats)
-        const encountersArray = Array.isArray(encounterData) ? encounterData : [encounterData];
+        // Handle conversion from object format {"0": encounter1, "1": encounter2} to array format
+        let encountersArray;
+        if (Array.isArray(encounterData)) {
+          encountersArray = encounterData;
+        } else if (encounterData && typeof encounterData === 'object') {
+          // Check if it's the object format with numbered keys
+          const keys = Object.keys(encounterData).filter(key => /^\d+$/.test(key)).sort();
+          if (keys.length > 0) {
+            // Convert object format to array
+            encountersArray = [];
+            for (const key of keys) {
+              if (encounterData[key] && typeof encounterData[key] === 'object') {
+                encountersArray.push(encounterData[key]);
+              }
+            }
+            console.log(`Converted ${encountersArray.length} encounters from object to array format during record creation`);
+          } else {
+            // Single encounter object (legacy format)
+            encountersArray = [encounterData];
+          }
+        } else {
+          encountersArray = [];
+        }
         
         if (encountersArray.length === 0) {
           return res.status(400).json({ message: "No encounter data found in PDF" });
