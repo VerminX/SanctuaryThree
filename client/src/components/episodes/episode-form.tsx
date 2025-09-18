@@ -81,6 +81,7 @@ export default function EpisodeForm({ onSubmit, onCancel, isLoading, patientId, 
       refetchCurrentEncounters();
       queryClient.invalidateQueries({ queryKey: ["/api/patients", patientId, "encounters"] });
       queryClient.invalidateQueries({ queryKey: ["/api/episodes"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/episodes", episode.id, "encounters"] });
       toast({
         title: "Success",
         description: "Encounter added to episode",
@@ -106,6 +107,7 @@ export default function EpisodeForm({ onSubmit, onCancel, isLoading, patientId, 
       refetchCurrentEncounters();
       queryClient.invalidateQueries({ queryKey: ["/api/patients", patientId, "encounters"] });
       queryClient.invalidateQueries({ queryKey: ["/api/episodes"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/episodes", episode.id, "encounters"] });
       toast({
         title: "Success",
         description: "Encounter removed from episode",
