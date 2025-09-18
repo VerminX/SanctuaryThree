@@ -378,11 +378,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const encounters = await storage.getEncountersByPatient(patientId);
       
-      // Decrypt encounter notes
-      const decryptedEncounters = encounters.map(encounter => ({
-        ...encounter,
-        notes: decryptEncounterNotes(encounter.encryptedNotes as string[]),
-      }));
+      // Decrypt encounter notes with safe error handling
+      const decryptedEncounters = encounters.map(encounter => {
+        try {
+          return {
+            ...encounter,
+            notes: decryptEncounterNotes(encounter.encryptedNotes as string[]),
+          };
+        } catch (error: any) {
+          console.error(`Error decrypting encounter ${encounter.id} notes:`, error.message);
+          return {
+            ...encounter,
+            notes: ['[DECRYPTION ERROR - ENCRYPTED DATA CORRUPTED]'],
+          };
+        }
+      });
 
       res.json(decryptedEncounters);
     } catch (error) {
@@ -1924,21 +1934,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
         // Decrypt the extracted patient data
         const { decryptPHI } = await import('./services/encryption');
         
-        const patientData = extractedData.extractedPatientData;
-        const encounterData = extractedData.extractedEncounterData;
+        const patientData = extractedData.extractedPatientData as any;
+        const encounterData = extractedData.extractedEncounterData as any;
         
         // Decrypt patient PHI fields
         const decryptedPatientData = {
-          mrn: patientData.mrn ? decryptPHI(patientData.mrn) : '',
-          firstName: patientData.firstName ? decryptPHI(patientData.firstName) : '',
-          lastName: patientData.lastName ? decryptPHI(patientData.lastName) : '',
-          dateOfBirth: patientData.dateOfBirth ? decryptPHI(patientData.dateOfBirth) : '',
-          phoneNumber: patientData.phoneNumber ? decryptPHI(patientData.phoneNumber) : undefined,
-          address: patientData.address ? decryptPHI(patientData.address) : undefined,
-          insuranceId: patientData.insuranceId ? decryptPHI(patientData.insuranceId) : undefined,
-          payerType: patientData.payerType || 'Original Medicare',
-          planName: patientData.planName,
-          macRegion: patientData.macRegion
+          mrn: patientData?.mrn ? decryptPHI(patientData.mrn) : '',
+          firstName: patientData?.firstName ? decryptPHI(patientData.firstName) : '',
+          lastName: patientData?.lastName ? decryptPHI(patientData.lastName) : '',
+          dateOfBirth: patientData?.dateOfBirth ? decryptPHI(patientData.dateOfBirth) : '',
+          phoneNumber: patientData?.phoneNumber ? decryptPHI(patientData.phoneNumber) : undefined,
+          address: patientData?.address ? decryptPHI(patientData.address) : undefined,
+          insuranceId: patientData?.insuranceId ? decryptPHI(patientData.insuranceId) : undefined,
+          payerType: patientData?.payerType || 'Original Medicare',
+          planName: patientData?.planName,
+          macRegion: patientData?.macRegion
         };
 
         // Check if patient already exists by MRN
@@ -1993,14 +2003,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const { decryptEncounterNotes } = await import('./services/encryption');
         
         const decryptedEncounterData = {
-          date: encounterData.encounterDate ? new Date(encounterData.encounterDate) : new Date(),
-          notes: encounterData.notes ? decryptEncounterNotes(encounterData.notes) : [],
-          assessment: encounterData.assessment ? decryptPHI(encounterData.assessment) : '',
-          plan: encounterData.plan ? decryptPHI(encounterData.plan) : '',
-          woundDetails: encounterData.woundDetails ? JSON.parse(decryptPHI(encounterData.woundDetails)) : {},
-          conservativeCare: encounterData.conservativeCare ? JSON.parse(decryptPHI(encounterData.conservativeCare)) : {},
-          infectionStatus: encounterData.infectionStatus || 'None',
-          comorbidities: encounterData.comorbidities || []
+          date: encounterData?.encounterDate ? new Date(encounterData.encounterDate) : new Date(),
+          notes: encounterData?.notes ? decryptEncounterNotes(encounterData.notes) : [],
+          assessment: encounterData?.assessment ? decryptPHI(encounterData.assessment) : '',
+          plan: encounterData?.plan ? decryptPHI(encounterData.plan) : '',
+          woundDetails: encounterData?.woundDetails ? JSON.parse(decryptPHI(encounterData.woundDetails)) : {},
+          conservativeCare: encounterData?.conservativeCare ? JSON.parse(decryptPHI(encounterData.conservativeCare)) : {},
+          infectionStatus: encounterData?.infectionStatus || 'None',
+          comorbidities: encounterData?.comorbidities || []
         };
 
         // Create encounter with encrypted data
@@ -2033,8 +2043,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         decryptedEncounterData.plan = '';
         
         // Null out the objects to ensure garbage collection
-        Object.keys(decryptedPatientData).forEach(key => { decryptedPatientData[key] = null; });
-        Object.keys(decryptedEncounterData).forEach(key => { decryptedEncounterData[key] = null; });
+        Object.keys(decryptedPatientData).forEach(key => { (decryptedPatientData as any)[key] = null; });
+        Object.keys(decryptedEncounterData).forEach(key => { (decryptedEncounterData as any)[key] = null; });
 
         // Log audit event
         await storage.createAuditLog({
