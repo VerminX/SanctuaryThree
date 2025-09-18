@@ -1967,34 +1967,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
           return res.status(500).json({ message: "Internal error: extracted text is missing for processed file" });
         }
 
-        // Step 2: Use AI to extract structured data from the text
+        // Step 2: Use AI to extract structured data from the text (includes enhanced encounter normalization)
         const { extractDataFromPdfText, validateExtractionCompleteness } = await import('./services/pdfDataExtractor');
         let extractionResult = await extractDataFromPdfText(extractedText);
 
-        // Step 2.5: Normalize encounterData to array format (handles both object and array formats)
-        if (!Array.isArray(extractionResult.encounterData)) {
-          const encounterObj = extractionResult.encounterData as any;
-          const encounters = [];
-          
-          // Check if it's object format with numbered keys
-          const keys = Object.keys(encounterObj).filter(key => /^\d+$/.test(key)).sort();
-          if (keys.length > 0) {
-            // Convert object format to array
-            for (const key of keys) {
-              if (encounterObj[key] && typeof encounterObj[key] === 'object') {
-                encounters.push(encounterObj[key]);
-              }
-            }
-            extractionResult.encounterData = encounters;
-            console.log(`Normalized ${encounters.length} encounters from object to array format in extract-data`);
-          } else {
-            // Single encounter object (legacy format)
-            extractionResult.encounterData = [encounterObj];
-          }
-        }
-
-        // Step 3: Validate completeness of extraction
+        // Step 3: Validate completeness of extraction with comprehensive clinical information checking
         const validation = validateExtractionCompleteness(extractionResult);
+        
+        // Log comprehensiveness warnings for completeness tracking
+        if (validation.comprehensivenessWarnings.length > 0) {
+          console.warn('EXTRACTION COMPREHENSIVENESS WARNINGS:', validation.comprehensivenessWarnings);
+        }
 
         // Step 4: Encrypt ALL PHI before storing (HIPAA compliance)
         const encryptedText = encryptPHI(extractionResult.extractedText);

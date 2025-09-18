@@ -20,6 +20,15 @@ export interface ExtractedEncounterData {
   // Encounter basic info
   encounterDate?: string; // YYYY-MM-DD format
   notes?: string[];
+  clinicalFindings?: string[]; // Comprehensive clinical observations and findings
+  
+  // Treatment details
+  treatmentDetails?: {
+    proceduresPerformed?: string[];
+    applicationNumbers?: string[];
+    treatmentResponse?: string;
+    complications?: string[];
+  };
   
   // Wound details
   woundDetails?: {
@@ -30,23 +39,46 @@ export interface ExtractedEncounterData {
       width?: number;
       depth?: number;
       area?: number;
+      unit?: string; // cm, mm, etc.
     };
     duration?: string; // How long wound has existed
     woundBed?: string;
     drainage?: string;
     periwoundSkin?: string;
+    healingProgression?: string; // Progress notes and healing status
+    woundGrade?: string; // Wagner grade, etc.
   };
   
-  // Conservative care documentation
+  // Conservative care documentation - enhanced structure
   conservativeCare?: {
-    offloading?: string[];
-    woundCare?: string[];
-    debridement?: string[];
+    offloading?: {
+      methods?: string[];
+      duration?: string;
+      effectiveness?: string;
+    };
+    woundCare?: {
+      dressings?: string[];
+      frequency?: string;
+      products?: string[];
+    };
+    debridement?: {
+      type?: string[];
+      frequency?: string;
+    };
     infectionControl?: string[];
     vascularAssessment?: string[];
-    glycemicControl?: string[];
+    glycemicControl?: {
+      methods?: string[];
+      targets?: string[];
+      compliance?: string;
+    };
     duration?: string; // How long conservative care attempted
+    overallEffectiveness?: string;
   };
+  
+  // Patient education and follow-up
+  patientEducation?: string[];
+  followUpInstructions?: string[];
   
   // Clinical status
   infectionStatus?: string;
@@ -55,6 +87,7 @@ export interface ExtractedEncounterData {
   // Assessment and plan
   assessment?: string;
   plan?: string;
+  providerRecommendations?: string[];
 }
 
 export interface PdfExtractionResult {
@@ -261,20 +294,50 @@ ${truncatedText}`,
       const encounterObj = result.encounterData as any;
       const encounters = [];
       
-      // Extract numbered encounters (0, 1, 2, etc.) and convert to array
-      const keys = Object.keys(encounterObj).filter(key => /^\d+$/.test(key)).sort();
-      for (const key of keys) {
+      // Enhanced encounter extraction - handle multiple key formats
+      const keys = Object.keys(encounterObj);
+      
+      // First, try to extract encounters with numeric keys (0, 1, 2, etc.)
+      const numericKeys = keys.filter(key => /^\d+$/.test(key)).sort();
+      for (const key of numericKeys) {
         if (encounterObj[key] && typeof encounterObj[key] === 'object') {
           encounters.push(encounterObj[key]);
         }
       }
       
+      // If no numeric keys found, try other encounter patterns
       if (encounters.length === 0) {
+        // Handle encounter1, encounter2, enc1, enc2, etc.
+        const encounterPatternKeys = keys.filter(key => 
+          /^(encounter|enc)\d+$/i.test(key)
+        ).sort();
+        
+        for (const key of encounterPatternKeys) {
+          if (encounterObj[key] && typeof encounterObj[key] === 'object') {
+            encounters.push(encounterObj[key]);
+          }
+        }
+      }
+      
+      // If still no encounters found, check for any object that looks like encounter data
+      if (encounters.length === 0) {
+        for (const key of keys) {
+          const obj = encounterObj[key];
+          if (obj && typeof obj === 'object' && 
+              (obj.encounterDate || obj.woundDetails || obj.notes || obj.assessment)) {
+            encounters.push(obj);
+          }
+        }
+      }
+      
+      if (encounters.length === 0) {
+        console.warn('No valid encounters found in extraction result. Available keys:', keys);
+        console.warn('Encounter object structure:', JSON.stringify(encounterObj, null, 2));
         throw new Error('No valid encounters found in extraction result');
       }
       
       result.encounterData = encounters;
-      console.log(`Converted ${encounters.length} encounters from object to array format`);
+      console.log(`Converted ${encounters.length} encounters from object to array format using enhanced coercion`);
     }
 
     // Final validation
@@ -299,8 +362,10 @@ export function validateExtractionCompleteness(result: PdfExtractionResult): {
   isComplete: boolean;
   missingCriticalFields: string[];
   score: number;
+  comprehensivenessWarnings: string[];
 } {
   const missingCriticalFields: string[] = [];
+  const comprehensivenessWarnings: string[] = [];
   
   // Check critical patient fields
   if (!result.patientData.firstName) missingCriticalFields.push('Patient First Name');
@@ -308,15 +373,45 @@ export function validateExtractionCompleteness(result: PdfExtractionResult): {
   if (!result.patientData.dateOfBirth) missingCriticalFields.push('Date of Birth');
   if (!result.patientData.mrn) missingCriticalFields.push('Medical Record Number');
   
-  // Check critical encounter fields for each encounter
+  // Check critical encounter fields for each encounter with comprehensive validation
   if (!result.encounterData || result.encounterData.length === 0) {
     missingCriticalFields.push('No encounters found');
   } else {
     for (let i = 0; i < result.encounterData.length; i++) {
       const encounter = result.encounterData[i];
-      if (!encounter.encounterDate) missingCriticalFields.push(`Encounter ${i + 1} Date`);
-      if (!encounter.woundDetails?.type) missingCriticalFields.push(`Encounter ${i + 1} Wound Type`);
-      if (!encounter.woundDetails?.location) missingCriticalFields.push(`Encounter ${i + 1} Wound Location`);
+      const encounterPrefix = `Encounter ${i + 1}`;
+      
+      // Essential fields (critical)
+      if (!encounter.encounterDate) missingCriticalFields.push(`${encounterPrefix} Date`);
+      if (!encounter.woundDetails?.type) missingCriticalFields.push(`${encounterPrefix} Wound Type`);
+      if (!encounter.woundDetails?.location) missingCriticalFields.push(`${encounterPrefix} Wound Location`);
+      
+      // Comprehensive clinical information (warnings for completeness)
+      if (!encounter.notes || encounter.notes.length === 0) {
+        comprehensivenessWarnings.push(`${encounterPrefix} missing clinical notes`);
+      }
+      if (!encounter.assessment) {
+        comprehensivenessWarnings.push(`${encounterPrefix} missing assessment`);
+      }
+      if (!encounter.plan) {
+        comprehensivenessWarnings.push(`${encounterPrefix} missing treatment plan`);
+      }
+      
+      // Conservative care validation
+      if (!encounter.conservativeCare) {
+        comprehensivenessWarnings.push(`${encounterPrefix} missing conservative care documentation`);
+      } else {
+        const cc = encounter.conservativeCare;
+        if (!cc.offloading?.methods && !cc.woundCare?.dressings && !cc.debridement?.type && 
+            !cc.infectionControl && !cc.vascularAssessment && !cc.glycemicControl?.methods) {
+          comprehensivenessWarnings.push(`${encounterPrefix} has minimal conservative care details`);
+        }
+      }
+      
+      // Treatment details validation
+      if (!encounter.treatmentDetails?.proceduresPerformed && !encounter.clinicalFindings) {
+        comprehensivenessWarnings.push(`${encounterPrefix} missing detailed clinical findings or procedures`);
+      }
     }
   }
   
@@ -329,6 +424,7 @@ export function validateExtractionCompleteness(result: PdfExtractionResult): {
   return {
     isComplete: missingCriticalFields.length === 0,
     missingCriticalFields,
-    score: completenessScore
+    score: completenessScore,
+    comprehensivenessWarnings
   };
 }
