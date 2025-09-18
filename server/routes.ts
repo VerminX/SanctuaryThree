@@ -2020,11 +2020,55 @@ export async function registerRoutes(app: Express): Promise<Server> {
           comorbidities: encounterData?.comorbidities || []
         };
 
+        // Episode creation logic - determine if new episode needed or use existing
+        let episodeId: string | null = null;
+        
+        if (decryptedEncounterData.woundDetails && Object.keys(decryptedEncounterData.woundDetails).length > 0) {
+          const woundType = decryptedEncounterData.woundDetails.type || 'General Wound Care';
+          const woundLocation = decryptedEncounterData.woundDetails.location || 'Not specified';
+          const primaryDiagnosis = decryptedEncounterData.assessment || 'Wound care assessment';
+          
+          // Check for existing active episodes for this patient with similar wound characteristics
+          const existingEpisodes = await storage.getEpisodesByPatient(patientId);
+          let matchingEpisode = null;
+          
+          for (const episode of existingEpisodes) {
+            // Match on wound type and location, and episode is still active (no end date)
+            if (episode.status === 'active' && 
+                episode.woundType === woundType && 
+                episode.woundLocation === woundLocation &&
+                !episode.episodeEndDate) {
+              matchingEpisode = episode;
+              break;
+            }
+          }
+          
+          if (matchingEpisode) {
+            // Use existing episode
+            episodeId = matchingEpisode.id;
+            console.log(`Using existing episode: ${episodeId} for wound type: ${woundType}`);
+          } else {
+            // Create new episode
+            const newEpisode = await storage.createEpisode({
+              patientId,
+              woundType,
+              woundLocation,
+              episodeStartDate: decryptedEncounterData.date,
+              status: 'active',
+              primaryDiagnosis
+            });
+            
+            episodeId = newEpisode.id;
+            console.log(`Created new episode: ${episodeId} for wound type: ${woundType}, location: ${woundLocation}`);
+          }
+        }
+
         // Create encounter with encrypted data
         const { encryptEncounterNotes, encryptPHI } = await import('./services/encryption');
         
         const newEncounter = await storage.createEncounter({
           patientId,
+          episodeId,
           date: decryptedEncounterData.date,
           encryptedNotes: encryptEncounterNotes(decryptedEncounterData.notes),
           woundDetails: decryptedEncounterData.woundDetails,
@@ -2033,7 +2077,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
           comorbidities: decryptedEncounterData.comorbidities
         });
 
-        // Update extraction data status to completed
+        // Update extraction data status to completed and link to episode if created
+        if (episodeId) {
+          // Update the pdfExtractedData to include episodeId reference
+          await storage.updatePdfExtractedData(extractedData.id, { episodeId });
+        }
         await storage.updatePdfExtractedDataValidation(extractedData.id, 'approved', userId, 'Records created successfully');
 
         // HIPAA SECURITY: Clear plaintext PHI from memory immediately
@@ -2053,7 +2101,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         Object.keys(decryptedPatientData).forEach(key => { (decryptedPatientData as any)[key] = null; });
         Object.keys(decryptedEncounterData).forEach(key => { (decryptedEncounterData as any)[key] = null; });
 
-        // Log audit event
+        // Log audit event for patient/encounter creation
         await storage.createAuditLog({
           tenantId: upload.tenantId,
           userId,
@@ -2065,11 +2113,27 @@ export async function registerRoutes(app: Express): Promise<Server> {
           previousHash: '',
         });
 
+        // Log audit event for episode creation if new episode was created
+        if (episodeId) {
+          await storage.createAuditLog({
+            tenantId: upload.tenantId,
+            userId,
+            action: 'CREATE_EPISODE_FROM_PDF',
+            entity: 'Episode',
+            entityId: episodeId,
+            ipAddress: req.ip,
+            userAgent: req.get('User-Agent'),
+            previousHash: '',
+          });
+        }
+
         res.status(201).json({
           message: "Patient and encounter records created successfully",
           patientId,
           encounterId: newEncounter.id,
+          episodeId: episodeId || null,
           wasNewPatient: !existingPatient,
+          wasNewEpisode: episodeId !== null,
           extractionId: extractedData.id
         });
 

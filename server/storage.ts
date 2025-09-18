@@ -170,6 +170,7 @@ export interface IStorage {
   getPdfExtractedDataByUploadId(uploadId: string): Promise<PdfExtractedData | undefined>; // Alias for compatibility
   getPdfExtractedDataByTenant(tenantId: string): Promise<PdfExtractedData[]>;
   updatePdfExtractedDataValidation(id: string, status: string, reviewedBy: string, comments?: string): Promise<PdfExtractedData>;
+  updatePdfExtractedData(id: string, data: Partial<InsertPdfExtractedData>): Promise<PdfExtractedData>;
   linkPdfExtractedDataToRecords(id: string, patientId?: string, encounterId?: string): Promise<PdfExtractedData>;
 }
 
@@ -948,6 +949,15 @@ export class DatabaseStorage implements IStorage {
     const [updated] = await db
       .update(pdfExtractedData)
       .set(updates)
+      .where(eq(pdfExtractedData.id, id))
+      .returning();
+    return updated;
+  }
+
+  async updatePdfExtractedData(id: string, data: Partial<InsertPdfExtractedData>): Promise<PdfExtractedData> {
+    const [updated] = await db
+      .update(pdfExtractedData)
+      .set({ ...data, updatedAt: new Date() })
       .where(eq(pdfExtractedData.id, id))
       .returning();
     return updated;
