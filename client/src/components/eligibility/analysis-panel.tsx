@@ -4,7 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
-import { Brain, CheckCircle, XCircle, AlertTriangle, ExternalLink, FileText, Calendar } from "lucide-react";
+import { Brain, CheckCircle, XCircle, AlertTriangle, ExternalLink, FileText, Calendar, History, TrendingUp, GitBranch, RotateCcw, Activity, UserCheck } from "lucide-react";
 
 interface EligibilityResult {
   eligibility: "Yes" | "No" | "Unclear";
@@ -17,6 +17,25 @@ interface EligibilityResult {
     effectiveDate: string;
   }>;
   letterBullets: string[];
+  // Enhanced fields for historical context and episode timeline
+  historicalContext?: {
+    totalEpisodes: number;
+    totalEncounters: number;
+    previousEligibilityChecks: number;
+    keyPatterns: string[];
+  };
+  episodeTimeline?: Array<{
+    date: string;
+    encounterType: string;
+    keyFindings: string[];
+    woundProgression: string;
+    careCompliance: string;
+  }>;
+  crossEpisodePatterns?: {
+    woundRecurrence: string[];
+    treatmentResponse: string[];
+    complianceHistory: string[];
+  };
 }
 
 interface AnalysisPanelProps {
@@ -275,6 +294,131 @@ export default function AnalysisPanel({
                         </li>
                       ))}
                     </ul>
+                  </div>
+                )}
+
+                {/* Historical Context */}
+                {result.historicalContext && (
+                  <div className="pt-3 border-t border-border/20">
+                    <h5 className="font-medium text-sm mb-2 flex items-center">
+                      <History className="w-4 h-4 mr-1" />
+                      Historical Context:
+                    </h5>
+                    <div className="grid grid-cols-3 gap-4 mb-2">
+                      <div className="text-center p-2 bg-muted/30 rounded">
+                        <div className="text-lg font-bold text-primary">{result.historicalContext.totalEpisodes}</div>
+                        <div className="text-xs text-muted-foreground">Episodes</div>
+                      </div>
+                      <div className="text-center p-2 bg-muted/30 rounded">
+                        <div className="text-lg font-bold text-primary">{result.historicalContext.totalEncounters}</div>
+                        <div className="text-xs text-muted-foreground">Encounters</div>
+                      </div>
+                      <div className="text-center p-2 bg-muted/30 rounded">
+                        <div className="text-lg font-bold text-primary">{result.historicalContext.previousEligibilityChecks}</div>
+                        <div className="text-xs text-muted-foreground">Previous Checks</div>
+                      </div>
+                    </div>
+                    {result.historicalContext.keyPatterns.length > 0 && (
+                      <div>
+                        <div className="text-xs font-medium mb-1">Key Patterns:</div>
+                        <ul className="space-y-1">
+                          {result.historicalContext.keyPatterns.map((pattern, index) => (
+                            <li key={index} className="flex items-center text-xs">
+                              <TrendingUp className="w-3 h-3 mr-2 flex-shrink-0" />
+                              <span>{pattern}</span>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Episode Timeline */}
+                {result.episodeTimeline && result.episodeTimeline.length > 0 && (
+                  <div className="pt-3 border-t border-border/20">
+                    <h5 className="font-medium text-sm mb-2 flex items-center">
+                      <Calendar className="w-4 h-4 mr-1" />
+                      Episode Timeline:
+                    </h5>
+                    <div className="space-y-3">
+                      {result.episodeTimeline.map((timelineItem, index) => (
+                        <div key={index} className="relative pl-6 border-l-2 border-muted last:border-l-0">
+                          <div className="absolute -left-1.5 top-1 w-3 h-3 bg-primary rounded-full"></div>
+                          <div className="pb-3">
+                            <div className="flex items-center space-x-2 mb-1">
+                              <span className="text-xs font-semibold">{timelineItem.date}</span>
+                              <Badge variant="outline" className="text-xs">{timelineItem.encounterType}</Badge>
+                            </div>
+                            <div className="text-xs text-muted-foreground mb-2">
+                              <div><strong>Progression:</strong> {timelineItem.woundProgression}</div>
+                              <div><strong>Compliance:</strong> {timelineItem.careCompliance}</div>
+                            </div>
+                            {timelineItem.keyFindings.length > 0 && (
+                              <ul className="space-y-1">
+                                {timelineItem.keyFindings.map((finding, findingIndex) => (
+                                  <li key={findingIndex} className="flex items-start text-xs">
+                                    <FileText className="w-3 h-3 mr-2 mt-0.5 flex-shrink-0" />
+                                    <span>{finding}</span>
+                                  </li>
+                                ))}
+                              </ul>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Cross-Episode Patterns */}
+                {result.crossEpisodePatterns && (
+                  <div className="pt-3 border-t border-border/20">
+                    <h5 className="font-medium text-sm mb-2 flex items-center">
+                      <GitBranch className="w-4 h-4 mr-1" />
+                      Cross-Episode Patterns:
+                    </h5>
+                    <div className="space-y-3">
+                      {result.crossEpisodePatterns.woundRecurrence.length > 0 && (
+                        <div>
+                          <div className="text-xs font-medium mb-1 text-destructive">Wound Recurrence:</div>
+                          <ul className="space-y-1">
+                            {result.crossEpisodePatterns.woundRecurrence.map((pattern, index) => (
+                              <li key={index} className="flex items-center text-xs">
+                                <RotateCcw className="w-3 h-3 mr-2 flex-shrink-0 text-destructive" />
+                                <span>{pattern}</span>
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+                      {result.crossEpisodePatterns.treatmentResponse.length > 0 && (
+                        <div>
+                          <div className="text-xs font-medium mb-1 text-chart-2">Treatment Response:</div>
+                          <ul className="space-y-1">
+                            {result.crossEpisodePatterns.treatmentResponse.map((pattern, index) => (
+                              <li key={index} className="flex items-center text-xs">
+                                <Activity className="w-3 h-3 mr-2 flex-shrink-0 text-chart-2" />
+                                <span>{pattern}</span>
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+                      {result.crossEpisodePatterns.complianceHistory.length > 0 && (
+                        <div>
+                          <div className="text-xs font-medium mb-1 text-chart-3">Compliance History:</div>
+                          <ul className="space-y-1">
+                            {result.crossEpisodePatterns.complianceHistory.map((pattern, index) => (
+                              <li key={index} className="flex items-center text-xs">
+                                <UserCheck className="w-3 h-3 mr-2 flex-shrink-0 text-chart-3" />
+                                <span>{pattern}</span>
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+                    </div>
                   </div>
                 )}
 
