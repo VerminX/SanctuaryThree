@@ -1,6 +1,14 @@
 import fs from 'fs';
-// @ts-ignore - pdf-parse doesn't have types
-import pdfParse from 'pdf-parse';
+
+// Use dynamic import to avoid pdf-parse test file loading issues
+let pdfParse: any;
+async function getPdfParse() {
+  if (!pdfParse) {
+    // @ts-ignore - pdf-parse doesn't have types
+    pdfParse = (await import('pdf-parse')).default;
+  }
+  return pdfParse;
+}
 
 export interface TextExtractionResult {
   text: string;
@@ -12,7 +20,8 @@ export class PdfTextExtractor {
   
   static async extractTextFromBuffer(buffer: Buffer): Promise<TextExtractionResult> {
     try {
-      const pdfData = await pdfParse(buffer);
+      const pdfParseLib = await getPdfParse();
+      const pdfData = await pdfParseLib(buffer);
       
       // Calculate confidence based on text extraction quality
       const confidence = this.calculateConfidence(pdfData.text, pdfData.numpages);
