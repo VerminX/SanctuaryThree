@@ -4,6 +4,7 @@ import {
   tenantUsers,
   patients,
   encounters,
+  episodes,
   policySources,
   eligibilityChecks,
   documents,
@@ -24,6 +25,8 @@ import {
   type Patient,
   type InsertEncounter,
   type Encounter,
+  type InsertEpisode,
+  type Episode,
   type InsertPolicySource,
   type PolicySource,
   type InsertEligibilityCheck,
@@ -81,6 +84,15 @@ export interface IStorage {
   getEncounter(id: string): Promise<Encounter | undefined>;
   getEncountersByPatient(patientId: string): Promise<Encounter[]>;
   updateEncounter(id: string, encounter: Partial<InsertEncounter>): Promise<Encounter>;
+  
+  // Episode operations
+  createEpisode(episode: InsertEpisode): Promise<Episode>;
+  getEpisode(id: string): Promise<Episode | undefined>;
+  getEpisodesByPatient(patientId: string): Promise<Episode[]>;
+  updateEpisode(id: string, episode: Partial<InsertEpisode>): Promise<Episode>;
+  getEncountersByEpisode(episodeId: string): Promise<Encounter[]>;
+  getEligibilityChecksByEpisode(episodeId: string): Promise<EligibilityCheck[]>;
+  getDocumentsByEpisode(episodeId: string): Promise<Document[]>;
   
   // Policy operations
   createPolicySource(policy: InsertPolicySource): Promise<PolicySource>;
@@ -301,6 +313,58 @@ export class DatabaseStorage implements IStorage {
     return updatedEncounter;
   }
 
+  // Episode operations
+  async createEpisode(episode: InsertEpisode): Promise<Episode> {
+    const [newEpisode] = await db.insert(episodes).values(episode).returning();
+    return newEpisode;
+  }
+
+  async getEpisode(id: string): Promise<Episode | undefined> {
+    const [episode] = await db.select().from(episodes).where(eq(episodes.id, id));
+    return episode;
+  }
+
+  async getEpisodesByPatient(patientId: string): Promise<Episode[]> {
+    return await db
+      .select()
+      .from(episodes)
+      .where(eq(episodes.patientId, patientId))
+      .orderBy(desc(episodes.episodeStartDate));
+  }
+
+  async updateEpisode(id: string, episode: Partial<InsertEpisode>): Promise<Episode> {
+    const [updatedEpisode] = await db
+      .update(episodes)
+      .set({ ...episode, updatedAt: new Date() })
+      .where(eq(episodes.id, id))
+      .returning();
+    return updatedEpisode;
+  }
+
+  async getEncountersByEpisode(episodeId: string): Promise<Encounter[]> {
+    return await db
+      .select()
+      .from(encounters)
+      .where(eq(encounters.episodeId, episodeId))
+      .orderBy(desc(encounters.date));
+  }
+
+  async getEligibilityChecksByEpisode(episodeId: string): Promise<EligibilityCheck[]> {
+    return await db
+      .select()
+      .from(eligibilityChecks)
+      .where(eq(eligibilityChecks.episodeId, episodeId))
+      .orderBy(desc(eligibilityChecks.createdAt));
+  }
+
+  async getDocumentsByEpisode(episodeId: string): Promise<Document[]> {
+    return await db
+      .select()
+      .from(documents)
+      .where(eq(documents.episodeId, episodeId))
+      .orderBy(desc(documents.createdAt));
+  }
+
   // Policy operations
   async createPolicySource(policy: InsertPolicySource): Promise<PolicySource> {
     const [newPolicy] = await db.insert(policySources).values(policy).returning();
@@ -472,6 +536,7 @@ export class DatabaseStorage implements IStorage {
       .select({
         id: eligibilityChecks.id,
         encounterId: eligibilityChecks.encounterId,
+        episodeId: eligibilityChecks.episodeId,
         result: eligibilityChecks.result,
         citations: eligibilityChecks.citations,
         llmModel: eligibilityChecks.llmModel,
