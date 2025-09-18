@@ -81,6 +81,7 @@ export const patients = pgTable("patients", {
 export const encounters = pgTable("encounters", {
   id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
   patientId: uuid("patient_id").notNull().references(() => patients.id, { onDelete: "cascade" }),
+  episodeId: uuid("episode_id").references(() => episodes.id, { onDelete: "cascade" }),
   date: timestamp("date").notNull(),
   encryptedNotes: jsonb("encrypted_notes").notNull(), // Array of encrypted encounter notes
   woundDetails: jsonb("wound_details").notNull(), // Wound type, location, measurements, duration
@@ -88,6 +89,20 @@ export const encounters = pgTable("encounters", {
   infectionStatus: varchar("infection_status", { length: 100 }),
   comorbidities: jsonb("comorbidities"),
   attachmentMetadata: jsonb("attachment_metadata"), // Metadata for encrypted image blobs
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+// Episodes - Group related encounters for the same wound/condition
+export const episodes = pgTable("episodes", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  patientId: uuid("patient_id").notNull().references(() => patients.id, { onDelete: "cascade" }),
+  woundType: varchar("wound_type", { length: 100 }).notNull(), // DFU, VLU, etc.
+  woundLocation: varchar("wound_location", { length: 100 }).notNull(),
+  episodeStartDate: timestamp("episode_start_date").notNull(),
+  episodeEndDate: timestamp("episode_end_date"), // Null if ongoing
+  status: varchar("status", { length: 20 }).default("active"), // active, resolved, chronic
+  primaryDiagnosis: varchar("primary_diagnosis", { length: 255 }),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });
@@ -115,6 +130,7 @@ export const policySources = pgTable("policy_sources", {
 export const eligibilityChecks = pgTable("eligibility_checks", {
   id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
   encounterId: uuid("encounter_id").notNull().references(() => encounters.id, { onDelete: "cascade" }),
+  episodeId: uuid("episode_id").references(() => episodes.id, { onDelete: "cascade" }), // Episode-level eligibility analysis
   result: jsonb("result").notNull(), // {status, rationale, gaps}
   citations: jsonb("citations").notNull(), // Array of citation objects
   llmModel: varchar("llm_model", { length: 50 }).notNull(),
@@ -125,6 +141,7 @@ export const eligibilityChecks = pgTable("eligibility_checks", {
 export const documents = pgTable("documents", {
   id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
   patientId: uuid("patient_id").notNull().references(() => patients.id, { onDelete: "cascade" }),
+  episodeId: uuid("episode_id").references(() => episodes.id, { onDelete: "cascade" }), // Episode-level document generation
   type: varchar("type", { length: 50 }).notNull(), // PreDetermination, LMN
   currentVersion: integer("current_version").notNull().default(1),
   title: varchar("title", { length: 255 }).notNull(),
@@ -238,6 +255,8 @@ export const pdfExtractedData = pgTable("pdf_extracted_data", {
   reviewComments: text("review_comments"),
   patientId: uuid("patient_id").references(() => patients.id), // Set after patient is created
   encounterId: uuid("encounter_id").references(() => encounters.id), // Set after encounter is created
+  episodeId: uuid("episode_id").references(() => episodes.id), // Set when linked to episode
+  isAttachedToChart: boolean("is_attached_to_chart").default(true), // PDF attachment to chart records
   createdAt: timestamp("created_at").defaultNow(),
   reviewedAt: timestamp("reviewed_at"),
 });
@@ -262,20 +281,31 @@ export const tenantUsersRelations = relations(tenantUsers, ({ one }) => ({
 export const patientsRelations = relations(patients, ({ one, many }) => ({
   tenant: one(tenants, { fields: [patients.tenantId], references: [tenants.id] }),
   encounters: many(encounters),
+  episodes: many(episodes),
   documents: many(documents),
 }));
 
 export const encountersRelations = relations(encounters, ({ one, many }) => ({
   patient: one(patients, { fields: [encounters.patientId], references: [patients.id] }),
+  episode: one(episodes, { fields: [encounters.episodeId], references: [episodes.id] }),
   eligibilityChecks: many(eligibilityChecks),
+}));
+
+export const episodesRelations = relations(episodes, ({ one, many }) => ({
+  patient: one(patients, { fields: [episodes.patientId], references: [patients.id] }),
+  encounters: many(encounters),
+  eligibilityChecks: many(eligibilityChecks),
+  documents: many(documents),
 }));
 
 export const eligibilityChecksRelations = relations(eligibilityChecks, ({ one }) => ({
   encounter: one(encounters, { fields: [eligibilityChecks.encounterId], references: [encounters.id] }),
+  episode: one(episodes, { fields: [eligibilityChecks.episodeId], references: [episodes.id] }),
 }));
 
 export const documentsRelations = relations(documents, ({ one, many }) => ({
   patient: one(patients, { fields: [documents.patientId], references: [patients.id] }),
+  episode: one(episodes, { fields: [documents.episodeId], references: [episodes.id] }),
   versions: many(documentVersions),
   approvals: many(documentApprovals),
   signatures: many(documentSignatures),
@@ -319,6 +349,7 @@ export const pdfExtractedDataRelations = relations(pdfExtractedData, ({ one }) =
   reviewer: one(users, { fields: [pdfExtractedData.reviewedBy], references: [users.id] }),
   patient: one(patients, { fields: [pdfExtractedData.patientId], references: [patients.id] }),
   encounter: one(encounters, { fields: [pdfExtractedData.encounterId], references: [encounters.id] }),
+  episode: one(episodes, { fields: [pdfExtractedData.episodeId], references: [episodes.id] }),
 }));
 
 // Enums for better type safety - declared before use in Zod schemas
@@ -358,6 +389,7 @@ export const insertTenantSchema = createInsertSchema(tenants).omit({ id: true, c
 export const insertTenantUserSchema = createInsertSchema(tenantUsers).omit({ id: true, createdAt: true });
 export const insertPatientSchema = createInsertSchema(patients).omit({ id: true, createdAt: true, updatedAt: true });
 export const insertEncounterSchema = createInsertSchema(encounters).omit({ id: true, createdAt: true, updatedAt: true });
+export const insertEpisodeSchema = createInsertSchema(episodes).omit({ id: true, createdAt: true, updatedAt: true });
 export const insertPolicySourceSchema = createInsertSchema(policySources).omit({ id: true, createdAt: true, updatedAt: true });
 export const insertEligibilityCheckSchema = createInsertSchema(eligibilityChecks).omit({ id: true, createdAt: true });
 export const insertDocumentSchema = createInsertSchema(documents).omit({ id: true, createdAt: true, updatedAt: true });
@@ -406,6 +438,8 @@ export type InsertPatient = z.infer<typeof insertPatientSchema>;
 export type Patient = typeof patients.$inferSelect;
 export type InsertEncounter = z.infer<typeof insertEncounterSchema>;
 export type Encounter = typeof encounters.$inferSelect;
+export type InsertEpisode = z.infer<typeof insertEpisodeSchema>;
+export type Episode = typeof episodes.$inferSelect;
 export type InsertPolicySource = z.infer<typeof insertPolicySourceSchema>;
 
 export type PolicyStatus = keyof typeof POLICY_STATUS;
