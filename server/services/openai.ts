@@ -523,7 +523,7 @@ export async function prepareAndAnalyzeEpisodeWithFullHistory(
   try {
     // Get comprehensive patient data
     const [allPatientEpisodes, patientEligibilityHistory] = await Promise.all([
-      storage.getEpisodesWithFullHistoryByPatient(patientId),
+      storage.getPatientEpisodesWithHistory(patientId),
       storage.getPatientEligibilityHistory(patientId)
     ]);
 
@@ -554,7 +554,7 @@ export async function prepareAndAnalyzeEpisodeWithFullHistory(
         woundLocation: episode.woundLocation,
         episodeStartDate,
         episodeEndDate,
-        status: episode.status,
+        status: episode.status || 'active',
         primaryDiagnosis: episode.primaryDiagnosis,
         createdAt: episode.createdAt,
         updatedAt: episode.updatedAt,
