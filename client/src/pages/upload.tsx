@@ -145,11 +145,21 @@ export default function UploadPage() {
       refetchUploads();
     },
     onError: (error: any) => {
-      toast({
-        title: "Text extraction failed",
-        description: error.message || "Failed to extract text from PDF",
-        variant: "destructive"
-      });
+      // Handle duplicate processing gracefully
+      if (error.message?.includes("File is not ready for text extraction") || error.message?.includes("already processed")) {
+        toast({
+          title: "Text already extracted",
+          description: "This file has already been processed. You can proceed to data extraction.",
+          variant: "default"
+        });
+        refetchUploads(); // Refresh to show correct state
+      } else {
+        toast({
+          title: "Text extraction failed",
+          description: error.message || "Failed to extract text from PDF",
+          variant: "destructive"
+        });
+      }
     }
   });
 
@@ -367,18 +377,44 @@ export default function UploadPage() {
                         disabled={extractTextMutation.isPending}
                         data-testid={`extract-text-${upload.id}`}
                       >
-                        {extractTextMutation.isPending ? 'Extracting...' : 'Extract Text'}
+                        {extractTextMutation.isPending ? (
+                          <>
+                            <Clock className="w-4 h-4 mr-2 animate-spin" />
+                            Extracting Text...
+                          </>
+                        ) : (
+                          'Extract Text'
+                        )}
                       </Button>
                     )}
                     
-                    {upload.status === 'processed' && (
+                    {upload.status === 'processed' && !extractionResults[upload.id] && (
                       <Button
                         size="sm"
                         onClick={() => handleExtractData(upload.id)}
                         disabled={extractDataMutation.isPending}
                         data-testid={`extract-data-${upload.id}`}
                       >
-                        {extractDataMutation.isPending ? 'Extracting...' : 'Extract Data'}
+                        {extractDataMutation.isPending ? (
+                          <>
+                            <Clock className="w-4 h-4 mr-2 animate-spin" />
+                            Analyzing with AI...
+                          </>
+                        ) : (
+                          'Extract Data'
+                        )}
+                      </Button>
+                    )}
+                    
+                    {upload.status === 'processed' && extractionResults[upload.id] && !extractionResults[upload.id].canCreateRecords && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled
+                        data-testid={`data-extracted-${upload.id}`}
+                      >
+                        <CheckCircle className="w-4 h-4 mr-2" />
+                        Data Extracted
                       </Button>
                     )}
                   </div>
