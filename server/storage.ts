@@ -957,7 +957,7 @@ export class DatabaseStorage implements IStorage {
   async updatePdfExtractedData(id: string, data: Partial<InsertPdfExtractedData>): Promise<PdfExtractedData> {
     const [updated] = await db
       .update(pdfExtractedData)
-      .set({ ...data, updatedAt: new Date() })
+      .set({ ...data })
       .where(eq(pdfExtractedData.id, id))
       .returning();
     return updated;
