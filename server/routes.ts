@@ -188,6 +188,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
     } catch (error) {
       console.error("Error creating patient:", error);
+      
+      // Handle duplicate patient errors
+      if (error instanceof Error && error.message.includes('already exists in this tenant')) {
+        return res.status(409).json({ 
+          message: "A patient with this MRN already exists in this clinic",
+          type: "DUPLICATE_PATIENT"
+        });
+      }
+      
       res.status(500).json({ message: "Failed to create patient" });
     }
   });
@@ -356,6 +365,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
     } catch (error) {
       console.error("Error creating encounter:", error);
+      
+      // Handle duplicate encounter errors
+      if (error instanceof Error && error.message.includes('Encounter already exists for patient')) {
+        return res.status(409).json({ 
+          message: "An encounter already exists for this patient on the selected date",
+          type: "DUPLICATE_ENCOUNTER"
+        });
+      }
+      
       res.status(500).json({ message: "Failed to create encounter" });
     }
   });

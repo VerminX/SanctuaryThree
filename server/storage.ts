@@ -78,12 +78,16 @@ export interface IStorage {
   getPatient(id: string): Promise<Patient | undefined>;
   getPatientsByTenant(tenantId: string): Promise<Patient[]>;
   updatePatient(id: string, patient: Partial<InsertPatient>): Promise<Patient>;
+  getPatientByMrnAndTenant(mrn: string, tenantId: string): Promise<Patient | undefined>;
+  checkPatientDuplicate(mrn: string, tenantId: string): Promise<boolean>;
   
   // Encounter operations
   createEncounter(encounter: InsertEncounter): Promise<Encounter>;
   getEncounter(id: string): Promise<Encounter | undefined>;
   getEncountersByPatient(patientId: string): Promise<Encounter[]>;
   updateEncounter(id: string, encounter: Partial<InsertEncounter>): Promise<Encounter>;
+  getEncounterByPatientAndDate(patientId: string, encounterDate: string): Promise<Encounter | undefined>;
+  checkEncounterDuplicate(patientId: string, date: Date): Promise<boolean>;
   
   // Episode operations
   createEpisode(episode: InsertEpisode): Promise<Episode>;
@@ -260,6 +264,12 @@ export class DatabaseStorage implements IStorage {
 
   // Patient operations
   async createPatient(patient: InsertPatient): Promise<Patient> {
+    // Check for duplicates before creating
+    const isDuplicate = await this.checkPatientDuplicate(patient.mrn, patient.tenantId);
+    if (isDuplicate) {
+      throw new Error(`Patient with MRN ${patient.mrn} already exists in this tenant`);
+    }
+    
     const [newPatient] = await db.insert(patients).values(patient).returning();
     return newPatient;
   }
@@ -286,8 +296,28 @@ export class DatabaseStorage implements IStorage {
     return updatedPatient;
   }
 
+  // Patient duplicate checking
+  async getPatientByMrnAndTenant(mrn: string, tenantId: string): Promise<Patient | undefined> {
+    const [patient] = await db
+      .select()
+      .from(patients)
+      .where(and(eq(patients.mrn, mrn), eq(patients.tenantId, tenantId)));
+    return patient;
+  }
+
+  async checkPatientDuplicate(mrn: string, tenantId: string): Promise<boolean> {
+    const existingPatient = await this.getPatientByMrnAndTenant(mrn, tenantId);
+    return !!existingPatient;
+  }
+
   // Encounter operations
   async createEncounter(encounter: InsertEncounter): Promise<Encounter> {
+    // Check for duplicates before creating
+    const isDuplicate = await this.checkEncounterDuplicate(encounter.patientId, encounter.date);
+    if (isDuplicate) {
+      throw new Error(`Encounter already exists for patient ${encounter.patientId} on ${this.formatEncounterDate(encounter.date)}`);
+    }
+    
     const [newEncounter] = await db.insert(encounters).values(encounter).returning();
     return newEncounter;
   }
@@ -312,6 +342,30 @@ export class DatabaseStorage implements IStorage {
       .where(eq(encounters.id, id))
       .returning();
     return updatedEncounter;
+  }
+
+  // Encounter duplicate checking
+  async getEncounterByPatientAndDate(patientId: string, encounterDate: string): Promise<Encounter | undefined> {
+    // Find encounters on the same calendar day (YYYY-MM-DD)
+    const [encounter] = await db
+      .select()
+      .from(encounters)
+      .where(and(
+        eq(encounters.patientId, patientId),
+        sql`DATE(${encounters.date}) = ${encounterDate}`
+      ));
+    return encounter;
+  }
+
+  async checkEncounterDuplicate(patientId: string, date: Date): Promise<boolean> {
+    const encounterDate = this.formatEncounterDate(date);
+    const existingEncounter = await this.getEncounterByPatientAndDate(patientId, encounterDate);
+    return !!existingEncounter;
+  }
+
+  // Helper method to format date as YYYY-MM-DD
+  private formatEncounterDate(date: Date): string {
+    return date.toISOString().split('T')[0];
   }
 
   // Episode operations

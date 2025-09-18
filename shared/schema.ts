@@ -10,6 +10,8 @@ import {
   integer,
   decimal,
   uuid,
+  unique,
+  uniqueIndex,
 } from "drizzle-orm/pg-core";
 import { relations } from "drizzle-orm";
 import { createInsertSchema } from "drizzle-zod";
@@ -75,7 +77,9 @@ export const patients = pgTable("patients", {
   macRegion: varchar("mac_region", { length: 50 }),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
-});
+}, (table) => [
+  uniqueIndex("unique_mrn_tenant").on(table.mrn, table.tenantId)
+]);
 
 // Encounters
 export const encounters = pgTable("encounters", {
