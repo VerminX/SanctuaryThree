@@ -1,13 +1,21 @@
 import fs from 'fs';
 
-// Use dynamic import to avoid pdf-parse test file loading issues
-let pdfParse: any;
+// Handle pdf-parse import more robustly
 async function getPdfParse() {
-  if (!pdfParse) {
-    // @ts-ignore - pdf-parse doesn't have types
-    pdfParse = (await import('pdf-parse')).default;
+  try {
+    // Try dynamic import first
+    const module = await import('pdf-parse');
+    return module.default || module;
+  } catch (error) {
+    console.error('Error importing pdf-parse:', error);
+    // Fallback: try require as last resort
+    try {
+      return require('pdf-parse');
+    } catch (requireError) {
+      console.error('Error requiring pdf-parse:', requireError);
+      throw new Error('Failed to load PDF parsing library');
+    }
   }
-  return pdfParse;
 }
 
 export interface TextExtractionResult {
