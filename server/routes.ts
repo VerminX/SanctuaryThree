@@ -1725,7 +1725,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       try {
         // Step 1: Get extracted text (must exist from text extraction)
-        const extractedText = upload.extractedText;
+        let extractedText = upload.extractedText;
         
         if (!extractedText) {
           return res.status(500).json({ message: "Internal error: extracted text is missing for processed file" });
@@ -1733,7 +1733,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
         // Step 2: Use AI to extract structured data from the text
         const { extractDataFromPdfText, validateExtractionCompleteness } = await import('./services/pdfDataExtractor');
-        const extractionResult = await extractDataFromPdfText(extractedText);
+        let extractionResult = await extractDataFromPdfText(extractedText);
 
         // Step 3: Validate completeness of extraction
         const validation = validateExtractionCompleteness(extractionResult);
@@ -1786,12 +1786,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
         await storage.updateFileUploadText(uploadId, encryptedText);
         await storage.updateFileUploadStatus(uploadId, FILE_UPLOAD_STATUS.DATA_EXTRACTED);
 
-        // Clear plaintext from memory immediately (HIPAA security)
-        extractedText = '';
-        extractionResult.patientData = {};
-        extractionResult.encounterData = {};
-        extractionResult = null;
-
         // Step 6: Log audit event for HIPAA compliance (NO PHI in logs)
         await storage.createAuditLog({
           tenantId: upload.tenantId,
@@ -1804,6 +1798,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           previousHash: '',
         });
 
+        // Send response BEFORE clearing memory (so we can access extractionResult)
         res.status(200).json({
           message: "Data extraction completed",
           extractionId: extractedData.id,
@@ -1816,6 +1811,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
           encounterData: extractionResult.encounterData,
           canCreateRecords: validation.score >= 0.7 // Minimum threshold for record creation
         });
+
+        // Clear plaintext from memory AFTER response is sent (HIPAA security)
+        extractedText = '';
+        extractionResult.patientData = {};
+        extractionResult.encounterData = {};
+        extractionResult = null as any;
 
       } catch (extractionError) {
         console.error('Error during PDF data extraction:', extractionError);
