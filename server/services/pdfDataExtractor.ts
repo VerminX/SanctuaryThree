@@ -107,24 +107,36 @@ export async function extractDataFromPdfText(pdfText: string): Promise<PdfExtrac
     openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
   }
   
-  // HIPAA SAFEGUARD: Limit text size to prevent context overflow and reduce PHI exposure
-  const maxTextLength = 15000; // ~3000 tokens at 4 chars/token average
+  // HIPAA SAFEGUARD: Increase limit for comprehensive extraction while preventing context overflow
+  const maxTextLength = 25000; // ~6000 tokens at 4 chars/token average - sufficient for comprehensive multi-encounter docs
   const truncatedText = pdfText.length > maxTextLength 
-    ? pdfText.substring(0, maxTextLength) + '\n\n[TEXT TRUNCATED FOR PROCESSING]'
+    ? pdfText.substring(0, maxTextLength) + '\n\n[TEXT TRUNCATED FOR PROCESSING - INCREASE LIMIT IF NEEDED]'
     : pdfText;
-  const systemPrompt = `You are a medical document data extraction specialist. Extract structured patient and encounter data from medical documents.
+  const systemPrompt = `You are a comprehensive medical document data extraction specialist. Extract ALL structured patient and encounter data with maximum completeness and clinical accuracy.
 
-CRITICAL: If the document contains MULTIPLE ENCOUNTERS/VISITS (different dates), extract them as separate encounter objects in an array.
+CRITICAL: If the document contains MULTIPLE ENCOUNTERS/VISITS (different dates), extract them as separate encounter objects in an array. Analyze the ENTIRE document to identify all encounters.
+
+COMPLETENESS MANDATE:
+- Extract ALL clinical information, notes, assessments, plans, and wound details for each encounter
+- Capture comprehensive wound progression, treatment details, and patient responses
+- Include ALL conservative care attempts, durations, and effectiveness details
+- Extract specific treatment numbers (e.g., "graft application #1", "visit #3")
+- Document complete assessment and plan information for each encounter
+- Capture patient education, dietary changes, and lifestyle modifications
+- Include detailed wound measurements, drainage descriptions, and healing progression
+- Extract provider recommendations, follow-up instructions, and treatment modifications
+
+ENCOUNTER IDENTIFICATION:
+- Look for date patterns, visit numbers, follow-up references, or chronological treatment progressions
+- Each distinct clinical encounter should have comprehensive notes, assessment, and plan
+- If HPI contains multiple time references or treatment sequences, separate them appropriately
 
 Instructions:
-- Extract ONLY data that is explicitly stated in the document
-- If multiple encounters/visits with different dates exist, create separate encounter objects for each
-- Use null/undefined for missing fields rather than making assumptions
-- Provide a confidence score (0-1) based on data completeness and clarity
-- Include warnings for any missing critical information
-- For dates, use YYYY-MM-DD format
-- For measurements, extract numeric values where possible
-- Group related conservative care items appropriately
+- Prioritize COMPLETENESS over brevity - capture all relevant clinical information
+- For dates, use YYYY-MM-DD format or best approximation from document context
+- Extract numeric measurements precisely with units when available
+- Group conservative care by category with specific details and timeframes
+- Include direct quotes from clinical notes when they provide important context
 
 Return JSON in this exact format:
 {
@@ -144,6 +156,13 @@ Return JSON in this exact format:
     {
       "encounterDate": "YYYY-MM-DD | null",
       "notes": ["string"] | null,
+      "clinicalFindings": ["string"] | null,
+      "treatmentDetails": {
+        "proceduresPerformed": ["string"] | null,
+        "applicationNumbers": ["string"] | null,
+        "treatmentResponse": "string | null",
+        "complications": ["string"] | null
+      },
       "woundDetails": {
         "type": "string | null",
         "location": "string | null", 
@@ -151,26 +170,48 @@ Return JSON in this exact format:
           "length": number | null,
           "width": number | null,
           "depth": number | null,
-          "area": number | null
+          "area": number | null,
+          "unit": "string | null"
         },
         "duration": "string | null",
         "woundBed": "string | null",
         "drainage": "string | null",
-        "periwoundSkin": "string | null"
+        "periwoundSkin": "string | null",
+        "healingProgression": "string | null",
+        "woundGrade": "string | null"
       },
       "conservativeCare": {
-        "offloading": ["string"] | null,
-        "woundCare": ["string"] | null,
-        "debridement": ["string"] | null,
+        "offloading": {
+          "methods": ["string"] | null,
+          "duration": "string | null",
+          "effectiveness": "string | null"
+        },
+        "woundCare": {
+          "dressings": ["string"] | null,
+          "frequency": "string | null",
+          "products": ["string"] | null
+        },
+        "debridement": {
+          "type": ["string"] | null,
+          "frequency": "string | null"
+        },
         "infectionControl": ["string"] | null,
         "vascularAssessment": ["string"] | null,
-        "glycemicControl": ["string"] | null,
-        "duration": "string | null"
+        "glycemicControl": {
+          "methods": ["string"] | null,
+          "targets": ["string"] | null,
+          "compliance": "string | null"
+        },
+        "duration": "string | null",
+        "overallEffectiveness": "string | null"
       },
+      "patientEducation": ["string"] | null,
+      "followUpInstructions": ["string"] | null,
       "infectionStatus": "string | null",
       "comorbidities": ["string"] | null,
       "assessment": "string | null",
-      "plan": "string | null"
+      "plan": "string | null",
+      "providerRecommendations": ["string"] | null
     }
   ],
   "confidence": number, // 0.0 to 1.0
@@ -188,7 +229,20 @@ Return JSON in this exact format:
         },
         {
           role: "user", 
-          content: `Extract structured data from this medical document:\n\n${truncatedText}`,
+          content: `Extract ALL structured data from this medical document with maximum completeness. Analyze the ENTIRE document and capture every clinical detail, wound progression note, treatment response, conservative care attempt, and provider recommendation for each encounter.
+
+SPECIFIC REQUIREMENTS:
+- Extract COMPLETE clinical notes, assessments, and plans for each encounter date
+- Capture ALL wound measurements, healing progression details, and treatment responses  
+- Include ALL conservative care attempts with specific durations and effectiveness
+- Document ALL provider recommendations, patient education, and follow-up instructions
+- Extract specific procedure details, application numbers, and treatment sequences
+- Include ALL comorbidities mentioned and their management
+- Capture patient compliance details and lifestyle modifications
+
+Document text to analyze:
+
+${truncatedText}`,
         }
       ],
       response_format: { type: "json_object" },
