@@ -2697,6 +2697,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
           enc.woundDetails && Object.keys(enc.woundDetails).length > 0
         ) || decryptedEncounters[0];
         
+        // Find the earliest encounter date for episode start date
+        const earliestEncounter = decryptedEncounters.reduce((earliest, current) => 
+          earliest.date < current.date ? earliest : current
+        );
+        
         // ALWAYS create episode - use wound details if available, safe defaults if not
         const woundType = firstEncounterWithWound.woundDetails?.type || 'General Wound Care';
         const woundLocation = firstEncounterWithWound.woundDetails?.location || 'Not specified';
@@ -2727,7 +2732,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             patientId,
             woundType,
             woundLocation,
-            episodeStartDate: firstEncounterWithWound.date,
+            episodeStartDate: earliestEncounter.date,
             status: 'active',
             primaryDiagnosis
           });

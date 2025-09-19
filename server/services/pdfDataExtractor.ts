@@ -141,7 +141,7 @@ export async function extractDataFromPdfText(pdfText: string): Promise<PdfExtrac
   }
   
   // HIPAA SAFEGUARD: Increase limit for comprehensive extraction while preventing context overflow
-  const maxTextLength = 25000; // ~6000 tokens at 4 chars/token average - sufficient for comprehensive multi-encounter docs
+  const maxTextLength = 60000; // ~15000 tokens at 4 chars/token average - sufficient for comprehensive multi-encounter docs
   const truncatedText = pdfText.length > maxTextLength 
     ? pdfText.substring(0, maxTextLength) + '\n\n[TEXT TRUNCATED FOR PROCESSING - INCREASE LIMIT IF NEEDED]'
     : pdfText;
