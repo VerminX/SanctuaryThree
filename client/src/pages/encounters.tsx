@@ -13,7 +13,7 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { ClipboardList, Plus, Search, Filter, Calendar } from "lucide-react";
+import { ClipboardList, Plus, Search, Filter, Calendar, AlertTriangle } from "lucide-react";
 
 export default function Encounters() {
   const { toast } = useToast();
@@ -67,7 +67,8 @@ export default function Encounters() {
   const allEncounters = encountersWithPatients?.map((encounter: any) => ({
     ...encounter,
     patientName: `${encounter.patient?.firstName || ''} ${encounter.patient?.lastName || ''}`.trim(),
-    patientMrn: encounter.patient?.mrn,
+    patientMrn: encounter.patient?.mrn || "[MRN unavailable]",
+    hasDecryptionError: encounter.patient?._decryptionFailed || false,
   })).sort((a: any, b: any) => new Date(b.date).getTime() - new Date(a.date).getTime()) || [];
 
   // Extract patients from encounters for the create form dropdown
@@ -381,8 +382,13 @@ export default function Encounters() {
                       <TableRow key={encounter.id} data-testid={`row-encounter-${encounter.id}`}>
                         <TableCell>
                           <div>
-                            <div className="font-medium text-foreground">
+                            <div className="font-medium text-foreground flex items-center gap-2">
                               {encounter.patientName}
+                              {encounter.hasDecryptionError && (
+                                <span title="Patient data decryption issue">
+                                  <AlertTriangle className="h-4 w-4 text-amber-500" />
+                                </span>
+                              )}
                             </div>
                             <div className="text-sm text-muted-foreground">
                               MRN: {encounter.patientMrn}

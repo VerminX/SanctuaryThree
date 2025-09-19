@@ -185,7 +185,7 @@ export interface IStorage {
   linkPdfExtractedDataToRecords(id: string, patientId?: string, encounterId?: string): Promise<PdfExtractedData>;
   
   // Bulk operations for performance optimization
-  getAllEncountersWithPatientsByTenant(tenantId: string): Promise<Array<Encounter & { patientName: string; patientId: string; }>>;
+  getAllEncountersWithPatientsByTenant(tenantId: string): Promise<Array<Encounter & { patientName: string; patientId: string; patient: { id: string; firstName: string; lastName: string; mrn: string; _decryptionFailed?: boolean }; }>>;
   getAllEpisodesWithPatientsByTenant(tenantId: string): Promise<Array<Episode & { patientName: string; patientId: string; encounterCount: number; }>>;
 }
 
@@ -523,7 +523,7 @@ export class DatabaseStorage implements IStorage {
   }
 
   // Bulk operations for performance optimization
-  async getAllEncountersWithPatientsByTenant(tenantId: string): Promise<Array<Encounter & { patientName: string; patientId: string; }>> {
+  async getAllEncountersWithPatientsByTenant(tenantId: string): Promise<Array<Encounter & { patientName: string; patientId: string; patient: any; }>> {
     const { safeDecryptPatientData } = await import('./services/encryption');
     
     const encounterResults = await db
@@ -537,10 +537,17 @@ export class DatabaseStorage implements IStorage {
       .orderBy(desc(encounters.date));
 
     return encounterResults.map(row => {
-      const { patientData } = safeDecryptPatientData(row.patient);
+      const { patientData, decryptionError } = safeDecryptPatientData(row.patient);
       return {
         ...row.encounter,
         patientName: `${patientData.firstName} ${patientData.lastName}`.trim(),
+        patient: {
+          id: patientData.id,
+          firstName: patientData.firstName,
+          lastName: patientData.lastName,
+          mrn: patientData.mrn,
+          _decryptionFailed: decryptionError
+        }
       };
     });
   }
