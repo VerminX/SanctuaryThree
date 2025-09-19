@@ -251,16 +251,18 @@ export function validateWoundTypeForCoverage(
     }
     
     if (matchFound) {
-      // Additional validation for DFU - must have diabetic status
+      // Additional validation for DFU - only deterministically reject if explicitly non-diabetic
       if (type === 'DFU' && 'requiresDiabetes' in patterns && patterns.requiresDiabetes) {
-        if (!diabeticStatus || diabeticStatus === 'nondiabetic') {
+        if (diabeticStatus === 'nondiabetic') {
           return {
             isValid: false,
-            reason: `Wound identified as DFU but patient is not diabetic (status: ${diabeticStatus || 'unknown'})`,
-            policyViolation: 'DFU diagnosis requires confirmed diabetic status',
+            reason: `Wound identified as DFU but patient is confirmed non-diabetic (status: ${diabeticStatus})`,
+            policyViolation: 'DFU diagnosis requires diabetic patient. Non-diabetic patients are not eligible for DFU CTPs under Medicare LCD L39806.',
             details: { woundCategory: type, diabeticStatus, identifiedBy: matchReason }
           };
         }
+        // If diabetic status is missing/unknown, allow validation to pass - let AI analysis handle the ambiguity
+        // This prevents false negatives when diabetic status is not documented but DFU is clinically indicated
       }
       
       return {
@@ -564,9 +566,11 @@ export function performPreEligibilityChecks(
   auditTrail.push(`Episode: ${episode.woundType} at ${episode.woundLocation}`);
   auditTrail.push(`Primary diagnosis: ${episode.primaryDiagnosis || 'Not specified'}`);
   
-  // Get patient diabetic status from encounters
-  const diabeticStatus = encounters.find(enc => enc.diabeticStatus)?.diabeticStatus;
-  auditTrail.push(`Patient diabetic status: ${diabeticStatus || 'Not specified'}`);
+  // Get patient diabetic status from encounters (prefer latest known status)
+  const diabeticStatus = encounters
+    .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()) // Sort by date descending
+    .find(enc => enc.diabeticStatus)?.diabeticStatus;
+  auditTrail.push(`Patient diabetic status: ${diabeticStatus || 'Not specified'} (from latest available encounter)`);
   
   // Task 1.1: Wound Type Validation
   auditTrail.push('Performing wound type validation...');
