@@ -19,6 +19,7 @@ Preferred communication style: Simple, everyday language.
 - **Routing**: Wouter for client-side routing
 - **Forms**: React Hook Form with Zod schema validation
 - **Styling**: Tailwind CSS with CSS custom properties for theming
+- **Theme**: Professional blue-based corporate design matching TM Tech aesthetic (updated September 2025)
 
 ### Backend Architecture
 - **Runtime**: Node.js with Express.js server
