@@ -42,109 +42,46 @@ export default function Eligibility() {
 
   const currentTenant = user?.tenants?.[0];
 
-  const { data: patients, isLoading: patientsLoading, error: patientsError } = useQuery({
-    queryKey: ["/api/tenants", currentTenant?.id, "patients"],
+  // OPTIMIZED: Use bulk endpoints instead of N+1 queries
+  // Get all encounters with patient information in a single API call
+  const { data: encounters, isLoading: encountersLoading, error: encountersError } = useQuery<Array<{
+    id: string;
+    patientId: string;
+    patientName: string;
+    woundType: string;
+    date: string;
+    notes: string[];
+    woundDetails?: any;
+    conservativeCare?: any;
+    infectionStatus?: string;
+    comorbidities?: any;
+    attachmentMetadata?: any;
+    episodeId?: string;
+    createdAt?: Date;
+    updatedAt?: Date;
+  }>>({
+    queryKey: ["/api/encounters-with-patients", currentTenant?.id],
     enabled: !!currentTenant?.id,
     retry: false,
   });
 
-  // Get all encounters with patient information
-  const { data: encounters, isLoading: encountersLoading, error: encountersError } = useQuery({
-    queryKey: ["/api/encounters-with-patients", currentTenant?.id],
-    queryFn: async () => {
-      if (!patients || !Array.isArray(patients) || patients.length === 0) {
-        return [];
-      }
-      
-      const encounterPromises = patients.map(async (patient: any) => {
-        try {
-          // Skip patients with decryption failures
-          if (!patient.firstName || !patient.lastName) {
-            return [];
-          }
-          
-          const response = await fetch(`/api/patients/${patient.id}/encounters`, {
-            credentials: "include",
-          });
-          if (response.ok) {
-            const encounters = await response.json();
-            return encounters.map((encounter: any) => ({
-              id: encounter.id,
-              patientId: patient.id,
-              patientName: `${patient.firstName} ${patient.lastName}`.trim(),
-              woundType: encounter.woundDetails?.type || 'Unknown',
-              date: encounter.date,
-            }));
-          }
-          return [];
-        } catch (error) {
-          return [];
-        }
-      });
-      
-      const encountersArrays = await Promise.all(encounterPromises);
-      return encountersArrays.flat().sort((a: any, b: any) => new Date(b.date).getTime() - new Date(a.date).getTime());
-    },
-    enabled: !!patients && Array.isArray(patients) && patients.length > 0,
-    retry: false,
-  });
-
-  // Get all episodes with patient information
-  const { data: episodes, isLoading: episodesLoading, error: episodesError } = useQuery({
+  // Get all episodes with patient information and encounter counts in a single API call
+  const { data: episodes, isLoading: episodesLoading, error: episodesError } = useQuery<Array<{
+    id: string;
+    patientId: string;
+    patientName: string;
+    woundType: string;
+    woundLocation: string;
+    episodeStartDate: string;
+    status: string;
+    encounterCount: number;
+    episodeEndDate?: Date | null;
+    primaryDiagnosis?: string | null;
+    createdAt?: Date | null;
+    updatedAt?: Date | null;
+  }>>({
     queryKey: ["/api/episodes-with-patients", currentTenant?.id],
-    queryFn: async () => {
-      if (!patients || !Array.isArray(patients) || patients.length === 0) {
-        return [];
-      }
-      
-      const episodePromises = patients.map(async (patient: any) => {
-        try {
-          // Skip patients with decryption failures
-          if (!patient.firstName || !patient.lastName) {
-            return [];
-          }
-          
-          const response = await fetch(`/api/patients/${patient.id}/episodes`, {
-            credentials: "include",
-          });
-          if (response.ok) {
-            const episodes = await response.json();
-            // Get encounter count for each episode
-            const episodesWithCounts = await Promise.all(episodes.map(async (episode: any) => {
-              try {
-                const encountersResponse = await fetch(`/api/episodes/${episode.id}/encounters`, {
-                  credentials: "include",
-                });
-                const encounterCount = encountersResponse.ok ? (await encountersResponse.json()).length : 0;
-                
-                return {
-                  id: episode.id,
-                  patientId: patient.id,
-                  patientName: `${patient.firstName} ${patient.lastName}`.trim(),
-                  woundType: episode.woundType || 'Unknown',
-                  woundLocation: episode.woundLocation || 'Unknown location',
-                  episodeStartDate: episode.episodeStartDate,
-                  status: episode.status || 'active',
-                  encounterCount
-                };
-              } catch {
-                return null;
-              }
-            }));
-            return episodesWithCounts.filter(ep => ep !== null);
-          }
-          return [];
-        } catch (error) {
-          return [];
-        }
-      });
-      
-      const episodesArrays = await Promise.all(episodePromises);
-      return episodesArrays.flat().sort((a: any, b: any) => 
-        new Date(b.episodeStartDate).getTime() - new Date(a.episodeStartDate).getTime()
-      );
-    },
-    enabled: !!patients && Array.isArray(patients) && patients.length > 0,
+    enabled: !!currentTenant?.id,
     retry: false,
   });
 
@@ -333,8 +270,8 @@ export default function Eligibility() {
           {/* Main Analysis Panel */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
             <AnalysisPanel
-              encounters={encounters || []}
-              episodes={episodes || []}
+              encounters={encounters ?? []}
+              episodes={episodes ?? []}
               macRegions={MAC_REGIONS}
               onAnalyze={handleAnalyze}
               result={analysisResult?.result}
