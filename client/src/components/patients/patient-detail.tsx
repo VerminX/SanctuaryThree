@@ -26,6 +26,11 @@ type DecryptedPatient = {
   dob?: string;
   payerType: string;
   planName?: string;
+  insuranceId?: string;
+  // Secondary insurance fields
+  secondaryPayerType?: string;
+  secondaryPlanName?: string;
+  secondaryInsuranceId?: string;
   macRegion?: string;
   createdAt: string;
   updatedAt: string;
@@ -214,22 +219,79 @@ export default function PatientDetail() {
                 </CardTitle>
               </CardHeader>
               <CardContent className="space-y-4">
-                <div>
-                  <p className="text-sm text-muted-foreground">Payer Type</p>
-                  <Badge 
-                    variant={patient.payerType === 'Original Medicare' ? 'default' : 'secondary'}
-                    data-testid="badge-patient-payerType"
-                  >
-                    {patient.payerType}
-                  </Badge>
-                </div>
-                
-                {patient.planName && (
+                {/* Primary Insurance */}
+                <div className="space-y-3 pb-3 border-b">
+                  <h4 className="text-sm font-semibold text-foreground">Primary Insurance</h4>
+                  
                   <div>
-                    <p className="text-sm text-muted-foreground">Plan Name</p>
-                    <p className="font-medium text-foreground" data-testid="text-patient-planName">
-                      {patient.planName}
-                    </p>
+                    <p className="text-sm text-muted-foreground">Payer Type</p>
+                    <Badge 
+                      variant={patient.payerType === 'Original Medicare' ? 'default' : 'secondary'}
+                      data-testid="badge-patient-payerType"
+                    >
+                      {patient.payerType}
+                    </Badge>
+                  </div>
+                  
+                  {patient.planName && (
+                    <div>
+                      <p className="text-sm text-muted-foreground">Plan Name</p>
+                      <p className="font-medium text-foreground" data-testid="text-patient-planName">
+                        {patient.planName}
+                      </p>
+                    </div>
+                  )}
+                  
+                  {patient.insuranceId && (
+                    <div>
+                      <p className="text-sm text-muted-foreground">Insurance ID</p>
+                      <code className="text-sm bg-muted px-2 py-1 rounded" data-testid="text-patient-insuranceId">
+                        {patient.insuranceId}
+                      </code>
+                    </div>
+                  )}
+                </div>
+
+                {/* Secondary Insurance */}
+                {(patient.secondaryPayerType || patient.secondaryPlanName || patient.secondaryInsuranceId) && (
+                  <div className="space-y-3 pb-3 border-b">
+                    <h4 className="text-sm font-semibold text-foreground">Secondary Insurance</h4>
+                    
+                    {patient.secondaryPayerType && (
+                      <div>
+                        <p className="text-sm text-muted-foreground">Payer Type</p>
+                        <Badge 
+                          variant="outline"
+                          data-testid="badge-patient-secondaryPayerType"
+                        >
+                          {patient.secondaryPayerType}
+                        </Badge>
+                      </div>
+                    )}
+                    
+                    {patient.secondaryPlanName && (
+                      <div>
+                        <p className="text-sm text-muted-foreground">Plan Name</p>
+                        <p className="font-medium text-foreground" data-testid="text-patient-secondaryPlanName">
+                          {patient.secondaryPlanName}
+                        </p>
+                      </div>
+                    )}
+                    
+                    {patient.secondaryInsuranceId && (
+                      <div>
+                        <p className="text-sm text-muted-foreground">Insurance ID</p>
+                        <code className="text-sm bg-muted px-2 py-1 rounded" data-testid="text-patient-secondaryInsuranceId">
+                          {patient.secondaryInsuranceId}
+                        </code>
+                      </div>
+                    )}
+                  </div>
+                )}
+                
+                {!patient.secondaryPayerType && !patient.secondaryPlanName && !patient.secondaryInsuranceId && (
+                  <div className="text-sm text-muted-foreground italic">
+                    No secondary insurance on file
                   </div>
                 )}
 
