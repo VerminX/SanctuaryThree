@@ -40,104 +40,48 @@ export default function Documents() {
 
   const currentTenant = user?.tenants?.[0];
 
-  const { data: patients, isLoading: patientsLoading } = useQuery({
-    queryKey: ["/api/tenants", currentTenant?.id, "patients"],
+  // OPTIMIZED: Use bulk endpoint instead of N+1 queries for Documents page
+  // Get all patients with eligibility checks in a single API call
+  const { data: patientsWithEligibility, isLoading: eligibilityLoading } = useQuery<Array<{
+    id: string;
+    name: string;
+    mrn: string;
+    eligibilityChecks: Array<{
+      id: string;
+      result: {
+        eligibility: string;
+        rationale: string;
+      };
+      createdAt: string;
+    }>;
+  }>>({
+    queryKey: ["/api/patients-with-eligibility", currentTenant?.id],
     enabled: !!currentTenant?.id,
     retry: false,
   });
 
-  // Get patients with eligibility checks
-  const { data: patientsWithEligibility, isLoading: eligibilityLoading } = useQuery({
-    queryKey: ["/api/patients-with-eligibility"],
-    queryFn: async () => {
-      if (!patients || !Array.isArray(patients) || patients.length === 0) return [];
-      
-      const patientsPromises = patients.map(async (patient: any) => {
-        try {
-          // Get encounters for patient
-          const encountersResponse = await fetch(`/api/patients/${patient.id}/encounters`, {
-            credentials: "include",
-          });
-          
-          let eligibilityChecks: any[] = [];
-          if (encountersResponse.ok) {
-            const encounters = await encountersResponse.json();
-            
-            // Get eligibility checks for each encounter
-            if (Array.isArray(encounters)) {
-              const checkPromises = encounters.map(async (encounter: any) => {
-                try {
-                  // Get eligibility checks for this encounter
-                  const eligibilityResponse = await fetch(`/api/encounters/${encounter.id}/eligibility-checks`, {
-                    credentials: "include",
-                  });
-                  if (eligibilityResponse.ok) {
-                    return await eligibilityResponse.json();
-                  }
-                  return [];
-                } catch (error) {
-                  return [];
-                }
-              });
-              
-              const checkArrays = await Promise.all(checkPromises);
-              eligibilityChecks = checkArrays.flat();
-            }
-          }
-          
-          return {
-            id: patient.id,
-            name: `${patient.firstName} ${patient.lastName}`,
-            mrn: patient.mrn,
-            eligibilityChecks,
-          };
-        } catch (error) {
-          return {
-            id: patient.id,
-            name: `${patient.firstName || ''} ${patient.lastName || ''}`,
-            mrn: patient.mrn || '',
-            eligibilityChecks: [],
-          };
-        }
-      });
-      
-      return await Promise.all(patientsPromises);
-    },
-    enabled: !!patients && Array.isArray(patients) && patients.length > 0,
+  // OPTIMIZED: Get all patients with documents in a single API call
+  const { data: patientsWithDocuments, isLoading: documentsLoading } = useQuery<Array<{
+    id: string;
+    name: string;
+    mrn: string;
+    documents: Array<any>;
+  }>>({
+    queryKey: ["/api/patients-with-documents", currentTenant?.id],
+    enabled: !!currentTenant?.id,
     retry: false,
   });
 
-  // Get all documents
-  const { data: allDocuments, isLoading: documentsLoading } = useQuery({
-    queryKey: ["/api/all-documents"],
-    queryFn: async () => {
-      if (!patients || !Array.isArray(patients) || patients.length === 0) return [];
-      
-      const documentPromises = patients.map(async (patient: any) => {
-        try {
-          const response = await fetch(`/api/patients/${patient.id}/documents`, {
-            credentials: "include",
-          });
-          if (response.ok) {
-            const documents = await response.json();
-            return Array.isArray(documents) ? documents.map((doc: any) => ({
-              ...doc,
-              patientName: `${patient.firstName || ''} ${patient.lastName || ''}`,
-              patientMrn: patient.mrn || '',
-            })) : [];
-          }
-          return [];
-        } catch (error) {
-          return [];
-        }
-      });
-      
-      const documentArrays = await Promise.all(documentPromises);
-      return documentArrays.flat().sort((a: any, b: any) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-    },
-    enabled: !!patients && Array.isArray(patients) && patients.length > 0,
-    retry: false,
-  });
+  // Transform the bulk documents data to match the original format
+  const allDocuments = patientsWithDocuments ? patientsWithDocuments.flatMap((patient: any) => 
+    patient.documents.map((doc: any) => ({
+      ...doc,
+      patientName: patient.name,
+      patientMrn: patient.mrn,
+    }))
+  ).sort((a: any, b: any) => 
+    new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+  ) : [];
 
   const generateDocumentMutation = useMutation({
     mutationFn: async ({ type, patientId, eligibilityCheckId }: { 
@@ -152,7 +96,7 @@ export default function Documents() {
       return await response.json();
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/all-documents"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/patients-with-documents", currentTenant?.id] });
       toast({
         title: "Document Generated",
         description: "Document has been generated successfully",

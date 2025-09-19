@@ -927,6 +927,72 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Bulk endpoint for Documents page performance optimization
+  app.get('/api/patients-with-eligibility/:tenantId', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const { tenantId } = req.params;
+      
+      // Verify user has access to tenant
+      const userTenantRole = await storage.getUserTenantRole(userId, tenantId);
+      if (!userTenantRole) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+
+      const patientsWithEligibility = await storage.getAllPatientsWithEligibilityByTenant(tenantId);
+      
+      // Log audit event for bulk PHI access
+      await storage.createAuditLog({
+        tenantId,
+        userId,
+        action: 'VIEW_BULK_PATIENTS_ELIGIBILITY',
+        entity: 'Patient',
+        entityId: `bulk-eligibility-${tenantId}`,
+        ipAddress: req.ip,
+        userAgent: req.get('User-Agent'),
+        previousHash: '',
+      });
+
+      res.json(patientsWithEligibility);
+    } catch (error) {
+      console.error("Error fetching patients with eligibility:", error);
+      res.status(500).json({ message: "Failed to fetch patients with eligibility" });
+    }
+  });
+
+  // Bulk endpoint for Documents page - get all patients with their documents
+  app.get('/api/patients-with-documents/:tenantId', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const { tenantId } = req.params;
+      
+      // Verify user has access to tenant
+      const userTenantRole = await storage.getUserTenantRole(userId, tenantId);
+      if (!userTenantRole) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+
+      const patientsWithDocuments = await storage.getAllPatientsWithDocumentsByTenant(tenantId);
+      
+      // Log audit event for bulk PHI access
+      await storage.createAuditLog({
+        tenantId,
+        userId,
+        action: 'VIEW_BULK_PATIENTS_DOCUMENTS',
+        entity: 'Patient',
+        entityId: `bulk-documents-${tenantId}`,
+        ipAddress: req.ip,
+        userAgent: req.get('User-Agent'),
+        previousHash: '',
+      });
+
+      res.json(patientsWithDocuments);
+    } catch (error) {
+      console.error("Error fetching patients with documents:", error);
+      res.status(500).json({ message: "Failed to fetch patients with documents" });
+    }
+  });
+
   // Get recent eligibility checks for current tenant
   app.get('/api/recent-eligibility-checks', isAuthenticated, async (req: any, res) => {
     try {

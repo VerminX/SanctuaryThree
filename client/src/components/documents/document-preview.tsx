@@ -71,7 +71,8 @@ export default function DocumentPreview({
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: [`/api/documents/${document.id}/versions`] });
-      queryClient.invalidateQueries({ queryKey: ["/api/all-documents"] });
+      // Invalidate bulk documents endpoint (use prefix without tenantId since it's not easily accessible in this component)
+      queryClient.invalidateQueries({ queryKey: ["/api/patients-with-documents"] });
       setIsEditing(false);
       setChangeLog("");
       toast({

@@ -569,6 +569,118 @@ export class DatabaseStorage implements IStorage {
     });
   }
 
+  // Bulk endpoint for Documents page performance optimization
+  async getAllPatientsWithEligibilityByTenant(tenantId: string): Promise<Array<{
+    id: string;
+    name: string;
+    mrn: string;
+    eligibilityChecks: Array<EligibilityCheck>;
+  }>> {
+    const { safeDecryptPatientData } = await import('./services/encryption');
+    
+    // Get all patients for the tenant
+    const tenantPatients = await db
+      .select()
+      .from(patients)
+      .where(eq(patients.tenantId, tenantId));
+
+    // Get all encounters for these patients
+    const patientIds = tenantPatients.map(p => p.id);
+    if (patientIds.length === 0) return [];
+
+    const allEncounters = await db
+      .select()
+      .from(encounters)
+      .where(inArray(encounters.patientId, patientIds));
+
+    // Get all eligibility checks for these encounters
+    const encounterIds = allEncounters.map(e => e.id);
+    const allEligibilityChecks = encounterIds.length > 0 ? await db
+      .select()
+      .from(eligibilityChecks)
+      .where(inArray(eligibilityChecks.encounterId, encounterIds)) : [];
+
+    // Build the result by grouping eligibility checks by patient
+    return tenantPatients.map(patient => {
+      const { patientData, decryptionError } = safeDecryptPatientData(patient);
+      
+      if (decryptionError) {
+        return {
+          id: patient.id,
+          name: '[DECRYPTION ERROR]',
+          mrn: '[ENCRYPTED]',
+          eligibilityChecks: [],
+        };
+      }
+
+      // Get patient's encounters
+      const patientEncounters = allEncounters.filter(e => e.patientId === patient.id);
+      const patientEncounterIds = patientEncounters.map(e => e.id);
+      
+      // Get eligibility checks for patient's encounters
+      const patientEligibilityChecks = allEligibilityChecks.filter(check => 
+        patientEncounterIds.includes(check.encounterId)
+      );
+
+      return {
+        id: patient.id,
+        name: `${patientData.firstName} ${patientData.lastName}`.trim(),
+        mrn: patientData.mrn || '',
+        eligibilityChecks: patientEligibilityChecks,
+      };
+    });
+  }
+
+  // Bulk endpoint for Documents page - get all patients with their documents
+  async getAllPatientsWithDocumentsByTenant(tenantId: string): Promise<Array<{
+    id: string;
+    name: string;
+    mrn: string;
+    documents: Array<any>;
+  }>> {
+    const { safeDecryptPatientData } = await import('./services/encryption');
+    
+    // Get all patients for the tenant
+    const tenantPatients = await db
+      .select()
+      .from(patients)
+      .where(eq(patients.tenantId, tenantId));
+
+    // Get all documents for these patients
+    const patientIds = tenantPatients.map(p => p.id);
+    if (patientIds.length === 0) return [];
+
+    const allDocuments = await db
+      .select()
+      .from(documents)
+      .where(inArray(documents.patientId, patientIds))
+      .orderBy(desc(documents.createdAt));
+
+    // Build the result by grouping documents by patient
+    return tenantPatients.map(patient => {
+      const { patientData, decryptionError } = safeDecryptPatientData(patient);
+      
+      if (decryptionError) {
+        return {
+          id: patient.id,
+          name: '[DECRYPTION ERROR]',
+          mrn: '[ENCRYPTED]',
+          documents: [],
+        };
+      }
+
+      // Get patient's documents
+      const patientDocuments = allDocuments.filter(doc => doc.patientId === patient.id);
+
+      return {
+        id: patient.id,
+        name: `${patientData.firstName} ${patientData.lastName}`.trim(),
+        mrn: patientData.mrn || '',
+        documents: patientDocuments,
+      };
+    });
+  }
+
   // Policy operations
   async createPolicySource(policy: InsertPolicySource): Promise<PolicySource> {
     const [newPolicy] = await db.insert(policySources).values(policy).returning();

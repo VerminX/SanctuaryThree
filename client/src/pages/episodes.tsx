@@ -47,43 +47,37 @@ export default function Episodes() {
 
   const currentTenant = user?.tenants?.[0];
 
-  const { data: patients, isLoading: patientsLoading } = useQuery({
+  // Get patients for dropdown (only needed for create episode form)
+  const { data: patients } = useQuery<Array<{
+    id: string;
+    firstName: string;
+    lastName: string;
+    mrn: string;
+  }>>({
     queryKey: ["/api/tenants", currentTenant?.id, "patients"],
     enabled: !!currentTenant?.id,
     retry: false,
   });
 
-  // Get all episodes for all patients
-  const { data: allEpisodes, isLoading: episodesLoading, error } = useQuery({
-    queryKey: ["/api/episodes"],
-    queryFn: async () => {
-      if (!patients || !Array.isArray(patients) || patients.length === 0) return [];
-      
-      const episodePromises = patients.map(async (patient: any) => {
-        try {
-          const response = await fetch(`/api/patients/${patient.id}/episodes`, {
-            credentials: "include",
-          });
-          if (response.ok) {
-            const episodes = await response.json();
-            return episodes.map((episode: any) => ({
-              ...episode,
-              patientName: `${patient.firstName} ${patient.lastName}`,
-              patientMrn: patient.mrn,
-            }));
-          }
-          return [];
-        } catch (error) {
-          return [];
-        }
-      });
-      
-      const episodesArrays = await Promise.all(episodePromises);
-      return episodesArrays.flat().sort((a: any, b: any) => 
-        new Date(b.episodeStartDate).getTime() - new Date(a.episodeStartDate).getTime()
-      );
-    },
-    enabled: !!patients && Array.isArray(patients) && patients.length > 0,
+  // OPTIMIZED: Use bulk endpoint instead of N+1 queries for Episodes page  
+  // Get all episodes with patient information in a single API call
+  const { data: allEpisodes, isLoading: episodesLoading, error } = useQuery<Array<{
+    id: string;
+    patientId: string;
+    patientName: string;
+    patientMrn?: string;
+    woundType: string;
+    woundLocation: string;
+    episodeStartDate: string;
+    status: string;
+    encounterCount: number;
+    episodeEndDate?: Date | null;
+    primaryDiagnosis?: string | null;
+    createdAt?: Date | null;
+    updatedAt?: Date | null;
+  }>>({
+    queryKey: ["/api/episodes-with-patients", currentTenant?.id],
+    enabled: !!currentTenant?.id,
     retry: false,
   });
 
@@ -92,8 +86,7 @@ export default function Episodes() {
       await apiRequest("POST", `/api/patients/${selectedPatientId}/episodes`, episodeData);
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/episodes"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/tenants", currentTenant?.id, "patients"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/episodes-with-patients", currentTenant?.id] });
       setIsCreateDialogOpen(false);
       setSelectedPatientId("");
       toast({
@@ -126,8 +119,7 @@ export default function Episodes() {
       await apiRequest("PUT", `/api/episodes/${selectedEpisode?.id}`, episodeData);
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/episodes"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/tenants", currentTenant?.id, "patients"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/episodes-with-patients", currentTenant?.id] });
       setIsEditDialogOpen(false);
       setSelectedEpisode(null);
       toast({
@@ -160,8 +152,7 @@ export default function Episodes() {
       await apiRequest("DELETE", `/api/episodes/${episodeId}`, {});
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/episodes"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/tenants", currentTenant?.id, "patients"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/episodes-with-patients", currentTenant?.id] });
       toast({
         title: "Success",
         description: "Episode deleted successfully",
