@@ -42,51 +42,48 @@ export default function Encounters() {
 
   const currentTenant = user?.tenants?.[0];
 
-  const { data: patients, isLoading: patientsLoading } = useQuery({
-    queryKey: ["/api/tenants", currentTenant?.id, "patients"],
+  // Get encounters with patient data using bulk endpoint (PERFORMANCE OPTIMIZED)
+  const { data: encountersWithPatients, isLoading: encountersLoading, error } = useQuery<Array<{
+    id: string;
+    date: string;
+    encounterType: string;
+    woundAssessment?: string;
+    treatmentPlan?: string;
+    patientId: string;
+    episodeId?: string | null;
+    patient?: {
+      id: string;
+      firstName: string;
+      lastName: string; 
+      mrn: string;
+    };
+  }>>({
+    queryKey: ["/api/encounters-with-patients", currentTenant?.id],
     enabled: !!currentTenant?.id,
     retry: false,
   });
 
-  // Get all encounters for all patients
-  const { data: allEncounters, isLoading: encountersLoading, error } = useQuery({
-    queryKey: ["/api/encounters"],
-    queryFn: async () => {
-      if (!patients || !Array.isArray(patients) || patients.length === 0) return [];
-      
-      const encounterPromises = patients.map(async (patient: any) => {
-        try {
-          const response = await fetch(`/api/patients/${patient.id}/encounters`, {
-            credentials: "include",
-          });
-          if (response.ok) {
-            const encounters = await response.json();
-            return encounters.map((encounter: any) => ({
-              ...encounter,
-              patientName: `${patient.firstName} ${patient.lastName}`,
-              patientMrn: patient.mrn,
-            }));
-          }
-          return [];
-        } catch (error) {
-          return [];
-        }
-      });
-      
-      const encountersArrays = await Promise.all(encounterPromises);
-      return encountersArrays.flat().sort((a: any, b: any) => new Date(b.date).getTime() - new Date(a.date).getTime());
-    },
-    enabled: !!patients && Array.isArray(patients) && patients.length > 0,
-    retry: false,
-  });
+  // Transform bulk data to match expected format
+  const allEncounters = encountersWithPatients?.map((encounter: any) => ({
+    ...encounter,
+    patientName: `${encounter.patient?.firstName || ''} ${encounter.patient?.lastName || ''}`.trim(),
+    patientMrn: encounter.patient?.mrn,
+  })).sort((a: any, b: any) => new Date(b.date).getTime() - new Date(a.date).getTime()) || [];
+
+  // Extract patients from encounters for the create form dropdown
+  const patients = encountersWithPatients?.reduce((acc: any[], encounter: any) => {
+    if (encounter.patient && !acc.find((p: any) => p.id === encounter.patient.id)) {
+      acc.push(encounter.patient);
+    }
+    return acc;
+  }, []) || [];
 
   const createEncounterMutation = useMutation({
     mutationFn: async (encounterData: any) => {
       await apiRequest("POST", `/api/patients/${selectedPatientId}/encounters`, encounterData);
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/encounters"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/patients"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/encounters-with-patients", currentTenant?.id] });
       setIsCreateDialogOpen(false);
       setSelectedPatientId("");
       toast({
@@ -119,8 +116,7 @@ export default function Encounters() {
       await apiRequest("PUT", `/api/encounters/${selectedEncounter.id}`, encounterData);
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/encounters"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/patients"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/encounters-with-patients", currentTenant?.id] });
       setIsEditDialogOpen(false);
       setSelectedEncounter(null);
       toast({
