@@ -264,6 +264,13 @@ Return JSON in this exact format:
           role: "user", 
           content: `Extract ALL structured data from this medical document with maximum completeness. Analyze the ENTIRE document and capture every clinical detail, wound progression note, treatment response, conservative care attempt, and provider recommendation for each encounter.
 
+CRITICAL MEASUREMENT EXTRACTION RULES:
+- Convert wound measurements to NUMERIC values (e.g., "1×1 cm" becomes length: 1, width: 1, unit: "cm")
+- Parse measurements from formats like "2×3", "1.5 x 2.0", "4×3×0.5 cm" into separate numeric fields
+- Convert empty or missing measurements to null (NOT empty strings)
+- Ensure length, width, depth, area are numbers or null - NEVER strings
+- Common formats: "1×1", "2×2", "4×3", "1.5x2.0 cm", "area 3.2 cm²"
+
 SPECIFIC REQUIREMENTS:
 - Extract COMPLETE clinical notes, assessments, and plans for each encounter date
 - Capture ALL wound measurements, healing progression details, and treatment responses  
@@ -343,6 +350,39 @@ ${truncatedText}`,
     // Final validation
     if (!Array.isArray(result.encounterData) || result.encounterData.length === 0) {
       throw new Error('Invalid response format from AI data extraction - encounterData must be a non-empty array');
+    }
+
+    // Validate and fix measurement data types before returning
+    if (Array.isArray(result.encounterData)) {
+      result.encounterData.forEach((encounter: any) => {
+        if (encounter.woundDetails?.measurements) {
+          const measurements = encounter.woundDetails.measurements;
+          
+          // Convert string measurements to numbers
+          if (measurements.length && typeof measurements.length === 'string') {
+            const numericLength = parseFloat(measurements.length);
+            measurements.length = !isNaN(numericLength) ? numericLength : null;
+          }
+          if (measurements.width && typeof measurements.width === 'string') {
+            const numericWidth = parseFloat(measurements.width);
+            measurements.width = !isNaN(numericWidth) ? numericWidth : null;
+          }
+          if (measurements.depth && typeof measurements.depth === 'string') {
+            const numericDepth = parseFloat(measurements.depth);
+            measurements.depth = !isNaN(numericDepth) ? numericDepth : null;
+          }
+          if (measurements.area && typeof measurements.area === 'string') {
+            const numericArea = parseFloat(measurements.area);
+            measurements.area = !isNaN(numericArea) ? numericArea : null;
+          }
+          
+          // Convert empty strings to null
+          if (measurements.length === '' || measurements.length === '0') measurements.length = null;
+          if (measurements.width === '' || measurements.width === '0') measurements.width = null;
+          if (measurements.depth === '' || measurements.depth === '0') measurements.depth = null;
+          if (measurements.area === '' || measurements.area === '0') measurements.area = null;
+        }
+      });
     }
 
     // Add the original text and return structured result

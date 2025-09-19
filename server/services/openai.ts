@@ -3,10 +3,43 @@ import { EpisodeWithFullHistory } from "@shared/schema";
 import { IStorage } from "../storage";
 import { decryptEncounterNotes } from "./encryption";
 
-// Using GPT-4o-mini for AI-powered medical eligibility analysis with JSON mode support
-const openai = new OpenAI({ 
-  apiKey: process.env.OPENAI_API_KEY || process.env.AZURE_OPENAI_API_KEY 
-});
+// HIPAA COMPLIANCE: Configure OpenAI client with proper provider enforcement
+function createOpenAIClient() {
+  const azureApiKey = process.env.AZURE_OPENAI_API_KEY;
+  const azureEndpoint = process.env.AZURE_OPENAI_ENDPOINT;
+  const azureDeployment = process.env.AZURE_OPENAI_DEPLOYMENT || 'gpt-4o-mini';
+  const isProduction = process.env.NODE_ENV === 'production';
+  
+  // In production, REQUIRE Azure OpenAI for HIPAA compliance
+  if (isProduction && (!azureApiKey || !azureEndpoint)) {
+    throw new Error('HIPAA VIOLATION PREVENTED: Production environment requires Azure OpenAI configuration (AZURE_OPENAI_API_KEY and AZURE_OPENAI_ENDPOINT) for PHI processing.');
+  }
+  
+  // HIPAA COMPLIANCE: Enforce provider allowlisting beyond NODE_ENV
+  if (!azureApiKey) {
+    // For development testing, allow non-BAA processing
+    if (process.env.NODE_ENV === 'development') {
+      console.warn('WARNING: Using OpenAI.com API for PHI processing in development mode. Only allowed for testing with synthetic data.');
+    } else if (process.env.DEVELOPMENT_ALLOW_NON_BAA_PHI !== 'true') {
+      throw new Error('HIPAA VIOLATION PREVENTED: PHI processing requires BAA-compliant provider. Set DEVELOPMENT_ALLOW_NON_BAA_PHI=true only for synthetic data testing.');
+    }
+  }
+  
+  if (azureApiKey && azureEndpoint) {
+    // Configure for Azure OpenAI (HIPAA compliant)
+    return new OpenAI({
+      apiKey: azureApiKey,
+      baseURL: `${azureEndpoint}/openai/deployments/${azureDeployment}`,
+      defaultQuery: { 'api-version': '2024-02-01' },
+      defaultHeaders: {
+        'api-key': azureApiKey,
+      },
+    });
+  } else {
+    // Fallback to OpenAI.com (development only)
+    return new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+  }
+}
 
 interface EligibilityAnalysisRequest {
   encounterNotes: string[];
@@ -53,6 +86,9 @@ interface EligibilityAnalysisResponse {
 
 export async function analyzeEligibility(request: EligibilityAnalysisRequest): Promise<EligibilityAnalysisResponse> {
   const { encounterNotes, woundDetails, conservativeCare, patientInfo, policyContext } = request;
+  
+  // Create HIPAA-compliant OpenAI client
+  const openai = createOpenAIClient();
 
   const systemPrompt = `You are a compliance-focused clinical coverage assistant. Task: assess eligibility for non-analogous skin substitute/CTP use for DFU/VLU and draft payer-facing letters.
 
@@ -61,6 +97,13 @@ Rules:
 - Align to the patient's MAC: ${patientInfo.macRegion}, payer type: ${patientInfo.payerType}. Prefer the latest effective policy; if a policy is postponed, flag it.
 - Return structured JSON with the exact format specified.
 - Safety: No legal advice. If plan type is Medicare Advantage, note prior authorization is plan-specific; include plan checklist placeholders.
+
+CRITICAL WOUND MEASUREMENT ANALYSIS:
+- Carefully examine the wound details JSON for numeric measurements (length, width, depth, area)
+- Look for measurements in ALL formats: numeric values, strings that contain numbers, or descriptive text
+- If measurements exist (even as strings like "1", "2"), acknowledge them in your analysis
+- If no measurements are found, specifically state "detailed wound measurements over time" as a documentation gap
+- Consider wound size progression over time when measurements are available from multiple encounters
 
 Policy Context:
 ${policyContext}
@@ -141,6 +184,9 @@ interface EpisodeEligibilityAnalysisRequest {
 
 export async function analyzeEpisodeEligibility(request: EpisodeEligibilityAnalysisRequest): Promise<EligibilityAnalysisResponse> {
   const { episodeInfo, encounters, patientInfo, policyContext } = request;
+  
+  // Create HIPAA-compliant OpenAI client
+  const openai = createOpenAIClient();
 
   // Aggregate all encounter notes chronologically
   const allEncounterNotes = encounters
@@ -182,6 +228,13 @@ EPISODE-LEVEL ANALYSIS RULES:
 - Use ONLY the provided policy context (LCDs, Articles, MAC pages, CMS documentation)
 - Align to the patient's MAC: ${patientInfo.macRegion}, payer type: ${patientInfo.payerType}
 - Focus on episode-level medical necessity rather than single encounter assessment
+
+CRITICAL WOUND MEASUREMENT ANALYSIS:
+- Carefully examine ALL wound details across ALL encounters for numeric measurements (length, width, depth, area)
+- Look for measurements in ALL formats: numeric values, strings that contain numbers, or descriptive text in encounter notes
+- If measurements exist (even as strings like "1", "2"), acknowledge them and track progression over time
+- Consider wound size changes across multiple encounters to assess healing progression
+- If no measurements are found across encounters, specifically state "detailed wound measurements over time" as a documentation gap
 
 EPISODE INFORMATION:
 - Episode ID: ${episodeInfo.id}
@@ -305,6 +358,9 @@ interface EpisodeWithDecryptedHistory {
 // Enhanced episode eligibility analysis with full patient history - THIS IS NOW THE DEFAULT
 export async function analyzeEpisodeEligibilityWithFullHistory(request: EnhancedEpisodeAnalysisRequest): Promise<EligibilityAnalysisResponse> {
   const { targetEpisode, allPatientEpisodes, patientEligibilityHistory, patientInfo, policyContext } = request;
+  
+  // Create HIPAA-compliant OpenAI client
+  const openai = createOpenAIClient();
 
   // Aggregate all encounters chronologically across ALL patient episodes
   const allPatientEncounters = allPatientEpisodes
@@ -369,6 +425,14 @@ COMPREHENSIVE PATIENT HISTORY ANALYSIS RULES:
 - Use ONLY the provided policy context (LCDs, Articles, MAC pages, CMS documentation)
 - Align to the patient's MAC: ${patientInfo.macRegion}, payer type: ${patientInfo.payerType}
 - Focus on comprehensive medical necessity assessment rather than isolated episode evaluation
+
+CRITICAL WOUND MEASUREMENT ANALYSIS:
+- Thoroughly examine ALL wound details across ALL episodes and encounters for numeric measurements (length, width, depth, area)
+- Search through encounter notes, wound details JSON, and clinical findings for measurement data
+- Look for measurements in ALL formats: numeric values, strings containing numbers, descriptive text like "1×1", "2×2", "4×3"
+- If measurements exist anywhere (JSON data, encounter notes, clinical findings), acknowledge them and analyze progression
+- Track wound size changes across episodes to assess long-term healing patterns
+- If no measurements are found anywhere in the comprehensive patient record, specifically state "detailed wound measurements over time" as a documentation gap
 
 PATIENT OVERVIEW:
 - Total Episodes: ${allPatientEpisodes.length}
@@ -619,6 +683,9 @@ export async function generateLetterContent(
   eligibilityResult: EligibilityAnalysisResponse,
   clinicInfo: any
 ): Promise<string> {
+  // Create HIPAA-compliant OpenAI client
+  const openai = createOpenAIClient();
+  
   const prompt = `Generate a ${type} letter based on the eligibility analysis results.
 
 Clinic Information:
