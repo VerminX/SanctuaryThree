@@ -1061,7 +1061,7 @@ export async function prepareAndAnalyzeEpisodeWithFullHistory(
     }
 
     // Transform episodes to the format expected by enhanced analysis function
-    const transformEpisode = (episode: EpisodeWithFullHistory): EpisodeWithDecryptedHistory => {
+    const transformEpisode = async (episode: EpisodeWithFullHistory): Promise<EpisodeWithDecryptedHistory> => {
       // Ensure date objects (handle potential string dates from JSON)
       const episodeStartDate = episode.episodeStartDate instanceof Date 
         ? episode.episodeStartDate 
@@ -1081,7 +1081,7 @@ export async function prepareAndAnalyzeEpisodeWithFullHistory(
         primaryDiagnosis: episode.primaryDiagnosis,
         createdAt: episode.createdAt,
         updatedAt: episode.updatedAt,
-        encounters: episode.encounters.map(encounter => {
+        encounters: await Promise.all(episode.encounters.map(async encounter => {
           // Ensure date objects for encounters
           const encounterDate = encounter.date instanceof Date 
             ? encounter.date 
@@ -1090,13 +1090,13 @@ export async function prepareAndAnalyzeEpisodeWithFullHistory(
           return {
             id: encounter.id,
             date: encounterDate,
-            notes: decryptEncounterNotes(encounter.encryptedNotes as string[]),
+            notes: await decryptEncounterNotes(encounter.encryptedNotes as string[], encounter.id),
             woundDetails: encounter.woundDetails,
             conservativeCare: encounter.conservativeCare,
             infectionStatus: encounter.infectionStatus,
             comorbidities: encounter.comorbidities,
           };
-        }).sort((a, b) => a.date.getTime() - b.date.getTime()), // Sort encounters chronologically
+        })).then(encounters => encounters.sort((a, b) => a.date.getTime() - b.date.getTime())), // Sort encounters chronologically
         eligibilityChecks: episode.eligibilityChecks
           .map(check => ({
             ...check,
@@ -1108,7 +1108,7 @@ export async function prepareAndAnalyzeEpisodeWithFullHistory(
     };
 
     // Transform all episodes with proper date handling and sorting
-    const transformedEpisodes = allPatientEpisodes.map(transformEpisode);
+    const transformedEpisodes = await Promise.all(allPatientEpisodes.map(transformEpisode));
     const targetEpisode = transformedEpisodes.find(ep => ep.id === episodeId)!;
 
     // Sort patient eligibility history by date (most recent first) 

@@ -128,6 +128,19 @@ class HealthMonitoringService {
   }
 
   /**
+   * Records corruption scan results for monitoring
+   */
+  reportCorruptionScanResults(report: { totalEncountersScanned: number; corruptedEncounters: number; corruptionRate: number; quarantinedCount: number }): void {
+    console.log(`📊 CORRUPTION SCAN: ${report.corruptedEncounters}/${report.totalEncountersScanned} encounters corrupted (${report.corruptionRate.toFixed(1)}%)`);
+    console.log(`🔒 QUARANTINED: ${report.quarantinedCount} encounters flagged for recovery`);
+    
+    // Update metrics for health monitoring
+    if (report.corruptionRate > 20) {
+      console.warn('⚠️ HIGH CORRUPTION RATE: Immediate investigation recommended');
+    }
+  }
+
+  /**
    * Updates the total patient count for corruption rate calculation
    */
   updateTotalPatientCount(count: number): void {

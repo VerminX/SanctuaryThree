@@ -250,8 +250,32 @@ export function encryptEncounterNotes(notes: string[]): string[] {
 // Track encounter note failures with proper time-based rate limiting (like patient data)
 const encounterNoteFailureCache = new Map<string, { count: number; lastLoggedAt: number; lastAttempt: number }>();
 
-export function decryptEncounterNotes(encryptedNotes: string[]): string[] {
+// Cache the encounter recovery service to avoid repeated imports
+let encounterRecoveryService: any = null;
+
+export async function decryptEncounterNotes(encryptedNotes: string[], encounterId?: string): Promise<string[]> {
+  // Load encounter recovery service once if needed
+  if (encounterId && !encounterRecoveryService) {
+    try {
+      const module = await import('./encounterRecovery.js');
+      encounterRecoveryService = module.encounterRecovery;
+    } catch (error) {
+      console.warn('Failed to load encounter recovery service:', error);
+    }
+  }
+
   return encryptedNotes.map((note, index) => {
+    // Check if encounter is quarantined to prevent repeated attempts
+    if (encounterId && encounterRecoveryService) {
+      try {
+        if (encounterRecoveryService.isQuarantined(encounterId)) {
+          return '[QUARANTINED: Encounter marked for recovery]';
+        }
+      } catch (error) {
+        console.warn('Failed to check quarantine status:', error);
+      }
+    }
+
     try {
       return decryptPHI(note);
     } catch (error) {

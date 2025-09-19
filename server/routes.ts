@@ -162,6 +162,148 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Encounter Note Recovery Endpoints (Phase 5 Task 4)
+  app.post('/api/recovery/scan', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const { tenantId } = req.body;
+      
+      // Get user's admin tenants
+      const tenants = await storage.getTenantsByUser(userId);
+      const adminTenants = await Promise.all(
+        tenants.map(async tenant => {
+          try {
+            const userRole = await storage.getUserTenantRole(userId, tenant.id);
+            return userRole?.role === 'Admin' ? tenant.id : null;
+          } catch (error) {
+            return null;
+          }
+        })
+      ).then(results => results.filter(id => id !== null));
+      
+      if (adminTenants.length === 0) {
+        return res.status(403).json({ message: "Admin access required for corruption scanning" });
+      }
+
+      // If tenantId specified, verify user is admin of that tenant
+      if (tenantId && !adminTenants.includes(tenantId)) {
+        return res.status(403).json({ message: "Access denied: Not admin of specified tenant" });
+      }
+
+      const { encounterRecovery } = await import('./services/encounterRecovery.js');
+      
+      // Run corruption scan only on user's admin tenants
+      const scanTenantId = tenantId || adminTenants[0]; // Use first admin tenant if none specified
+      const report = await encounterRecovery.scanForCorruption(scanTenantId);
+      
+      res.json({
+        success: true,
+        timestamp: new Date().toISOString(),
+        report
+      });
+    } catch (error) {
+      console.error('Corruption scan failed:', error);
+      res.status(500).json({ message: "Failed to perform corruption scan" });
+    }
+  });
+
+  app.get('/api/recovery/report', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      
+      // Check admin access
+      const tenants = await storage.getTenantsByUser(userId);
+      const hasAdminAccess = await Promise.all(
+        tenants.map(async tenant => {
+          try {
+            const userRole = await storage.getUserTenantRole(userId, tenant.id);
+            return userRole?.role === 'Admin';
+          } catch (error) {
+            return false;
+          }
+        })
+      ).then(results => results.some(isAdmin => isAdmin));
+      
+      if (!hasAdminAccess) {
+        return res.status(403).json({ message: "Admin access required for recovery reports" });
+      }
+
+      const { encounterRecovery } = await import('./services/encounterRecovery.js');
+      const report = encounterRecovery.generateRecoveryReport();
+      
+      res.type('text/plain').send(report);
+    } catch (error) {
+      console.error('Recovery report generation failed:', error);
+      res.status(500).json({ message: "Failed to generate recovery report" });
+    }
+  });
+
+  app.post('/api/recovery/:encounterId/restore', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const { encounterId } = req.params;
+      const { backupNotes } = req.body;
+      
+      if (!Array.isArray(backupNotes)) {
+        return res.status(400).json({ message: "backupNotes must be an array of strings" });
+      }
+
+      // Get user's admin tenants
+      const tenants = await storage.getTenantsByUser(userId);
+      const adminTenants = await Promise.all(
+        tenants.map(async tenant => {
+          try {
+            const userRole = await storage.getUserTenantRole(userId, tenant.id);
+            return userRole?.role === 'Admin' ? tenant.id : null;
+          } catch (error) {
+            return null;
+          }
+        })
+      ).then(results => results.filter(id => id !== null));
+      
+      if (adminTenants.length === 0) {
+        return res.status(403).json({ message: "Admin access required for encounter restoration" });
+      }
+
+      // Verify encounter belongs to one of user's admin tenants
+      const encounter = await storage.getEncounter(encounterId);
+      if (!encounter) {
+        return res.status(404).json({ message: "Encounter not found" });
+      }
+
+      const patient = await storage.getPatient(encounter.patientId);
+      if (!patient || !adminTenants.includes(patient.tenantId)) {
+        return res.status(403).json({ message: "Access denied: Encounter not in your admin tenants" });
+      }
+
+      const { encounterRecovery } = await import('./services/encounterRecovery.js');
+      const success = await encounterRecovery.recoverFromBackup(encounterId, backupNotes);
+      
+      if (success) {
+        // Track audit activity
+        await trackActivity(
+          patient.tenantId,
+          userId,
+          'restore',
+          'encounter',
+          encounterId,
+          `Encounter restored from backup`
+        );
+        
+        res.json({
+          success: true,
+          message: `Encounter ${encounterId} successfully restored`,
+          timestamp: new Date().toISOString()
+        });
+      } else {
+        res.status(500).json({ message: "Failed to restore encounter from backup" });
+      }
+    } catch (error) {
+      console.error('Encounter restoration failed:', error);
+      res.status(500).json({ message: "Failed to restore encounter" });
+    }
+  });
+
   // Tenant routes
   app.post('/api/tenants', isAuthenticated, async (req: any, res) => {
     try {
@@ -450,7 +592,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       res.json({
         ...encounter,
-        notes: decryptEncounterNotes(encounter.encryptedNotes as string[]),
+        notes: await decryptEncounterNotes(encounter.encryptedNotes as string[], encounter.id),
       });
     } catch (error) {
       console.error("Error creating encounter:", error);
@@ -486,11 +628,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const encounters = await storage.getEncountersByPatient(patientId);
       
       // Decrypt encounter notes with safe error handling
-      const decryptedEncounters = encounters.map(encounter => {
+      const decryptedEncounters = await Promise.all(encounters.map(async encounter => {
         try {
           return {
             ...encounter,
-            notes: decryptEncounterNotes(encounter.encryptedNotes as string[]),
+            notes: await decryptEncounterNotes(encounter.encryptedNotes as string[], encounter.id),
           };
         } catch (error: any) {
           console.error(`Error decrypting encounter ${encounter.id} notes:`, error.message);
@@ -499,7 +641,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             notes: ['[DECRYPTION ERROR - ENCRYPTED DATA CORRUPTED]'],
           };
         }
-      });
+      }));
 
       res.json(decryptedEncounters);
     } catch (error) {
@@ -634,11 +776,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const encounters = await storage.getEncountersByEpisode(episodeId);
       
       // Decrypt encounter notes with safe error handling
-      const decryptedEncounters = encounters.map(encounter => {
+      const decryptedEncounters = await Promise.all(encounters.map(async encounter => {
         try {
           return {
             ...encounter,
-            notes: decryptEncounterNotes(encounter.encryptedNotes as string[]),
+            notes: await decryptEncounterNotes(encounter.encryptedNotes as string[], encounter.id),
           };
         } catch (error: any) {
           console.error(`Error decrypting encounter ${encounter.id} notes:`, error.message);
@@ -647,7 +789,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             notes: ['[DECRYPTION ERROR - ENCRYPTED DATA CORRUPTED]'],
           };
         }
-      });
+      }));
 
       res.json(decryptedEncounters);
     } catch (error) {
@@ -797,7 +939,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       res.json({
         ...updatedEncounter,
-        notes: decryptEncounterNotes(updatedEncounter.encryptedNotes as string[]),
+        notes: await decryptEncounterNotes(updatedEncounter.encryptedNotes as string[], updatedEncounter.id),
       });
     } catch (error) {
       console.error("Error updating encounter:", error);
@@ -843,29 +985,31 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       // Decrypt all encounter notes and build complete episode context
-      const episodeContext = allEpisodeEncounters
-        .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
-        .map((enc) => {
-          const decryptedNotes = decryptEncounterNotes(enc.encryptedNotes as string[]);
-          return {
-            date: enc.date,
-            notes: decryptedNotes,
-            woundDetails: enc.woundDetails,
-            conservativeCare: enc.conservativeCare,
-            procedureCodes: (enc as any).procedureCodes || [],
-            vascularAssessment: (enc as any).vascularAssessment || {},
-            functionalStatus: (enc as any).functionalStatus || {},
-            diabeticStatus: (enc as any).diabeticStatus || null,
-            infectionStatus: enc.infectionStatus,
-            comorbidities: enc.comorbidities,
-          };
-        });
+      const episodeContext = await Promise.all(
+        allEpisodeEncounters
+          .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
+          .map(async (enc) => {
+            const decryptedNotes = await decryptEncounterNotes(enc.encryptedNotes as string[], enc.id);
+            return {
+              date: enc.date,
+              notes: decryptedNotes,
+              woundDetails: enc.woundDetails,
+              conservativeCare: enc.conservativeCare,
+              procedureCodes: (enc as any).procedureCodes || [],
+              vascularAssessment: (enc as any).vascularAssessment || {},
+              functionalStatus: (enc as any).functionalStatus || {},
+              diabeticStatus: (enc as any).diabeticStatus || null,
+              infectionStatus: enc.infectionStatus,
+              comorbidities: enc.comorbidities,
+            };
+          })
+      );
 
       // Perform AI eligibility analysis with COMPLETE episode context
       const { analyzeEligibilityWithFullContext } = await import('./services/openai');
       const analysisResult = await analyzeEligibilityWithFullContext({
         currentEncounter: {
-          encounterNotes: decryptEncounterNotes(encounter.encryptedNotes as string[]),
+          encounterNotes: await decryptEncounterNotes(encounter.encryptedNotes as string[], encounter.id),
           woundDetails: encounter.woundDetails,
           conservativeCare: encounter.conservativeCare,
           procedureCodes: (encounter as any).procedureCodes || [],
@@ -1156,13 +1300,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const encountersWithPatients = await storage.getAllEncountersWithPatientsByTenant(tenantId);
       
       // Decrypt encounter notes and remove encrypted notes from response for data minimization
-      const encountersWithDecryptedNotes = encountersWithPatients.map(encounter => {
+      const encountersWithDecryptedNotes = await Promise.all(encountersWithPatients.map(async encounter => {
         const { encryptedNotes, ...encounterData } = encounter;
         return {
           ...encounterData,
-          notes: encryptedNotes ? decryptEncounterNotes(encryptedNotes as string[]) : [],
+          notes: encryptedNotes ? await decryptEncounterNotes(encryptedNotes as string[], encounter.id) : [],
         };
-      });
+      }));
 
       // Log audit event for bulk PHI access
       await storage.createAuditLog({

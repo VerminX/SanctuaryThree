@@ -66,8 +66,16 @@ app.use((req, res, next) => {
     port,
     host: "0.0.0.0",
     reusePort: true,
-  }, () => {
+  }, async () => {
     log(`serving on port ${port}`);
+    
+    // Initialize encounter recovery quarantine state (Phase 5 Task 4)
+    try {
+      const { encounterRecovery } = await import('./services/encounterRecovery.js');
+      await encounterRecovery.loadQuarantineState();
+    } catch (error) {
+      log(`Failed to load quarantine state: ${error}`);
+    }
     
     // Start nightly policy update scheduler
     setupPolicyUpdateScheduler();
