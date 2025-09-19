@@ -172,6 +172,40 @@ const CTP_PRODUCT_PATTERNS = [
 ];
 
 /**
+ * Normalizes diabetic status to handle common variations and synonyms
+ */
+function normalizeDiabeticStatus(status: string | undefined): 'diabetic' | 'nondiabetic' | 'unknown' {
+  if (!status || status.trim() === '' || status.toLowerCase().includes('unknown')) {
+    return 'unknown';
+  }
+
+  const normalized = status.toLowerCase().trim();
+  
+  // Handle non-diabetic synonyms
+  const nonDiabeticVariants = [
+    'non-diabetic', 'non diabetic', 'not diabetic', 'no diabetes', 
+    'without diabetes', 'no dx of diabetes', 'nondiabetic', 'non_diabetic'
+  ];
+  
+  if (nonDiabeticVariants.includes(normalized)) {
+    return 'nondiabetic';
+  }
+  
+  // Handle diabetic synonyms
+  const diabeticVariants = [
+    'diabetic', 'diabetes', 'has diabetes', 'with diabetes', 
+    'diabetic patient', 'diabetes mellitus', 'dm'
+  ];
+  
+  if (diabeticVariants.includes(normalized)) {
+    return 'diabetic';
+  }
+  
+  // Default to unknown for unrecognized values
+  return 'unknown';
+}
+
+/**
  * Task 1.1: Validates if wound type meets Medicare LCD covered indications
  * Checks for DFU/VLU explicitly and rejects non-covered wound types
  */
@@ -183,6 +217,7 @@ export function validateWoundTypeForCoverage(
 ): ValidationResult {
   const normalizedWoundType = woundType.toLowerCase();
   const allText = [woundType, primaryDiagnosis || '', ...encounterNotes].join(' ').toLowerCase();
+  const normalizedDiabeticStatus = normalizeDiabeticStatus(diabeticStatus);
   
   // Check for non-covered wound types first (immediate disqualifiers)
   const nonCoveredTypes = ['TRAUMATIC', 'SURGICAL', 'PRESSURE', 'ARTERIAL'];
@@ -253,12 +288,12 @@ export function validateWoundTypeForCoverage(
     if (matchFound) {
       // Additional validation for DFU - only deterministically reject if explicitly non-diabetic
       if (type === 'DFU' && 'requiresDiabetes' in patterns && patterns.requiresDiabetes) {
-        if (diabeticStatus === 'nondiabetic') {
+        if (normalizedDiabeticStatus === 'nondiabetic') {
           return {
             isValid: false,
-            reason: `Wound identified as DFU but patient is confirmed non-diabetic (status: ${diabeticStatus})`,
+            reason: `Wound identified as DFU but patient is confirmed non-diabetic (original: "${diabeticStatus}", normalized: "${normalizedDiabeticStatus}")`,
             policyViolation: 'DFU diagnosis requires diabetic patient. Non-diabetic patients are not eligible for DFU CTPs under Medicare LCD L39806.',
-            details: { woundCategory: type, diabeticStatus, identifiedBy: matchReason }
+            details: { woundCategory: type, diabeticStatus: normalizedDiabeticStatus, originalStatus: diabeticStatus, identifiedBy: matchReason }
           };
         }
         // If diabetic status is missing/unknown, allow validation to pass - let AI analysis handle the ambiguity
@@ -268,7 +303,7 @@ export function validateWoundTypeForCoverage(
       return {
         isValid: true,
         reason: `Wound type ${type} meets Medicare LCD covered indication (identified by ${matchReason})`,
-        details: { woundCategory: type, diabeticStatus, identifiedBy: matchReason }
+        details: { woundCategory: type, diabeticStatus: normalizedDiabeticStatus, originalStatus: diabeticStatus, identifiedBy: matchReason }
       };
     }
   }
@@ -567,10 +602,11 @@ export function performPreEligibilityChecks(
   auditTrail.push(`Primary diagnosis: ${episode.primaryDiagnosis || 'Not specified'}`);
   
   // Get patient diabetic status from encounters (prefer latest known status)
-  const diabeticStatus = encounters
+  const rawDiabeticStatus = encounters
     .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()) // Sort by date descending
     .find(enc => enc.diabeticStatus)?.diabeticStatus;
-  auditTrail.push(`Patient diabetic status: ${diabeticStatus || 'Not specified'} (from latest available encounter)`);
+  const diabeticStatus = normalizeDiabeticStatus(rawDiabeticStatus);
+  auditTrail.push(`Patient diabetic status: ${diabeticStatus} (from latest encounter, original: "${rawDiabeticStatus || 'Not specified'}")`);
   
   // Task 1.1: Wound Type Validation
   auditTrail.push('Performing wound type validation...');
@@ -579,7 +615,7 @@ export function performPreEligibilityChecks(
     episode.woundType,
     episode.primaryDiagnosis,
     encounterNotes,
-    diabeticStatus
+    rawDiabeticStatus  // Pass raw value so function can normalize internally and preserve original in details
   );
   
   auditTrail.push(`Wound type check result: ${woundTypeCheck.isValid ? 'PASS' : 'FAIL'} - ${woundTypeCheck.reason}`);
