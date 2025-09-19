@@ -57,13 +57,42 @@ function updateUserSession(
 async function upsertUser(
   claims: any,
 ) {
+  const userId = claims["sub"];
+  
+  // Create or update user
   await storage.upsertUser({
-    id: claims["sub"],
+    id: userId,
     email: claims["email"],
     firstName: claims["first_name"],
     lastName: claims["last_name"],
     profileImageUrl: claims["profile_image_url"],
   });
+  
+  // Check if user has any tenants
+  const userTenants = await storage.getTenantsByUser(userId);
+  
+  if (userTenants.length === 0) {
+    // Create a default tenant for the user
+    console.log(`Creating default tenant for new user ${userId}`);
+    const tenant = await storage.createTenant({
+      name: `${claims["first_name"] || "User"}'s Clinic`,
+      npi: '0000000000', // Default NPI - user should update
+      tin: '000000000',   // Default TIN - user should update
+      macRegion: 'Not Specified', // Default MAC - user should update
+      address: 'Address not yet configured',
+      phone: '000-000-0000'
+    });
+    
+    // Add user as admin of their tenant
+    await storage.addUserToTenant({
+      userId,
+      tenantId: tenant.id,
+      role: 'Admin',
+      isActive: true,
+    });
+    
+    console.log(`Default tenant ${tenant.id} created for user ${userId}`);
+  }
 }
 
 export async function setupAuth(app: Express) {

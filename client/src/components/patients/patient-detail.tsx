@@ -75,6 +75,8 @@ export default function PatientDetail() {
   const { user } = useAuth();
   const queryClient = useQueryClient();
   const [isEncounterDialogOpen, setIsEncounterDialogOpen] = useState(false);
+  const [selectedEncounter, setSelectedEncounter] = useState<PatientEncounter | null>(null);
+  const [isViewDetailsDialogOpen, setIsViewDetailsDialogOpen] = useState(false);
 
   // Get current tenant
   const currentTenant = user?.tenants?.[0];
@@ -478,7 +480,15 @@ export default function PatientDetail() {
                             )}
                           </TableCell>
                           <TableCell>
-                            <Button variant="outline" size="sm" data-testid={`button-view-encounter-${encounter.id}`}>
+                            <Button 
+                              variant="outline" 
+                              size="sm" 
+                              data-testid={`button-view-encounter-${encounter.id}`}
+                              onClick={() => {
+                                setSelectedEncounter(encounter);
+                                setIsViewDetailsDialogOpen(true);
+                              }}
+                            >
                               View Details
                             </Button>
                           </TableCell>
@@ -498,6 +508,212 @@ export default function PatientDetail() {
               )}
             </CardContent>
           </Card>
+
+          {/* View Encounter Details Dialog */}
+          <Dialog open={isViewDetailsDialogOpen} onOpenChange={setIsViewDetailsDialogOpen}>
+            <DialogContent className="sm:max-w-3xl max-h-[90vh] overflow-y-auto" data-testid="encounter-detail">
+              <DialogHeader>
+                <DialogTitle>Encounter Details</DialogTitle>
+              </DialogHeader>
+              {selectedEncounter && (
+                <div className="space-y-4">
+                  {/* Basic Information */}
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <p className="text-sm text-muted-foreground">Date</p>
+                      <p className="font-medium">{new Date(selectedEncounter.date).toLocaleDateString()}</p>
+                    </div>
+                    <div>
+                      <p className="text-sm text-muted-foreground">Created</p>
+                      <p className="font-medium">{new Date(selectedEncounter.createdAt).toLocaleDateString()}</p>
+                    </div>
+                  </div>
+
+                  {/* Clinical Status */}
+                  <Card>
+                    <CardHeader>
+                      <CardTitle className="text-lg flex items-center gap-2">
+                        <Activity className="h-5 w-5" />
+                        Clinical Status
+                      </CardTitle>
+                    </CardHeader>
+                    <CardContent className="space-y-3">
+                      {selectedEncounter.diabeticStatus && (
+                        <div>
+                          <p className="text-sm text-muted-foreground mb-1">Diabetic Status</p>
+                          <Badge 
+                            variant={selectedEncounter.diabeticStatus === 'diabetic' ? 'destructive' : 'outline'}
+                            className="text-sm"
+                          >
+                            <Activity className="h-3 w-3 mr-1" />
+                            {selectedEncounter.diabeticStatus}
+                          </Badge>
+                        </div>
+                      )}
+                      {selectedEncounter.infectionStatus && (
+                        <div>
+                          <p className="text-sm text-muted-foreground mb-1">Infection Status</p>
+                          <Badge 
+                            variant={selectedEncounter.infectionStatus === 'None' ? 'outline' : 'destructive'}
+                            className="text-sm"
+                          >
+                            {selectedEncounter.infectionStatus}
+                          </Badge>
+                        </div>
+                      )}
+                    </CardContent>
+                  </Card>
+
+                  {/* Wound Details */}
+                  {selectedEncounter.woundDetails && (
+                    <Card>
+                      <CardHeader>
+                        <CardTitle className="text-lg">Wound Details</CardTitle>
+                      </CardHeader>
+                      <CardContent>
+                        <div className="grid grid-cols-2 gap-4">
+                          {selectedEncounter.woundDetails.type && (
+                            <div>
+                              <p className="text-sm text-muted-foreground">Type</p>
+                              <p className="font-medium">{selectedEncounter.woundDetails.type}</p>
+                            </div>
+                          )}
+                          {selectedEncounter.woundDetails.location && (
+                            <div>
+                              <p className="text-sm text-muted-foreground">Location</p>
+                              <p className="font-medium">{selectedEncounter.woundDetails.location}</p>
+                            </div>
+                          )}
+                          {selectedEncounter.woundDetails.size && (
+                            <div>
+                              <p className="text-sm text-muted-foreground">Size</p>
+                              <p className="font-medium">{selectedEncounter.woundDetails.size}</p>
+                            </div>
+                          )}
+                        </div>
+                      </CardContent>
+                    </Card>
+                  )}
+
+                  {/* CPT/HCPCS Codes */}
+                  {selectedEncounter.procedureCodes && selectedEncounter.procedureCodes.length > 0 && (
+                    <Card>
+                      <CardHeader>
+                        <CardTitle className="text-lg flex items-center gap-2">
+                          <Code className="h-5 w-5" />
+                          CPT/HCPCS Codes
+                        </CardTitle>
+                      </CardHeader>
+                      <CardContent>
+                        <div className="space-y-2">
+                          {selectedEncounter.procedureCodes.map((proc, idx) => (
+                            <div key={idx} className="flex items-center gap-3 p-2 bg-muted/50 rounded">
+                              <code className="text-sm bg-background px-2 py-1 rounded">{proc.code}</code>
+                              {proc.description && (
+                                <span className="text-sm">{proc.description}</span>
+                              )}
+                              {proc.modifier && (
+                                <Badge variant="outline" className="text-xs">Mod: {proc.modifier}</Badge>
+                              )}
+                              {proc.units && (
+                                <Badge variant="outline" className="text-xs">×{proc.units}</Badge>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      </CardContent>
+                    </Card>
+                  )}
+
+                  {/* Vascular Assessment */}
+                  {selectedEncounter.vascularAssessment && (
+                    <Card>
+                      <CardHeader>
+                        <CardTitle className="text-lg flex items-center gap-2">
+                          <Heart className="h-5 w-5" />
+                          Vascular Assessment
+                        </CardTitle>
+                      </CardHeader>
+                      <CardContent>
+                        <div className="grid grid-cols-2 gap-4">
+                          {selectedEncounter.vascularAssessment.dorsalisPedis && (
+                            <div>
+                              <p className="text-sm text-muted-foreground">Dorsalis Pedis Pulse</p>
+                              <p className="font-medium">{selectedEncounter.vascularAssessment.dorsalisPedis}</p>
+                            </div>
+                          )}
+                          {selectedEncounter.vascularAssessment.posteriorTibial && (
+                            <div>
+                              <p className="text-sm text-muted-foreground">Posterior Tibial Pulse</p>
+                              <p className="font-medium">{selectedEncounter.vascularAssessment.posteriorTibial}</p>
+                            </div>
+                          )}
+                          {selectedEncounter.vascularAssessment.capillaryRefill && (
+                            <div>
+                              <p className="text-sm text-muted-foreground">Capillary Refill</p>
+                              <p className="font-medium">{selectedEncounter.vascularAssessment.capillaryRefill}</p>
+                            </div>
+                          )}
+                          {selectedEncounter.vascularAssessment.edema && (
+                            <div>
+                              <p className="text-sm text-muted-foreground">Edema</p>
+                              <p className="font-medium">{selectedEncounter.vascularAssessment.edema}</p>
+                            </div>
+                          )}
+                          {selectedEncounter.vascularAssessment.varicosities && (
+                            <div>
+                              <p className="text-sm text-muted-foreground">Varicosities</p>
+                              <p className="font-medium">{selectedEncounter.vascularAssessment.varicosities}</p>
+                            </div>
+                          )}
+                        </div>
+                      </CardContent>
+                    </Card>
+                  )}
+
+                  {/* Functional Status */}
+                  {selectedEncounter.functionalStatus && (
+                    <Card>
+                      <CardHeader>
+                        <CardTitle className="text-lg flex items-center gap-2">
+                          <Footprints className="h-5 w-5" />
+                          Functional Status
+                        </CardTitle>
+                      </CardHeader>
+                      <CardContent>
+                        <div className="grid grid-cols-2 gap-4">
+                          {selectedEncounter.functionalStatus.mobility && (
+                            <div>
+                              <p className="text-sm text-muted-foreground">Mobility</p>
+                              <p className="font-medium">{selectedEncounter.functionalStatus.mobility}</p>
+                            </div>
+                          )}
+                          {selectedEncounter.functionalStatus.assistiveDevice && (
+                            <div>
+                              <p className="text-sm text-muted-foreground">Assistive Device</p>
+                              <p className="font-medium">{selectedEncounter.functionalStatus.assistiveDevice}</p>
+                            </div>
+                          )}
+                          {selectedEncounter.functionalStatus.selfCare && (
+                            <div>
+                              <p className="text-sm text-muted-foreground">Self Care</p>
+                              <p className="font-medium">{selectedEncounter.functionalStatus.selfCare}</p>
+                            </div>
+                          )}
+                          {selectedEncounter.functionalStatus.adlScore !== undefined && (
+                            <div>
+                              <p className="text-sm text-muted-foreground">ADL Score</p>
+                              <Badge variant="outline">{selectedEncounter.functionalStatus.adlScore}</Badge>
+                            </div>
+                          )}
+                        </div>
+                      </CardContent>
+                    </Card>
+                  )}
+                </div>
+              )}
+            </DialogContent>
+          </Dialog>
 
           {/* Back Button */}
           <div className="flex justify-start">
