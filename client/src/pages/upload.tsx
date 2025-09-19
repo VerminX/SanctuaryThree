@@ -7,7 +7,7 @@ import { Progress } from "@/components/ui/progress";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { CheckCircle, FileUp, Upload, AlertCircle, Clock, FileText, ArrowLeft, Users, Calendar, Brain } from "lucide-react";
+import { CheckCircle, FileUp, Upload, AlertCircle, Clock, FileText, ArrowLeft, Users, Calendar, Brain, CreditCard, Code, Heart, Activity, Footprints } from "lucide-react";
 import { apiRequest } from "@/lib/queryClient";
 import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
@@ -40,10 +40,14 @@ interface ExtractionResult {
     dateOfBirth?: string;
     payerType?: string;
     planName?: string;
+    insuranceId?: string;
+    // Secondary insurance fields
+    secondaryPayerType?: string;
+    secondaryPlanName?: string;
+    secondaryInsuranceId?: string;
     macRegion?: string;
     phoneNumber?: string;
     address?: string;
-    insuranceId?: string;
   };
   encounterData: {
     encounterDate?: string;
@@ -51,6 +55,26 @@ interface ExtractionResult {
     woundDetails?: any;
     conservativeCare?: any;
     infectionStatus?: string;
+    procedureCodes?: Array<{
+      code: string;
+      description?: string;
+      modifier?: string;
+      units?: number;
+    }>;
+    vascularAssessment?: {
+      dorsalisPedis?: string;
+      posteriorTibial?: string;
+      capillaryRefill?: string;
+      edema?: string;
+      varicosities?: string;
+    };
+    functionalStatus?: {
+      selfCare?: string;
+      mobility?: string;
+      assistiveDevice?: string;
+      adlScore?: number;
+    };
+    diabeticStatus?: string;
     comorbidities?: string[];
     assessment?: string;
     plan?: string;
@@ -502,8 +526,13 @@ export default function UploadPage() {
 
                       {extractionResults[upload.id].patientData && (
                         <div className="mb-4">
-                          <h5 className="font-medium text-sm text-gray-700 dark:text-gray-300 mb-2">Patient Information</h5>
-                          <div className="grid grid-cols-2 gap-2 text-sm">
+                          <h5 className="font-medium text-sm text-gray-700 dark:text-gray-300 mb-2 flex items-center gap-2">
+                            <Users className="w-4 h-4" />
+                            Patient Information
+                          </h5>
+                          
+                          {/* Basic Information */}
+                          <div className="grid grid-cols-2 gap-2 text-sm mb-3">
                             {extractionResults[upload.id].patientData.firstName && (
                               <div data-testid={`patient-name-${upload.id}`}>
                                 <strong>Name:</strong> {extractionResults[upload.id].patientData.firstName} {extractionResults[upload.id].patientData.lastName}
@@ -511,7 +540,7 @@ export default function UploadPage() {
                             )}
                             {extractionResults[upload.id].patientData.mrn && (
                               <div data-testid={`patient-mrn-${upload.id}`}>
-                                <strong>MRN:</strong> {extractionResults[upload.id].patientData.mrn}
+                                <strong>MRN:</strong> <code className="bg-gray-100 dark:bg-gray-700 px-1 rounded">{extractionResults[upload.id].patientData.mrn}</code>
                               </div>
                             )}
                             {extractionResults[upload.id].patientData.dateOfBirth && (
@@ -519,41 +548,193 @@ export default function UploadPage() {
                                 <strong>DOB:</strong> {extractionResults[upload.id].patientData.dateOfBirth}
                               </div>
                             )}
-                            {extractionResults[upload.id].patientData.payerType && (
-                              <div data-testid={`patient-payer-${upload.id}`}>
-                                <strong>Payer:</strong> {extractionResults[upload.id].patientData.payerType}
+                            {extractionResults[upload.id].patientData.macRegion && (
+                              <div data-testid={`patient-mac-${upload.id}`}>
+                                <strong>MAC Region:</strong> {extractionResults[upload.id].patientData.macRegion}
                               </div>
                             )}
                           </div>
+                          
+                          {/* Primary Insurance */}
+                          <div className="bg-blue-50 dark:bg-blue-900/20 p-2 rounded mb-2">
+                            <h6 className="font-medium text-xs text-blue-900 dark:text-blue-100 mb-1 flex items-center gap-1">
+                              <CreditCard className="w-3 h-3" />
+                              Primary Insurance
+                            </h6>
+                            <div className="grid grid-cols-2 gap-2 text-sm">
+                              {extractionResults[upload.id].patientData.payerType && (
+                                <div data-testid={`patient-payer-${upload.id}`}>
+                                  <strong>Payer:</strong> {extractionResults[upload.id].patientData.payerType}
+                                </div>
+                              )}
+                              {extractionResults[upload.id].patientData.planName && (
+                                <div data-testid={`patient-plan-${upload.id}`}>
+                                  <strong>Plan:</strong> {extractionResults[upload.id].patientData.planName}
+                                </div>
+                              )}
+                              {extractionResults[upload.id].patientData.insuranceId && (
+                                <div data-testid={`patient-insurance-id-${upload.id}`} className="col-span-2">
+                                  <strong>ID:</strong> <code className="bg-gray-100 dark:bg-gray-700 px-1 rounded">{extractionResults[upload.id].patientData.insuranceId}</code>
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                          
+                          {/* Secondary Insurance */}
+                          {(extractionResults[upload.id].patientData.secondaryPayerType || 
+                            extractionResults[upload.id].patientData.secondaryPlanName || 
+                            extractionResults[upload.id].patientData.secondaryInsuranceId) && (
+                            <div className="bg-purple-50 dark:bg-purple-900/20 p-2 rounded">
+                              <h6 className="font-medium text-xs text-purple-900 dark:text-purple-100 mb-1 flex items-center gap-1">
+                                <CreditCard className="w-3 h-3" />
+                                Secondary Insurance
+                              </h6>
+                              <div className="grid grid-cols-2 gap-2 text-sm">
+                                {extractionResults[upload.id].patientData.secondaryPayerType && (
+                                  <div data-testid={`patient-secondary-payer-${upload.id}`}>
+                                    <strong>Payer:</strong> {extractionResults[upload.id].patientData.secondaryPayerType}
+                                  </div>
+                                )}
+                                {extractionResults[upload.id].patientData.secondaryPlanName && (
+                                  <div data-testid={`patient-secondary-plan-${upload.id}`}>
+                                    <strong>Plan:</strong> {extractionResults[upload.id].patientData.secondaryPlanName}
+                                  </div>
+                                )}
+                                {extractionResults[upload.id].patientData.secondaryInsuranceId && (
+                                  <div data-testid={`patient-secondary-insurance-id-${upload.id}`} className="col-span-2">
+                                    <strong>ID:</strong> <code className="bg-gray-100 dark:bg-gray-700 px-1 rounded">{extractionResults[upload.id].patientData.secondaryInsuranceId}</code>
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                          )}
                         </div>
                       )}
 
                       {extractionResults[upload.id].encounterData && extractionResults[upload.id].encounterData.length > 0 && (
                         <div className="mb-4">
-                          <h5 className="font-medium text-sm text-gray-700 dark:text-gray-300 mb-2">
+                          <h5 className="font-medium text-sm text-gray-700 dark:text-gray-300 mb-2 flex items-center gap-2">
+                            <Calendar className="w-4 h-4" />
                             Encounter Information ({extractionResults[upload.id].encounterData.length} encounter{extractionResults[upload.id].encounterData.length > 1 ? 's' : ''})
                           </h5>
                           <div className="text-sm space-y-3">
                             {extractionResults[upload.id].encounterData.map((encounter, index) => (
-                              <div key={index} className={`${index > 0 ? 'border-t border-gray-200 dark:border-gray-600 pt-2' : ''}`}>
+                              <div key={index} className={`${index > 0 ? 'border-t border-gray-200 dark:border-gray-600 pt-3' : ''}`}>
                                 {extractionResults[upload.id].encounterData.length > 1 && (
-                                  <div className="font-medium text-gray-600 dark:text-gray-400 mb-1">
+                                  <div className="font-medium text-gray-600 dark:text-gray-400 mb-2">
                                     Encounter {index + 1}
                                   </div>
                                 )}
-                                {encounter.encounterDate && (
-                                  <div data-testid={`encounter-date-${upload.id}-${index}`}>
-                                    <strong>Date:</strong> {encounter.encounterDate}
+                                
+                                {/* Basic Encounter Info */}
+                                <div className="grid grid-cols-2 gap-2 mb-2">
+                                  {encounter.encounterDate && (
+                                    <div data-testid={`encounter-date-${upload.id}-${index}`}>
+                                      <strong>Date:</strong> {encounter.encounterDate}
+                                    </div>
+                                  )}
+                                  {encounter.diabeticStatus && (
+                                    <div data-testid={`diabetic-status-${upload.id}-${index}`}>
+                                      <strong>Diabetic Status:</strong> 
+                                      <Badge variant={encounter.diabeticStatus === 'diabetic' ? 'destructive' : 'outline'} className="ml-1 text-xs">
+                                        <Activity className="w-3 h-3 mr-1" />
+                                        {encounter.diabeticStatus}
+                                      </Badge>
+                                    </div>
+                                  )}
+                                  {encounter.infectionStatus && (
+                                    <div data-testid={`infection-status-${upload.id}-${index}`}>
+                                      <strong>Infection:</strong> 
+                                      <Badge variant={encounter.infectionStatus === 'None' ? 'outline' : 'destructive'} className="ml-1 text-xs">
+                                        {encounter.infectionStatus}
+                                      </Badge>
+                                    </div>
+                                  )}
+                                </div>
+                                
+                                {/* Wound Details */}
+                                {encounter.woundDetails && (
+                                  <div className="bg-yellow-50 dark:bg-yellow-900/20 p-2 rounded mb-2">
+                                    <div className="text-xs font-medium mb-1">Wound Details</div>
+                                    <div className="grid grid-cols-2 gap-1 text-xs">
+                                      {encounter.woundDetails.type && (
+                                        <div data-testid={`wound-type-${upload.id}-${index}`}>
+                                          <strong>Type:</strong> {encounter.woundDetails.type}
+                                        </div>
+                                      )}
+                                      {encounter.woundDetails.location && (
+                                        <div data-testid={`wound-location-${upload.id}-${index}`}>
+                                          <strong>Location:</strong> {encounter.woundDetails.location}
+                                        </div>
+                                      )}
+                                    </div>
                                   </div>
                                 )}
-                                {encounter.woundDetails?.type && (
-                                  <div data-testid={`wound-type-${upload.id}-${index}`}>
-                                    <strong>Wound Type:</strong> {encounter.woundDetails.type}
+                                
+                                {/* CPT Codes */}
+                                {encounter.procedureCodes && encounter.procedureCodes.length > 0 && (
+                                  <div className="bg-green-50 dark:bg-green-900/20 p-2 rounded mb-2">
+                                    <div className="text-xs font-medium mb-1 flex items-center gap-1">
+                                      <Code className="w-3 h-3" />
+                                      CPT/HCPCS Codes
+                                    </div>
+                                    <div className="space-y-1">
+                                      {encounter.procedureCodes.map((proc, idx) => (
+                                        <div key={idx} className="flex items-center gap-2 text-xs" data-testid={`cpt-${upload.id}-${index}-${proc.code}`}>
+                                          <code className="bg-gray-100 dark:bg-gray-700 px-1 rounded">{proc.code}</code>
+                                          {proc.description && <span className="text-gray-600 dark:text-gray-400">{proc.description}</span>}
+                                          {proc.units && <Badge variant="outline" className="text-xs">×{proc.units}</Badge>}
+                                        </div>
+                                      ))}
+                                    </div>
                                   </div>
                                 )}
-                                {encounter.woundDetails?.location && (
-                                  <div data-testid={`wound-location-${upload.id}-${index}`}>
-                                    <strong>Location:</strong> {encounter.woundDetails.location}
+                                
+                                {/* Vascular Assessment */}
+                                {encounter.vascularAssessment && (
+                                  <div className="bg-red-50 dark:bg-red-900/20 p-2 rounded mb-2">
+                                    <div className="text-xs font-medium mb-1 flex items-center gap-1">
+                                      <Heart className="w-3 h-3" />
+                                      Vascular Assessment
+                                    </div>
+                                    <div className="grid grid-cols-2 gap-1 text-xs">
+                                      {encounter.vascularAssessment.dorsalisPedis && (
+                                        <div><strong>DP:</strong> {encounter.vascularAssessment.dorsalisPedis}</div>
+                                      )}
+                                      {encounter.vascularAssessment.posteriorTibial && (
+                                        <div><strong>PT:</strong> {encounter.vascularAssessment.posteriorTibial}</div>
+                                      )}
+                                      {encounter.vascularAssessment.capillaryRefill && (
+                                        <div><strong>Cap Refill:</strong> {encounter.vascularAssessment.capillaryRefill}</div>
+                                      )}
+                                      {encounter.vascularAssessment.edema && (
+                                        <div><strong>Edema:</strong> {encounter.vascularAssessment.edema}</div>
+                                      )}
+                                    </div>
+                                  </div>
+                                )}
+                                
+                                {/* Functional Status */}
+                                {encounter.functionalStatus && (
+                                  <div className="bg-indigo-50 dark:bg-indigo-900/20 p-2 rounded">
+                                    <div className="text-xs font-medium mb-1 flex items-center gap-1">
+                                      <Footprints className="w-3 h-3" />
+                                      Functional Status
+                                    </div>
+                                    <div className="grid grid-cols-2 gap-1 text-xs">
+                                      {encounter.functionalStatus.mobility && (
+                                        <div><strong>Mobility:</strong> {encounter.functionalStatus.mobility}</div>
+                                      )}
+                                      {encounter.functionalStatus.assistiveDevice && (
+                                        <div><strong>Device:</strong> {encounter.functionalStatus.assistiveDevice}</div>
+                                      )}
+                                      {encounter.functionalStatus.selfCare && (
+                                        <div><strong>Self-Care:</strong> {encounter.functionalStatus.selfCare}</div>
+                                      )}
+                                      {encounter.functionalStatus.adlScore !== undefined && (
+                                        <div><strong>ADL Score:</strong> {encounter.functionalStatus.adlScore}</div>
+                                      )}
+                                    </div>
                                   </div>
                                 )}
                               </div>
