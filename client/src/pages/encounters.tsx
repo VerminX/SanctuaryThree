@@ -162,9 +162,9 @@ export default function Encounters() {
 
   // Filter encounters based on search term
   const filteredEncounters = allEncounters?.filter((encounter: any) =>
-    encounter.patientName.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    encounter.patientMrn.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    encounter.woundDetails?.type?.toLowerCase().includes(searchTerm.toLowerCase())
+    (encounter.patientName || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+    (encounter.patientMrn || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+    (encounter.woundDetails?.type || '').toLowerCase().includes(searchTerm.toLowerCase())
   ) || [];
 
   const getWoundTypeColor = (type: string) => {
