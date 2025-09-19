@@ -1,0 +1,112 @@
+Detailed Implementation Plan for Eligibility Analysis Improvements
+I've created a comprehensive plan to fix the eligibility analysis inconsistencies. Here's the structured approach:
+
+Phase 1: Create Core Validation Module
+Create a new file server/services/eligibilityValidator.ts with deterministic validation functions:
+
+Task 1.1: Implement Wound Type Validation
+// Validates if wound type meets Medicare LCD covered indications
+// - Check for DFU/VLU explicitly
+// - Reject traumatic (S81.xxx), surgical, pressure, arterial ulcers  
+// - Parse ICD-10 codes to identify wound etiology
+Task 1.2: Implement Conservative Care Timeline Validation
+// Validates 4-week minimum conservative care before CTP
+// - Find first CTP application date from CPT codes (15xxx, Q4xxx)
+// - Calculate days from first encounter to first CTP
+// - Fail if <28 days
+Task 1.3: Implement Area Reduction Calculator
+// Calculate wound area reduction percentage
+// - Initial area = length × width from first encounter
+// - Current area = length × width from latest encounter  
+// - Reduction % = ((initial - current) / initial) × 100
+// - Check if reduction <50% (meets CTP requirement)
+Task 1.4: Create Pre-Eligibility Check Aggregator
+// Performs all deterministic checks before AI analysis
+// - Returns definitive "No" for clear violations
+// - Provides structured failure reasons
+// - Only allows AI analysis for genuinely ambiguous cases
+Phase 2: Integrate Validation into AI Analysis
+Task 2.1: Modify analyzeEpisodeEligibilityWithFullHistory
+Add pre-check validation before AI call
+If wound type not DFU/VLU, return "No" immediately
+If conservative care <4 weeks, return "No" immediately
+Pass validation results to AI for context
+Task 2.2: Update AI System Prompts
+Replace current generic prompt with strict Medicare LCD enforcement:
+
+Step-by-step validation process
+Immediate disqualifiers clearly stated
+Require specific policy citations
+Remove ambiguity - must return Yes/No, not Unclear for definitive cases
+Task 2.3: Enhance Response Structure
+Add validationChecks field showing deterministic results
+Include policyViolations array with specific failures
+Provide auditTrail of decision logic
+Phase 3: Improve Data Extraction
+Task 3.1: Enhance PDF Data Extractor for ICD-10 Codes
+Add regex patterns for S81.xxx (traumatic wounds)
+Extract E11.xxx (diabetic complications)
+Identify I83.xxx (venous insufficiency)
+Task 3.2: Improve CTP Detection
+Add patterns for Amnio products (brand names)
+Detect Q4xxx HCPCS codes
+Identify "application #1", "graft", "CTP" mentions
+Task 3.3: Ensure Numeric Measurements
+Parse "4×3 cm" patterns correctly
+Convert string measurements to numbers
+Handle various formats (x, X, ×, by)
+Phase 4: Refine Policy Context
+Task 4.1: Update RAG Context Builder
+Prioritize LCD L39806 for skin substitutes
+Filter out irrelevant policies
+Include specific covered indication sections
+Task 4.2: Add MAC-Specific Rules
+Palmetto GBA J-J specific requirements
+Include billing article A59691 requirements
+Add KX modifier rules for >4 applications
+Phase 5: Testing and Validation
+Task 5.1: Test with Bobbie Lynch Case
+Expected outcome:
+
+Eligibility: "No"
+Reason: "Traumatic wound (S81.802A) not covered under Medicare LCD L39806. Only DFU and VLU are covered indications."
+Secondary failure: "Conservative care only 0 days before first CTP (8/16). Minimum 28 days required."
+Task 5.2: Create Test Suite
+Traumatic wound → "No"
+DFU with 5 weeks SOC and <50% reduction → "Yes"
+VLU with 3 weeks SOC → "No"
+Missing measurements → Documentation gap, not "Unclear"
+Implementation Sequence
+First: Create eligibilityValidator.ts with all validation functions
+Second: Integrate pre-checks into analyzeEpisodeEligibilityWithFullHistory
+Third: Update AI prompts in all analysis functions
+Fourth: Enhance PDF extraction for better diagnosis code capture
+Fifth: Test with real patient data and verify results
+Key Code Changes Required
+File 1: server/services/eligibilityValidator.ts (NEW)
+200-300 lines of validation logic
+Exports 5 main validation functions
+Includes ICD-10 code mappings
+File 2: server/services/openai.ts (MODIFY)
+Lines 517-750: Add pre-check logic
+Lines 244-290: Update system prompt
+Lines 586-693: Enhance critical analysis rules
+File 3: server/services/pdfDataExtractor.ts (ENHANCE)
+Lines 308-424: Add ICD-10 extraction patterns
+Lines 353-376: Improve measurement extraction
+Lines 426-500: Update AI extraction prompt
+File 4: server/services/ragService.ts (REFINE)
+Lines 44-55: Stricter policy filtering
+Lines 57-66: Better priority calculation
+Success Metrics
+Accuracy: Bobbie Lynch case returns definitive "No" with correct reasons
+Clarity: No more "UNCLEAR" for obvious policy violations
+Auditability: Clear trail showing which checks failed
+Performance: Pre-checks reduce unnecessary AI calls
+Compliance: Matches Palmetto GBA LCD requirements exactly
+Risk Mitigation
+Maintain backward compatibility with existing eligibility checks
+Store validation results in existing JSONB fields
+Add feature flag to enable/disable strict validation
+Log all validation decisions for audit purposes
+This plan provides a complete roadmap to fix the eligibility analysis system and ensure it properly enforces Medicare LCD requirements. The implementation should eliminate false "UNCLEAR" results and provide definitive, policy-compliant determinations.
