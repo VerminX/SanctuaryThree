@@ -2,6 +2,7 @@ import OpenAI from "openai";
 import { EpisodeWithFullHistory } from "@shared/schema";
 import { IStorage } from "../storage";
 import { decryptEncounterNotes } from "./encryption";
+import { performPreEligibilityChecks } from "./eligibilityValidator";
 
 // HIPAA COMPLIANCE: Configure OpenAI client with proper provider enforcement
 function createOpenAIClient() {
@@ -63,6 +64,14 @@ interface EligibilityAnalysisResponse {
     effectiveDate: string;
   }>;
   letterBullets: string[];
+  // Pre-eligibility check information
+  preEligibilityCheck?: {
+    performed: boolean;
+    result?: "ELIGIBLE" | "NOT_ELIGIBLE" | "INCONCLUSIVE";
+    determinationSource: "PRE_CHECK" | "AI_ANALYSIS";
+    auditTrail?: string[];
+    policyViolations?: string[];
+  };
   // Enhanced fields for historical context and episode timeline
   historicalContext?: {
     totalEpisodes: number;
@@ -86,6 +95,62 @@ interface EligibilityAnalysisResponse {
 
 export async function analyzeEligibility(request: EligibilityAnalysisRequest): Promise<EligibilityAnalysisResponse> {
   const { encounterNotes, woundDetails, conservativeCare, patientInfo, policyContext } = request;
+  
+  // PHASE 2: PRE-ELIGIBILITY CHECKS for single encounter analysis
+  try {
+    // Transform single encounter data to validator format, including diabetic status
+    const validatorEncounters = [{
+      id: 'single-encounter',
+      date: new Date().toISOString().split('T')[0], // Use current date for single encounter
+      primaryDiagnosis: woundDetails?.primaryDiagnosis || '',
+      woundDetails: woundDetails,
+      conservativeCare: conservativeCare,
+      allText: encounterNotes.join(' '),
+      diabeticStatus: woundDetails?.diabeticStatus || null // Pass diabetic status to avoid false negatives
+    }];
+
+    const episodeData = {
+      id: 'single-episode',
+      woundType: woundDetails?.type || 'Unknown',
+      woundLocation: woundDetails?.location || '',
+      primaryDiagnosis: woundDetails?.primaryDiagnosis || '',
+      episodeStartDate: new Date(),
+      status: 'active'
+    };
+
+    const preCheckResult = performPreEligibilityChecks(episodeData, validatorEncounters);
+    
+    // If pre-checks return definitive failure, return immediately
+    if (!preCheckResult.overallEligible) {
+      console.log('Pre-eligibility check failed in single encounter analysis - returning definitive NO');
+      
+      return {
+        eligibility: "No",
+        rationale: `Medicare LCD L39806 violation: ${preCheckResult.failureReasons.join('; ')}`,
+        requiredDocumentationGaps: preCheckResult.failureReasons,
+        citations: [{
+          title: "Medicare LCD L39806 - Skin Substitutes",
+          url: "https://www.cms.gov/medicare-coverage-database/view/lcd.aspx?lcdid=39806",
+          section: "Coverage Indications, Limitations, and/or Medical Necessity",
+          effectiveDate: "2023-09-01"
+        }],
+        letterBullets: [
+          `Policy violation identified: ${preCheckResult.failureReasons[0]}`,
+          "Request does not meet Medicare LCD L39806 coverage criteria",
+          "CTP application is not medically necessary under current guidelines"
+        ],
+        preEligibilityCheck: {
+          performed: true,
+          result: "NOT_ELIGIBLE",
+          determinationSource: "PRE_CHECK",
+          auditTrail: preCheckResult.auditTrail,
+          policyViolations: preCheckResult.policyViolations
+        }
+      };
+    }
+  } catch (preCheckError) {
+    console.warn('Pre-eligibility check failed with error in single encounter analysis:', preCheckError);
+  }
   
   // Create HIPAA-compliant OpenAI client
   const openai = createOpenAIClient();
@@ -150,6 +215,15 @@ Respond with JSON in this exact format:
       throw new Error('Invalid response format from AI analysis');
     }
 
+    // Add pre-eligibility check information to AI analysis result
+    result.preEligibilityCheck = {
+      performed: true,
+      result: "INCONCLUSIVE", // Pre-checks didn't fail, so AI analysis was performed
+      determinationSource: "AI_ANALYSIS",
+      auditTrail: ["Pre-eligibility checks passed or inconclusive", "Proceeded to AI analysis"],
+      policyViolations: []
+    };
+
     return result as EligibilityAnalysisResponse;
   } catch (error) {
     console.error('Error in AI eligibility analysis:', error);
@@ -195,6 +269,75 @@ interface FullContextAnalysisRequest {
 // Enhanced AI analysis function with complete episode context
 export async function analyzeEligibilityWithFullContext(request: FullContextAnalysisRequest): Promise<EligibilityAnalysisResponse> {
   const { currentEncounter, episodeContext, patientInfo, policyContext } = request;
+  
+  // PHASE 2: PRE-ELIGIBILITY CHECKS for full context analysis
+  try {
+    // Transform episode context to validator format, including diabetic status
+    const validatorEncounters = episodeContext.map(encounter => ({
+      id: encounter.date.toISOString(),
+      date: encounter.date.toISOString().split('T')[0],
+      primaryDiagnosis: currentEncounter.woundDetails?.primaryDiagnosis || '',
+      woundDetails: encounter.woundDetails,
+      conservativeCare: encounter.conservativeCare,
+      allText: encounter.notes.join(' '),
+      diabeticStatus: encounter.diabeticStatus // Pass diabetic status to avoid false negatives
+    }));
+
+    // Include current encounter
+    validatorEncounters.push({
+      id: 'current-encounter',
+      date: new Date().toISOString().split('T')[0],
+      primaryDiagnosis: currentEncounter.woundDetails?.primaryDiagnosis || '',
+      woundDetails: currentEncounter.woundDetails,
+      conservativeCare: currentEncounter.conservativeCare,
+      allText: currentEncounter.encounterNotes.join(' '),
+      diabeticStatus: currentEncounter.diabeticStatus
+    });
+
+    const episodeData = {
+      id: 'full-context-episode',
+      woundType: currentEncounter.woundDetails?.type || 'Unknown',
+      woundLocation: currentEncounter.woundDetails?.location || '',
+      primaryDiagnosis: currentEncounter.woundDetails?.primaryDiagnosis || '',
+      episodeStartDate: episodeContext.length > 0 ? episodeContext[0].date : new Date(),
+      status: 'active'
+    };
+
+    const preCheckResult = performPreEligibilityChecks(episodeData, validatorEncounters);
+    
+    // If pre-checks return definitive failure, return immediately
+    if (!preCheckResult.overallEligible) {
+      console.log('Pre-eligibility check failed in full context analysis - returning definitive NO');
+      
+      return {
+        eligibility: "No",
+        rationale: `Medicare LCD L39806 violation: ${preCheckResult.failureReasons.join('; ')}`,
+        requiredDocumentationGaps: preCheckResult.failureReasons,
+        citations: [{
+          title: "Medicare LCD L39806 - Skin Substitutes",
+          url: "https://www.cms.gov/medicare-coverage-database/view/lcd.aspx?lcdid=39806",
+          section: "Coverage Indications, Limitations, and/or Medical Necessity",
+          effectiveDate: "2023-09-01"
+        }],
+        letterBullets: [
+          `Policy violation identified: ${preCheckResult.failureReasons[0]}`,
+          "Request does not meet Medicare LCD L39806 coverage criteria",
+          "CTP application is not medically necessary under current guidelines"
+        ],
+        preEligibilityCheck: {
+          performed: true,
+          result: "NOT_ELIGIBLE",
+          determinationSource: "PRE_CHECK",
+          auditTrail: preCheckResult.auditTrail,
+          policyViolations: preCheckResult.policyViolations
+        }
+      };
+    }
+    
+    console.log('Pre-eligibility checks passed or inconclusive in full context analysis - proceeding with AI analysis');
+  } catch (preCheckError) {
+    console.warn('Pre-eligibility check failed with error in full context analysis:', preCheckError);
+  }
   
   // Create HIPAA-compliant OpenAI client
   const openai = createOpenAIClient();
@@ -308,6 +451,15 @@ Respond with JSON in this exact format:
       throw new Error('Invalid response format from AI analysis');
     }
 
+    // Add pre-eligibility check information to AI analysis result
+    result.preEligibilityCheck = {
+      performed: true,
+      result: "INCONCLUSIVE", // Pre-checks didn't fail, so AI analysis was performed
+      determinationSource: "AI_ANALYSIS",
+      auditTrail: ["Pre-eligibility checks passed or inconclusive", "Proceeded to AI analysis"],
+      policyViolations: []
+    };
+
     return result as EligibilityAnalysisResponse;
   } catch (error) {
     console.error('Error in enhanced AI eligibility analysis:', error);
@@ -342,6 +494,63 @@ interface EpisodeEligibilityAnalysisRequest {
 
 export async function analyzeEpisodeEligibility(request: EpisodeEligibilityAnalysisRequest): Promise<EligibilityAnalysisResponse> {
   const { episodeInfo, encounters, patientInfo, policyContext } = request;
+  
+  // PHASE 2: PRE-ELIGIBILITY CHECKS for episode analysis
+  try {
+    // Transform encounters to validator format
+    const validatorEncounters = encounters.map(encounter => ({
+      id: encounter.id,
+      date: encounter.date.toISOString().split('T')[0],
+      primaryDiagnosis: episodeInfo.primaryDiagnosis,
+      woundDetails: encounter.woundDetails,
+      conservativeCare: encounter.conservativeCare,
+      allText: encounter.notes.join(' ')
+    }));
+
+    const episodeData = {
+      id: episodeInfo.id,
+      woundType: episodeInfo.woundType,
+      woundLocation: episodeInfo.woundLocation,
+      primaryDiagnosis: episodeInfo.primaryDiagnosis,
+      episodeStartDate: episodeInfo.episodeStartDate,
+      status: episodeInfo.status
+    };
+
+    const preCheckResult = performPreEligibilityChecks(episodeData, validatorEncounters);
+    
+    // If pre-checks return definitive failure, return immediately
+    if (!preCheckResult.overallEligible) {
+      console.log('Pre-eligibility check failed in episode analysis - returning definitive NO');
+      
+      return {
+        eligibility: "No",
+        rationale: `Medicare LCD L39806 violation: ${preCheckResult.failureReasons.join('; ')}`,
+        requiredDocumentationGaps: preCheckResult.failureReasons,
+        citations: [{
+          title: "Medicare LCD L39806 - Skin Substitutes",
+          url: "https://www.cms.gov/medicare-coverage-database/view/lcd.aspx?lcdid=39806",
+          section: "Coverage Indications, Limitations, and/or Medical Necessity",
+          effectiveDate: "2023-09-01"
+        }],
+        letterBullets: [
+          `Policy violation identified: ${preCheckResult.failureReasons[0]}`,
+          "Request does not meet Medicare LCD L39806 coverage criteria",
+          "CTP application is not medically necessary under current guidelines"
+        ],
+        preEligibilityCheck: {
+          performed: true,
+          result: "NOT_ELIGIBLE",
+          determinationSource: "PRE_CHECK",
+          auditTrail: preCheckResult.auditTrail,
+          policyViolations: preCheckResult.policyViolations
+        }
+      };
+    }
+    
+    console.log('Pre-eligibility checks passed or inconclusive in episode analysis - proceeding with AI analysis');
+  } catch (preCheckError) {
+    console.warn('Pre-eligibility check failed with error in episode analysis:', preCheckError);
+  }
   
   // Create HIPAA-compliant OpenAI client
   const openai = createOpenAIClient();
@@ -448,6 +657,15 @@ Respond with JSON in this exact format:
       throw new Error('Invalid response format from AI analysis');
     }
 
+    // Add pre-eligibility check information to AI analysis result
+    result.preEligibilityCheck = {
+      performed: true,
+      result: "INCONCLUSIVE", // Pre-checks didn't fail, so AI analysis was performed
+      determinationSource: "AI_ANALYSIS",
+      auditTrail: ["Pre-eligibility checks passed or inconclusive", "Proceeded to AI analysis"],
+      policyViolations: []
+    };
+
     return result as EligibilityAnalysisResponse;
   } catch (error) {
     console.error('Error in AI episode eligibility analysis:', error);
@@ -516,6 +734,65 @@ interface EpisodeWithDecryptedHistory {
 // Enhanced episode eligibility analysis with full patient history - THIS IS NOW THE DEFAULT
 export async function analyzeEpisodeEligibilityWithFullHistory(request: EnhancedEpisodeAnalysisRequest): Promise<EligibilityAnalysisResponse> {
   const { targetEpisode, allPatientEpisodes, patientEligibilityHistory, patientInfo, policyContext } = request;
+  
+  // PHASE 2: PRE-ELIGIBILITY CHECKS - Gate obvious policy violations before AI analysis
+  try {
+    // Transform encounters to validator format
+    const validatorEncounters = targetEpisode.encounters.map(encounter => ({
+      id: encounter.id,
+      date: encounter.date.toISOString().split('T')[0],
+      primaryDiagnosis: targetEpisode.primaryDiagnosis,
+      woundDetails: encounter.woundDetails,
+      conservativeCare: encounter.conservativeCare,
+      allText: encounter.notes ? encounter.notes.join(' ') : ''
+    }));
+
+    // Perform pre-eligibility checks
+    const episodeData = {
+      id: targetEpisode.id,
+      woundType: targetEpisode.woundType,
+      woundLocation: targetEpisode.woundLocation,
+      primaryDiagnosis: targetEpisode.primaryDiagnosis,
+      episodeStartDate: targetEpisode.episodeStartDate,
+      status: targetEpisode.status
+    };
+    const preCheckResult = performPreEligibilityChecks(episodeData, validatorEncounters);
+    
+    // If pre-checks return definitive failure, return immediately without AI analysis
+    if (!preCheckResult.overallEligible) {
+      console.log('Pre-eligibility check failed - returning definitive NO without AI analysis');
+      
+      return {
+        eligibility: "No",
+        rationale: `Medicare LCD L39806 violation: ${preCheckResult.failureReasons.join('; ')}`,
+        requiredDocumentationGaps: preCheckResult.failureReasons,
+        citations: [{
+          title: "Medicare LCD L39806 - Skin Substitutes",
+          url: "https://www.cms.gov/medicare-coverage-database/view/lcd.aspx?lcdid=39806",
+          section: "Coverage Indications, Limitations, and/or Medical Necessity",
+          effectiveDate: "2023-09-01"
+        }],
+        letterBullets: [
+          `Policy violation identified: ${preCheckResult.failureReasons[0]}`,
+          "Request does not meet Medicare LCD L39806 coverage criteria",
+          "CTP application is not medically necessary under current guidelines"
+        ],
+        preEligibilityCheck: {
+          performed: true,
+          result: "NOT_ELIGIBLE",
+          determinationSource: "PRE_CHECK",
+          auditTrail: preCheckResult.auditTrail,
+          policyViolations: preCheckResult.policyViolations
+        }
+      };
+    }
+    
+    // Pre-checks passed or inconclusive - proceed with AI analysis
+    console.log('Pre-eligibility checks passed or inconclusive - proceeding with AI analysis');
+  } catch (preCheckError) {
+    console.warn('Pre-eligibility check failed with error - proceeding with AI analysis:', preCheckError);
+    // Continue with AI analysis if pre-checks fail due to technical issues
+  }
   
   // Create HIPAA-compliant OpenAI client
   const openai = createOpenAIClient();
@@ -741,6 +1018,15 @@ Respond with JSON in this exact format:
         complianceHistory: ["Care compliance assessed"]
       };
     }
+
+    // Add pre-eligibility check information to AI analysis result
+    result.preEligibilityCheck = {
+      performed: true,
+      result: "INCONCLUSIVE", // Pre-checks didn't fail, so AI analysis was performed
+      determinationSource: "AI_ANALYSIS",
+      auditTrail: ["Pre-eligibility checks passed or inconclusive", "Proceeded to AI analysis"],
+      policyViolations: []
+    };
 
     return result as EligibilityAnalysisResponse;
   } catch (error) {
