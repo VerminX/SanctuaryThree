@@ -90,9 +90,9 @@ export default function Eligibility() {
     retry: false,
   });
 
-  // Get recent eligibility checks with tenant scoping
+  // Get recent eligibility checks (backend handles tenant scoping automatically)
   const { data: recentChecks, isLoading: checksLoading } = useQuery({
-    queryKey: ["/api/recent-eligibility-checks", tenantId],
+    queryKey: ["/api/recent-eligibility-checks"],
     enabled: isValidTenant,
     retry: false,
   });
@@ -107,7 +107,7 @@ export default function Eligibility() {
     },
     onSuccess: (data) => {
       setAnalysisResult(data);
-      queryClient.invalidateQueries({ queryKey: ["/api/recent-eligibility-checks", tenantId] });
+      queryClient.invalidateQueries({ queryKey: ["/api/recent-eligibility-checks"] });
       toast({
         title: "Analysis Complete",
         description: "Single encounter eligibility analysis completed successfully",
@@ -143,7 +143,7 @@ export default function Eligibility() {
     },
     onSuccess: (data) => {
       setAnalysisResult(data);
-      queryClient.invalidateQueries({ queryKey: ["/api/recent-eligibility-checks", tenantId] });
+      queryClient.invalidateQueries({ queryKey: ["/api/recent-eligibility-checks"] });
       toast({
         title: "Analysis Complete",
         description: "Episode eligibility analysis with full patient history completed successfully",
@@ -248,7 +248,7 @@ export default function Eligibility() {
   const retryBulkData = () => {
     queryClient.invalidateQueries({ queryKey: ["/api/encounters-with-patients", tenantId] });
     queryClient.invalidateQueries({ queryKey: ["/api/episodes-with-patients", tenantId] });
-    queryClient.invalidateQueries({ queryKey: ["/api/recent-eligibility-checks", tenantId] });
+    queryClient.invalidateQueries({ queryKey: ["/api/recent-eligibility-checks"] });
     toast({
       title: "Refreshing Data",
       description: "Retrying to load patient data...",
