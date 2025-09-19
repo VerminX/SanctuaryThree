@@ -11,6 +11,7 @@ import { CheckCircle, FileUp, Upload, AlertCircle, Clock, FileText, ArrowLeft, U
 import { apiRequest } from "@/lib/queryClient";
 import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
+import { DataQualityIndicator } from "@/components/data-quality/data-quality-indicator";
 import { Link } from "wouter";
 
 interface FileUpload {
@@ -516,12 +517,24 @@ export default function UploadPage() {
                   {/* Show extraction results */}
                   {extractionResults[upload.id] && (
                     <div className="mt-4 p-4 bg-gray-50 dark:bg-gray-800 rounded-lg">
-                      <div className="flex items-center gap-2 mb-3">
-                        <CheckCircle className="w-5 h-5 text-green-600" />
-                        <h4 className="font-medium">Extracted Data</h4>
-                        <Badge variant="outline">
-                          {Math.round(extractionResults[upload.id].confidence * 100)}% confidence
-                        </Badge>
+                      <div className="flex items-center justify-between mb-3">
+                        <div className="flex items-center gap-2">
+                          <CheckCircle className="w-5 h-5 text-green-600" />
+                          <h4 className="font-medium">Extracted Data</h4>
+                        </div>
+                        <DataQualityIndicator
+                          score={extractionResults[upload.id].validationScore * 100}
+                          confidence={extractionResults[upload.id].confidence}
+                          completeness={extractionResults[upload.id].isComplete ? 100 : 
+                            Math.max(0, 100 - (extractionResults[upload.id].missingFields.length * 10))}
+                          missingFields={extractionResults[upload.id].missingFields}
+                          warnings={extractionResults[upload.id].warnings}
+                          validationStatus={
+                            extractionResults[upload.id].canCreateRecords ? 'valid' :
+                            extractionResults[upload.id].isComplete ? 'partial' : 'invalid'
+                          }
+                          size="md"
+                        />
                       </div>
 
                       {extractionResults[upload.id].patientData && (
