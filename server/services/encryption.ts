@@ -66,11 +66,20 @@ export function encryptPHI(plaintext: string): string {
   return combined.toString('base64');
 }
 
+// Cache for failed decryption attempts to avoid repeated processing of corrupted data
+const decryptionFailureCache = new Map<string, boolean>();
+
 export function decryptPHI(encryptedData: string): string {
+  // PERFORMANCE OPTIMIZATION: Quick cache check for known corrupted data
+  if (decryptionFailureCache.has(encryptedData)) {
+    throw new Error('Invalid encrypted data: previously failed decryption (cached)');
+  }
+
   const combined = Buffer.from(encryptedData, 'base64');
   
   // Basic validation
   if (combined.length < IV_LENGTH + TAG_LENGTH) {
+    decryptionFailureCache.set(encryptedData, true); // Cache this failure
     throw new Error('Invalid encrypted data: too short');
   }
   
@@ -111,12 +120,22 @@ export function decryptPHI(encryptedData: string): string {
         let decrypted = decipher.update(encrypted, undefined, 'utf8');
         decrypted += decipher.final('utf8');
         
-        return decrypted;
+        return decrypted; // Success - return immediately
       } catch (error: any) {
         lastError = error;
         // Continue trying other combinations
       }
     }
+  }
+  
+  // All decryption attempts failed - cache this failure for future performance
+  decryptionFailureCache.set(encryptedData, true);
+  
+  // Clean cache periodically to prevent memory leaks (keep only last 1000 failures)
+  if (decryptionFailureCache.size > 1000) {
+    const entries = Array.from(decryptionFailureCache.keys());
+    const toDelete = entries.slice(0, entries.length - 500);
+    toDelete.forEach(key => decryptionFailureCache.delete(key));
   }
   
   throw new Error(`Failed to decrypt PHI data after trying all methods. Last error: ${lastError?.message}`);
