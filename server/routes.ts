@@ -745,17 +745,54 @@ export async function registerRoutes(app: Express): Promise<Server> {
         (encounter.woundDetails as any)?.type || 'DFU'
       );
 
-      // Decrypt encounter notes for analysis
-      const decryptedNotes = decryptEncounterNotes(encounter.encryptedNotes as string[]);
+      // Get ALL encounters in the episode for complete context
+      let allEpisodeEncounters: any[] = [];
+      if (encounter.episodeId) {
+        allEpisodeEncounters = await storage.getEncountersByEpisode(encounter.episodeId);
+      } else {
+        // If no episode, just use the current encounter
+        allEpisodeEncounters = [encounter];
+      }
 
-      // Perform AI eligibility analysis
-      const { analyzeEligibility } = await import('./services/openai');
-      const analysisResult = await analyzeEligibility({
-        encounterNotes: decryptedNotes,
-        woundDetails: encounter.woundDetails,
-        conservativeCare: encounter.conservativeCare,
+      // Decrypt all encounter notes and build complete episode context
+      const episodeContext = allEpisodeEncounters
+        .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
+        .map((enc) => {
+          const decryptedNotes = decryptEncounterNotes(enc.encryptedNotes as string[]);
+          return {
+            date: enc.date,
+            notes: decryptedNotes,
+            woundDetails: enc.woundDetails,
+            conservativeCare: enc.conservativeCare,
+            procedureCodes: (enc as any).procedureCodes || [],
+            vascularAssessment: (enc as any).vascularAssessment || {},
+            functionalStatus: (enc as any).functionalStatus || {},
+            diabeticStatus: (enc as any).diabeticStatus || null,
+            infectionStatus: enc.infectionStatus,
+            comorbidities: enc.comorbidities,
+          };
+        });
+
+      // Perform AI eligibility analysis with COMPLETE episode context
+      const { analyzeEligibilityWithFullContext } = await import('./services/openai');
+      const analysisResult = await analyzeEligibilityWithFullContext({
+        currentEncounter: {
+          encounterNotes: decryptEncounterNotes(encounter.encryptedNotes as string[]),
+          woundDetails: encounter.woundDetails,
+          conservativeCare: encounter.conservativeCare,
+          procedureCodes: (encounter as any).procedureCodes || [],
+          vascularAssessment: (encounter as any).vascularAssessment || {},
+          functionalStatus: (encounter as any).functionalStatus || {},
+          diabeticStatus: (encounter as any).diabeticStatus || null,
+        },
+        episodeContext: episodeContext,
         patientInfo: {
           payerType: patient.payerType,
+          planName: patient.planName || undefined,
+          insuranceId: patient.insuranceId || undefined,
+          secondaryPayerType: patient.secondaryPayerType || undefined,
+          secondaryPlanName: patient.secondaryPlanName || undefined,
+          secondaryInsuranceId: patient.secondaryInsuranceId || undefined,
           macRegion: patient.macRegion || 'default',
         },
         policyContext: ragContext.content,

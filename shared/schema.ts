@@ -74,6 +74,11 @@ export const patients = pgTable("patients", {
   encryptedDob: text("encrypted_dob"), // encrypted date of birth
   payerType: varchar("payer_type", { length: 50 }).notNull(), // Original Medicare, Medicare Advantage
   planName: varchar("plan_name", { length: 255 }),
+  insuranceId: varchar("insurance_id", { length: 100 }), // Primary insurance ID
+  // Secondary insurance fields for comprehensive coverage analysis
+  secondaryPayerType: varchar("secondary_payer_type", { length: 50 }), // BCBS, Aetna, etc.
+  secondaryPlanName: varchar("secondary_plan_name", { length: 255 }),
+  secondaryInsuranceId: varchar("secondary_insurance_id", { length: 100 }),
   macRegion: varchar("mac_region", { length: 50 }),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
@@ -89,7 +94,15 @@ export const encounters = pgTable("encounters", {
   date: timestamp("date").notNull(),
   encryptedNotes: jsonb("encrypted_notes").notNull(), // Array of encrypted encounter notes
   woundDetails: jsonb("wound_details").notNull(), // Wound type, location, measurements, duration
-  conservativeCare: jsonb("conservative_care").notNull(), // Prior conservative care details
+  conservativeCare: jsonb("conservative_care").notNull(), // Prior conservative care details with durations
+  // CPT/HCPCS codes for procedures performed
+  procedureCodes: jsonb("procedure_codes"), // Array of {code, description, modifier, units}
+  // Vascular assessment for comprehensive wound care evaluation
+  vascularAssessment: jsonb("vascular_assessment"), // {dorsalisPedis, posteriorTibial, capillaryRefill, edema, varicosities}
+  // Functional and mobility status for Medicare requirements
+  functionalStatus: jsonb("functional_status"), // {selfCare, mobility, assistiveDevice, adlScore}
+  // Diabetic status explicitly tracked
+  diabeticStatus: varchar("diabetic_status", { length: 20 }), // diabetic, nondiabetic, prediabetic
   infectionStatus: varchar("infection_status", { length: 100 }),
   comorbidities: jsonb("comorbidities"),
   attachmentMetadata: jsonb("attachment_metadata"), // Metadata for encrypted image blobs
@@ -119,9 +132,14 @@ export const policySources = pgTable("policy_sources", {
   title: varchar("title", { length: 500 }).notNull(),
   url: text("url").notNull(),
   effectiveDate: timestamp("effective_date").notNull(),
+  effectiveThrough: timestamp("effective_through"), // End date for policy effectiveness
   postponedDate: timestamp("postponed_date"),
   proposedDate: timestamp("proposed_date"), // When policy was proposed
   supersededBy: varchar("superseded_by", { length: 50 }), // LCD ID that supersedes this one
+  versionNumber: varchar("version_number", { length: 20 }), // Policy version identifier
+  sourceHash: varchar("source_hash", { length: 64 }), // SHA-256 hash for change detection
+  lastVerified: timestamp("last_verified"), // Last time policy was verified against source
+  changeHistory: jsonb("change_history"), // Array of change records
   policyType: varchar("policy_type", { length: 20 }).notNull().default('final'), // final, proposed
   status: varchar("status", { length: 20 }).notNull(), // current, future, proposed, superseded, postponed
   content: text("content").notNull(),
@@ -250,8 +268,8 @@ export const pdfExtractedData = pgTable("pdf_extracted_data", {
   userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }), // User who initiated extraction
   documentType: varchar("document_type", { length: 50 }).notNull(), // registration_form, medical_record, encounter_note
   extractedText: text("extracted_text"), // Raw extracted text from PDF (encrypted)
-  extractedPatientData: jsonb("extracted_patient_data"), // Patient demographics, insurance info
-  extractedEncounterData: jsonb("extracted_encounter_data"), // Encounter details, notes, procedures
+  extractedPatientData: jsonb("extracted_patient_data"), // Patient demographics, primary & secondary insurance
+  extractedEncounterData: jsonb("extracted_encounter_data"), // Encounter details, CPT codes, vascular/functional assessments
   extractionConfidence: decimal("extraction_confidence", { precision: 3, scale: 2 }), // 0.00 to 1.00 (stored as string)
   validationScore: decimal("validation_score", { precision: 3, scale: 2 }), // 0.00 to 1.00 validation score (stored as string)
   validationStatus: varchar("validation_status", { length: 20 }).notNull().default("pending"), // pending, reviewed, approved, rejected

@@ -1,4 +1,5 @@
-// Dynamic import will be used in the function to avoid startup dependency
+// PDF Data Extraction Types - MUST align with schema and AI extraction prompts
+// Critical for achieving absolute accuracy in medical eligibility determination
 
 export interface ExtractedPatientData {
   // Patient demographic information
@@ -6,14 +7,21 @@ export interface ExtractedPatientData {
   firstName?: string;
   lastName?: string;
   dateOfBirth?: string; // YYYY-MM-DD format
+  
+  // Primary insurance information
   payerType?: string; // Original Medicare, Medicare Advantage, Commercial, etc.
   planName?: string;
-  macRegion?: string;
+  insuranceId?: string;
+  
+  // Secondary insurance information (CRITICAL FOR COVERAGE ANALYSIS)
+  secondaryPayerType?: string; // BCBS, Aetna, UHC, etc.
+  secondaryPlanName?: string;
+  secondaryInsuranceId?: string;
   
   // Additional patient info
+  macRegion?: string;
   phoneNumber?: string;
   address?: string;
-  insuranceId?: string;
 }
 
 export interface ExtractedEncounterData {
@@ -25,6 +33,11 @@ export interface ExtractedEncounterData {
   // Treatment details
   treatmentDetails?: {
     proceduresPerformed?: string[];
+    cptCodes?: Array<{  // Structured CPT/HCPCS codes for accurate billing/coverage
+      code: string;
+      description?: string;
+      modifier?: string;
+    }>;
     applicationNumbers?: string[];
     treatmentResponse?: string;
     complications?: string[];
@@ -66,7 +79,14 @@ export interface ExtractedEncounterData {
       frequency?: string;
     };
     infectionControl?: string[];
-    vascularAssessment?: string[];
+    vascularAssessment?: {  // Structured vascular findings for comprehensive assessment
+      dorsalisPedis?: string;
+      posteriorTibial?: string;
+      capillaryRefill?: string;
+      edema?: boolean | string;
+      varicosities?: boolean | string;
+      ankleArmIndex?: number;
+    };
     glycemicControl?: {
       methods?: string[];
       targets?: string[];
@@ -83,6 +103,17 @@ export interface ExtractedEncounterData {
   // Clinical status
   infectionStatus?: string;
   comorbidities?: string[];
+  
+  // Diabetic status (CRITICAL FOR MEDICARE LCD REQUIREMENTS)
+  diabeticStatus?: 'diabetic' | 'nondiabetic' | 'prediabetic';
+  
+  // Functional and mobility status (REQUIRED FOR MEDICAL NECESSITY)
+  functionalStatus?: {
+    selfCare?: string;
+    mobility?: string;
+    assistiveDevice?: boolean;
+    adlScore?: string;
+  };
   
   // Assessment and plan
   assessment?: string;
@@ -179,11 +210,14 @@ Return JSON in this exact format:
     "lastName": "string | null",
     "dateOfBirth": "YYYY-MM-DD | null",
     "payerType": "string | null",
-    "planName": "string | null", 
+    "planName": "string | null",
+    "insuranceId": "string | null",
+    "secondaryPayerType": "string | null",
+    "secondaryPlanName": "string | null", 
+    "secondaryInsuranceId": "string | null",
     "macRegion": "string | null",
     "phoneNumber": "string | null",
-    "address": "string | null",
-    "insuranceId": "string | null"
+    "address": "string | null"
   },
   "encounterData": [
     {
@@ -192,6 +226,7 @@ Return JSON in this exact format:
       "clinicalFindings": ["string"] | null,
       "treatmentDetails": {
         "proceduresPerformed": ["string"] | null,
+        "cptCodes": [{"code": "string", "description": "string", "modifier": "string | null"}] | null,
         "applicationNumbers": ["string"] | null,
         "treatmentResponse": "string | null",
         "complications": ["string"] | null
@@ -229,7 +264,14 @@ Return JSON in this exact format:
           "frequency": "string | null"
         },
         "infectionControl": ["string"] | null,
-        "vascularAssessment": ["string"] | null,
+        "vascularAssessment": {
+          "dorsalisPedis": "string | null",
+          "posteriorTibial": "string | null",
+          "capillaryRefill": "string | null",
+          "edema": "boolean | null",
+          "varicosities": "boolean | null",
+          "ankleArmIndex": "number | null"
+        } | null,
         "glycemicControl": {
           "methods": ["string"] | null,
           "targets": ["string"] | null,
@@ -242,6 +284,13 @@ Return JSON in this exact format:
       "followUpInstructions": ["string"] | null,
       "infectionStatus": "string | null",
       "comorbidities": ["string"] | null,
+      "diabeticStatus": "diabetic | nondiabetic | prediabetic | null",
+      "functionalStatus": {
+        "selfCare": "string | null",
+        "mobility": "string | null",
+        "assistiveDevice": "boolean | null",
+        "adlScore": "string | null"
+      } | null,
       "assessment": "string | null",
       "plan": "string | null",
       "providerRecommendations": ["string"] | null
@@ -251,11 +300,56 @@ Return JSON in this exact format:
   "warnings": ["string"]
 }`;
 
-  // DEBUGGING: Log key parts of the document being processed
-  console.log('\n=== PDF EXTRACTION DEBUGGING ===');
+  // Deterministic pre-extraction of critical data using regex patterns
+  console.log('\n=== DETERMINISTIC PRE-EXTRACTION ===');
   console.log('Document length:', pdfText.length, 'characters');
   
-  // Look for wound measurements in the text
+  // Extract CPT/HCPCS codes
+  const cptPatterns = [
+    /(?:CPT|DR|HCPCS)?\s*(\d{5})(?:\s*[-]\s*(\w+))?/gi, // Standard CPT codes
+    /(?:CPT|DR|procedure code)?\s*(\d{4,5})(?:\s*[-]\s*(\w+))?/gi, // With prefixes
+    /Q4\d{3}/gi, // Q-codes for skin substitutes
+    /97\d{3}/gi, // Physical therapy codes
+    /110\d{2}/gi, // Debridement codes
+    /15\d{3}/gi // Graft codes
+  ];
+  
+  const extractedCptCodes: string[] = [];
+  for (const pattern of cptPatterns) {
+    const matches = Array.from(pdfText.matchAll(pattern));
+    matches.forEach(match => {
+      if (match[0] && !extractedCptCodes.includes(match[0])) {
+        extractedCptCodes.push(match[0]);
+      }
+    });
+  }
+  if (extractedCptCodes.length > 0) {
+    // PHI SAFEGUARD: Log count only for compliance
+    console.log(`Found ${extractedCptCodes.length} CPT/HCPCS code(s)`);
+  }
+  
+  // Extract Insurance IDs
+  const insurancePatterns = [
+    /(?:Medicare|Medicaid|ID|Member|Policy|Insurance)\s*(?:#|Number|ID)?\s*[:=-]?\s*([A-Z0-9]{8,15})/gi,
+    /(?:BCBS|Aetna|UHC|Cigna|Humana).*?(?:ID|#)\s*[:=-]?\s*([A-Z0-9]{6,15})/gi,
+    /(?:Primary|Secondary)\s+(?:Insurance)?.*?(?:ID|#)\s*[:=-]?\s*([A-Z0-9]{6,15})/gi
+  ];
+  
+  const extractedInsuranceIds: string[] = [];
+  for (const pattern of insurancePatterns) {
+    const matches = Array.from(pdfText.matchAll(pattern));
+    matches.forEach(match => {
+      if (match[1] && !extractedInsuranceIds.includes(match[1])) {
+        extractedInsuranceIds.push(match[1]);
+      }
+    });
+  }
+  if (extractedInsuranceIds.length > 0) {
+    // PHI SAFEGUARD: Log count only, never actual IDs
+    console.log(`Found ${extractedInsuranceIds.length} Insurance ID(s) - details redacted for HIPAA compliance`);
+  }
+  
+  // Extract wound measurements
   const measurementPatterns = [
     /measuring\s+approximately\s+(\d+(?:\.\d+)?)\s*(?:cm|mm)?\s*[xX×]\s*(\d+(?:\.\d+)?)\s*(?:cm|mm)?/gi,
     /(\d+(?:\.\d+)?)\s*[xX×]\s*(\d+(?:\.\d+)?)\s*(?:cm|mm)?/gi,
@@ -263,21 +357,69 @@ Return JSON in this exact format:
     /wound.*?(\d+(?:\.\d+)?)\s*(?:cm|mm)?\s*[xX×]\s*(\d+(?:\.\d+)?)\s*(?:cm|mm)?/gi
   ];
   
-  let foundMeasurements = false;
+  const extractedMeasurements: Array<{length: string, width: string, full: string}> = [];
   for (const pattern of measurementPatterns) {
     const matches = Array.from(pdfText.matchAll(pattern));
-    if (matches.length > 0) {
-      console.log('Found wound measurements in PDF text:');
-      matches.forEach(match => {
-        console.log('  - Match:', match[0]);
-        console.log('    Length:', match[1], 'Width:', match[2] || 'not found');
-      });
-      foundMeasurements = true;
-    }
+    matches.forEach(match => {
+      if (match[1] && match[2]) {
+        extractedMeasurements.push({
+          length: match[1],
+          width: match[2],
+          full: match[0]
+        });
+      }
+    });
+  }
+  if (extractedMeasurements.length > 0) {
+    // Log count only, not actual measurements
+    console.log(`Found ${extractedMeasurements.length} wound measurement(s)`);
   }
   
-  if (!foundMeasurements) {
-    console.log('WARNING: No wound measurements found in PDF text using regex patterns');
+  // Extract vascular findings
+  const vascularPatterns = [
+    /(?:dorsalis pedis|DP)\s*(?:pulse)?\s*[:=-]?\s*(present|absent|diminished|\+|\-|normal)/gi,
+    /(?:posterior tibial|PT)\s*(?:pulse)?\s*[:=-]?\s*(present|absent|diminished|\+|\-|normal)/gi,
+    /(?:edema|swelling)\s*[:=-]?\s*(present|absent|\+|\-|trace|mild|moderate|severe)/gi,
+    /(?:varicosities|varicose)\s*[:=-]?\s*(present|absent|\+|\-)/gi,
+    /ABI\s*[:=-]?\s*(\d+\.\d+)/gi
+  ];
+  
+  const extractedVascular: Record<string, string> = {};
+  for (const pattern of vascularPatterns) {
+    const matches = Array.from(pdfText.matchAll(pattern));
+    matches.forEach(match => {
+      if (match[0] && match[1]) {
+        const key = match[0].split(/[:=-]/)[0].trim();
+        extractedVascular[key] = match[1];
+      }
+    });
+  }
+  if (Object.keys(extractedVascular).length > 0) {
+    // Log count only for HIPAA compliance
+    console.log(`Found ${Object.keys(extractedVascular).length} vascular finding(s)`);
+  }
+  
+  // Extract diabetic status
+  const diabeticPatterns = [
+    /(?:diabetic|diabetes|DM|IDDM|NIDDM)\s*(?:mellitus|type)?/gi,
+    /(?:non-?diabetic|no\s+diabetes|no\s+history\s+of\s+diabetes)/gi
+  ];
+  
+  let diabeticStatus = null;
+  for (const pattern of diabeticPatterns) {
+    const matches = pdfText.match(pattern);
+    if (matches) {
+      if (matches[0].toLowerCase().includes('non') || matches[0].toLowerCase().includes('no')) {
+        diabeticStatus = 'nondiabetic';
+      } else {
+        diabeticStatus = 'diabetic';
+      }
+      break;
+    }
+  }
+  if (diabeticStatus) {
+    // PHI SAFEGUARD: Log existence only
+    console.log('Found diabetic status indicator');
   }
   
   try {
@@ -295,22 +437,56 @@ Return JSON in this exact format:
           role: "user", 
           content: `Extract ALL structured data from this medical document with maximum completeness. Analyze the ENTIRE document and capture every clinical detail, wound progression note, treatment response, conservative care attempt, and provider recommendation for each encounter.
 
-CRITICAL MEASUREMENT EXTRACTION RULES:
-- Convert wound measurements to NUMERIC values (e.g., "1×1 cm" becomes length: 1, width: 1, unit: "cm")
-- Parse measurements from formats like "2×3", "1.5 x 2.0", "4×3×0.5 cm" into separate numeric fields
-- Convert empty or missing measurements to null (NOT empty strings)
-- Ensure length, width, depth, area are numbers or null - NEVER strings
-- Common formats: "1×1", "2×2", "4×3", "1.5x2.0 cm", "area 3.2 cm²"
-- IMPORTANT: Look for text like "measuring approximately X cm x Y cm" or similar patterns
+PRE-EXTRACTED CRITICAL DATA (verify and incorporate):
+- CPT/HCPCS Codes Found: ${extractedCptCodes.join(', ') || 'None found via regex'}
+- Insurance IDs Found: ${extractedInsuranceIds.join(', ') || 'None found via regex'}
+- Wound Measurements Found: ${extractedMeasurements.map(m => m.full).join(', ') || 'None found via regex'}
+- Vascular Findings: ${JSON.stringify(extractedVascular) || 'None found via regex'}
+- Diabetic Status: ${diabeticStatus || 'Not found via regex'}
+
+CRITICAL EXTRACTION RULES:
+1. MEASUREMENTS - Convert to NUMERIC values:
+   - Parse "1×1 cm" as length: 1, width: 1, unit: "cm"
+   - Common formats: "2×3", "1.5 x 2.0", "measuring approximately X cm x Y cm"
+   - Ensure numeric fields or null - NEVER strings
+
+2. INSURANCE - Extract ALL payers:
+   - Primary: Medicare, Medicare Advantage, etc. with insurance ID
+   - Secondary: BCBS, Aetna, UHC, etc. with insurance ID
+   - Look for patterns like "Medicare-TN", "BCBS-TN - FEP"
+
+3. CPT/HCPCS CODES - Extract procedure codes:
+   - Look for patterns: "11042", "DR 11042", "CPT 97597", "Q4xxx"
+   - Include modifiers if present (e.g., "-59", "-RT")
+   - Capture procedure descriptions
+
+4. VASCULAR ASSESSMENT - Extract specific findings:
+   - Pulses: dorsalis pedis, posterior tibial (diminished/present/absent)
+   - Capillary refill time
+   - Presence of edema or varicosities
+   - ABI values if mentioned
+
+5. FUNCTIONAL/MOBILITY STATUS:
+   - Self-care abilities
+   - Mobility level (ambulatory, limited, wheelchair-bound)
+   - Use of assistive devices
+   - ADL scores if present
+
+6. DIABETIC STATUS - Explicitly identify:
+   - "diabetic", "nondiabetic", "prediabetic"
+   - Look for mentions of DM, IDDM, NIDDM, or "no history of diabetes"
 
 SPECIFIC REQUIREMENTS:
 - Extract COMPLETE clinical notes, assessments, and plans for each encounter date
-- Capture ALL wound measurements, healing progression details, and treatment responses  
-- Include ALL conservative care attempts with specific durations and effectiveness
+- Capture ALL wound measurements, healing progression details, and treatment responses
+- Include ALL conservative care attempts with SPECIFIC DURATIONS (e.g., "4 weeks", "3 months")
 - Document ALL provider recommendations, patient education, and follow-up instructions
-- Extract specific procedure details, application numbers, and treatment sequences
+- Extract CPT/HCPCS codes with descriptions and modifiers
 - Include ALL comorbidities mentioned and their management
-- Capture patient compliance details and lifestyle modifications
+- Capture vascular exam findings in structured format
+- Document mobility/functional status and ADL limitations
+- Identify diabetic status explicitly (diabetic/nondiabetic/prediabetic)
+- Extract both PRIMARY and SECONDARY insurance information
 
 Document text to analyze:
 

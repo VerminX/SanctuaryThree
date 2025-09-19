@@ -140,7 +140,7 @@ Respond with JSON in this exact format:
         }
       ],
       response_format: { type: "json_object" },
-      temperature: 0.1, // Low temperature for consistency
+      temperature: 0, // Zero temperature for absolute determinism in medical compliance
     });
 
     const result = JSON.parse(response.choices[0].message.content || '{}');
@@ -154,6 +154,164 @@ Respond with JSON in this exact format:
   } catch (error) {
     console.error('Error in AI eligibility analysis:', error);
     throw new Error('Failed to analyze eligibility: ' + (error as Error).message);
+  }
+}
+
+// Enhanced request interface for full episode context analysis
+interface FullContextAnalysisRequest {
+  currentEncounter: {
+    encounterNotes: string[];
+    woundDetails: any;
+    conservativeCare: any;
+    procedureCodes?: any[];
+    vascularAssessment?: any;
+    functionalStatus?: any;
+    diabeticStatus?: string | null;
+  };
+  episodeContext: Array<{
+    date: Date;
+    notes: string[];
+    woundDetails: any;
+    conservativeCare: any;
+    procedureCodes?: any[];
+    vascularAssessment?: any;
+    functionalStatus?: any;
+    diabeticStatus?: string | null;
+    infectionStatus?: string;
+    comorbidities?: any;
+  }>;
+  patientInfo: {
+    payerType: string;
+    planName?: string;
+    insuranceId?: string;
+    secondaryPayerType?: string;
+    secondaryPlanName?: string;
+    secondaryInsuranceId?: string;
+    macRegion: string;
+  };
+  policyContext: string;
+}
+
+// Enhanced AI analysis function with complete episode context
+export async function analyzeEligibilityWithFullContext(request: FullContextAnalysisRequest): Promise<EligibilityAnalysisResponse> {
+  const { currentEncounter, episodeContext, patientInfo, policyContext } = request;
+  
+  // Create HIPAA-compliant OpenAI client
+  const openai = createOpenAIClient();
+
+  // Build temporal progression analysis
+  const temporalProgression = episodeContext
+    .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
+    .map((enc, index) => {
+      const encounterDate = new Date(enc.date).toISOString().split('T')[0];
+      const measurements = enc.woundDetails?.measurements;
+      const cptCodes = enc.procedureCodes?.map((p: any) => p.code).join(', ') || 'None';
+      const vascular = enc.vascularAssessment;
+      const functional = enc.functionalStatus;
+      
+      return `
+=== ENCOUNTER ${index + 1} (${encounterDate}) ===
+WOUND DETAILS:
+- Type: ${enc.woundDetails?.type || 'Not specified'}
+- Location: ${enc.woundDetails?.location || 'Not specified'}
+- Measurements: ${measurements?.length}x${measurements?.width} ${measurements?.unit || 'cm'} (depth: ${measurements?.depth || 'N/A'})
+- Wound bed: ${enc.woundDetails?.woundBed || 'Not documented'}
+- Drainage: ${enc.woundDetails?.drainage || 'Not documented'}
+
+PROCEDURES/CPT CODES: ${cptCodes}
+
+VASCULAR STATUS:
+- Dorsalis Pedis: ${vascular?.dorsalisPedis || 'Not assessed'}
+- Posterior Tibial: ${vascular?.posteriorTibial || 'Not assessed'}
+- Edema: ${vascular?.edema || 'Not assessed'}
+- Capillary Refill: ${vascular?.capillaryRefill || 'Not assessed'}
+
+FUNCTIONAL STATUS:
+- Mobility: ${functional?.mobility || 'Not assessed'}
+- Self-care: ${functional?.selfCare || 'Not assessed'}
+- Assistive device: ${functional?.assistiveDevice ? 'Yes' : 'No'}
+
+DIABETIC STATUS: ${enc.diabeticStatus || 'Not specified'}
+
+CONSERVATIVE CARE:
+${JSON.stringify(enc.conservativeCare, null, 2)}
+
+CLINICAL NOTES:
+${enc.notes.join('\n')}
+`;
+    }).join('\n');
+
+  const systemPrompt = `You are a compliance-focused clinical coverage assistant. Task: assess eligibility for non-analogous skin substitute/CTP use for DFU/VLU based on COMPLETE EPISODE CONTEXT with temporal progression.
+
+COMPREHENSIVE ANALYSIS REQUIREMENTS:
+- Analyze the ENTIRE episode progression from all ${episodeContext.length} encounters
+- Consider wound measurement progression over time (increasing/decreasing/stable)
+- Evaluate cumulative conservative care duration and effectiveness
+- Track all procedures performed (CPT codes) throughout the episode
+- Assess vascular status changes and functional limitations
+- Consider both primary and secondary insurance coverage
+- Identify patterns of improvement, deterioration, or stagnation
+
+Rules:
+- Use ONLY the provided policy context (LCDs, Articles, MAC pages, CMS documentation)
+- Align to the patient's MAC: ${patientInfo.macRegion}, payer type: ${patientInfo.payerType}
+- If secondary insurance: ${patientInfo.secondaryPayerType || 'None'}
+- Return structured JSON with the exact format specified
+
+CRITICAL TEMPORAL ANALYSIS:
+- Document wound size progression: Are measurements increasing/decreasing?
+- Calculate total conservative care duration across ALL encounters
+- Identify failed conservative treatments with specific timeframes
+- Note any procedures performed (debridements, grafts) with dates
+- Track functional decline or improvement over time
+
+Policy Context:
+${policyContext}
+
+Patient Insurance Information:
+- Primary: ${patientInfo.payerType} ${patientInfo.planName || ''} (ID: ${patientInfo.insuranceId || 'N/A'})
+- Secondary: ${patientInfo.secondaryPayerType || 'None'} ${patientInfo.secondaryPlanName || ''} (ID: ${patientInfo.secondaryInsuranceId || 'N/A'})
+- MAC Region: ${patientInfo.macRegion}
+
+COMPLETE EPISODE TIMELINE:
+${temporalProgression}
+
+CURRENT ENCOUNTER FOCUS:
+${JSON.stringify(currentEncounter, null, 2)}
+
+Respond with JSON in this exact format:
+{
+  "eligibility": "Yes" | "No" | "Unclear",
+  "rationale": "...",
+  "requiredDocumentationGaps": ["..."],
+  "citations": [{"title": "...","url": "...","section": "...","effectiveDate": "YYYY-MM-DD"}],
+  "letterBullets": ["..."]
+}`;
+
+  try {
+    const response = await openai.chat.completions.create({
+      model: "gpt-4o-mini",
+      messages: [
+        {
+          role: "system",
+          content: systemPrompt,
+        }
+      ],
+      response_format: { type: "json_object" },
+      temperature: 0.0, // Zero temperature for maximum consistency
+    });
+
+    const result = JSON.parse(response.choices[0].message.content || '{}');
+    
+    // Validate the response structure
+    if (!result.eligibility || !result.rationale || !Array.isArray(result.citations)) {
+      throw new Error('Invalid response format from AI analysis');
+    }
+
+    return result as EligibilityAnalysisResponse;
+  } catch (error) {
+    console.error('Error in enhanced AI eligibility analysis:', error);
+    throw new Error('Failed to analyze eligibility with full context: ' + (error as Error).message);
   }
 }
 
@@ -280,7 +438,7 @@ Respond with JSON in this exact format:
         }
       ],
       response_format: { type: "json_object" },
-      temperature: 0.1, // Low temperature for consistency
+      temperature: 0, // Zero temperature for absolute determinism in medical compliance
     });
 
     const result = JSON.parse(response.choices[0].message.content || '{}');
@@ -544,7 +702,7 @@ Respond with JSON in this exact format:
         }
       ],
       response_format: { type: "json_object" },
-      temperature: 0.1, // Low temperature for consistency
+      temperature: 0, // Zero temperature for absolute determinism in medical compliance
     });
 
     const result = JSON.parse(response.choices[0].message.content || '{}');
