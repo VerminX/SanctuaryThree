@@ -14,7 +14,7 @@ import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Breadcrumb, BreadcrumbItem, BreadcrumbLink, BreadcrumbList, BreadcrumbPage, BreadcrumbSeparator } from "@/components/ui/breadcrumb";
-import { ArrowLeft, Plus, Calendar, FileText, User, CreditCard, MapPin } from "lucide-react";
+import { ArrowLeft, Plus, Calendar, FileText, User, CreditCard, MapPin, Activity, Heart, Code, Footprints } from "lucide-react";
 
 // Type for decrypted patient data returned from API
 type DecryptedPatient = {
@@ -45,6 +45,26 @@ type PatientEncounter = {
     location?: string;
     size?: string;
   };
+  procedureCodes?: Array<{
+    code: string;
+    description: string;
+    modifier?: string;
+    units?: number;
+  }>;
+  vascularAssessment?: {
+    dorsalisPedis?: string;
+    posteriorTibial?: string;
+    capillaryRefill?: string;
+    edema?: string;
+    varicosities?: string;
+  };
+  functionalStatus?: {
+    selfCare?: string;
+    mobility?: string;
+    assistiveDevice?: string;
+    adlScore?: number;
+  };
+  diabeticStatus?: string;
   infectionStatus?: string;
   createdAt: string;
 };
@@ -346,53 +366,127 @@ export default function PatientDetail() {
                   <p className="text-muted-foreground">Loading encounters...</p>
                 </div>
               ) : encounters && encounters.length > 0 ? (
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Date</TableHead>
-                      <TableHead>Wound Details</TableHead>
-                      <TableHead>Infection Status</TableHead>
-                      <TableHead>Created</TableHead>
-                      <TableHead>Actions</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {encounters.map((encounter) => (
-                      <TableRow key={encounter.id} data-testid={`row-encounter-${encounter.id}`}>
-                        <TableCell>
-                          <div className="font-medium">
-                            {new Date(encounter.date).toLocaleDateString()}
-                          </div>
-                          <div className="text-sm text-muted-foreground">
-                            {new Date(encounter.date).toLocaleTimeString()}
-                          </div>
-                        </TableCell>
-                        <TableCell>
-                          <div className="text-sm">
-                            <p><strong>Type:</strong> {encounter.woundDetails?.type || 'N/A'}</p>
-                            <p><strong>Location:</strong> {encounter.woundDetails?.location || 'N/A'}</p>
-                            {encounter.woundDetails?.size && (
-                              <p><strong>Size:</strong> {encounter.woundDetails.size}</p>
-                            )}
-                          </div>
-                        </TableCell>
-                        <TableCell>
-                          <Badge variant={encounter.infectionStatus === 'None' ? 'outline' : 'destructive'}>
-                            {encounter.infectionStatus || 'Unknown'}
-                          </Badge>
-                        </TableCell>
-                        <TableCell className="text-sm text-muted-foreground">
-                          {new Date(encounter.createdAt).toLocaleDateString()}
-                        </TableCell>
-                        <TableCell>
-                          <Button variant="outline" size="sm" data-testid={`button-view-encounter-${encounter.id}`}>
-                            View Details
-                          </Button>
-                        </TableCell>
+                <div className="overflow-x-auto">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Date</TableHead>
+                        <TableHead>Wound Details</TableHead>
+                        <TableHead>CPT Codes</TableHead>
+                        <TableHead>Clinical Status</TableHead>
+                        <TableHead>Vascular</TableHead>
+                        <TableHead>Functional</TableHead>
+                        <TableHead>Actions</TableHead>
                       </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
+                    </TableHeader>
+                    <TableBody>
+                      {encounters.map((encounter) => (
+                        <TableRow key={encounter.id} data-testid={`row-encounter-${encounter.id}`}>
+                          <TableCell>
+                            <div className="font-medium">
+                              {new Date(encounter.date).toLocaleDateString()}
+                            </div>
+                            <div className="text-sm text-muted-foreground">
+                              {new Date(encounter.date).toLocaleTimeString()}
+                            </div>
+                          </TableCell>
+                          <TableCell>
+                            <div className="text-sm space-y-1">
+                              <p><strong>Type:</strong> {encounter.woundDetails?.type || 'N/A'}</p>
+                              <p><strong>Location:</strong> {encounter.woundDetails?.location || 'N/A'}</p>
+                              {encounter.woundDetails?.size && (
+                                <p><strong>Size:</strong> {encounter.woundDetails.size}</p>
+                              )}
+                            </div>
+                          </TableCell>
+                          <TableCell>
+                            {encounter.procedureCodes && encounter.procedureCodes.length > 0 ? (
+                              <div className="text-sm space-y-1">
+                                {encounter.procedureCodes.map((proc, idx) => (
+                                  <div key={idx} className="flex items-center gap-1" data-testid={`text-cpt-${proc.code}`}>
+                                    <Code className="h-3 w-3 text-muted-foreground" />
+                                    <code className="text-xs bg-muted px-1 py-0.5 rounded">{proc.code}</code>
+                                    {proc.description && (
+                                      <span className="text-xs text-muted-foreground">{proc.description}</span>
+                                    )}
+                                  </div>
+                                ))}
+                              </div>
+                            ) : (
+                              <span className="text-sm text-muted-foreground">No codes</span>
+                            )}
+                          </TableCell>
+                          <TableCell>
+                            <div className="text-sm space-y-1">
+                              {encounter.diabeticStatus && (
+                                <Badge 
+                                  variant={encounter.diabeticStatus === 'diabetic' ? 'destructive' : 'outline'}
+                                  className="text-xs"
+                                  data-testid={`badge-diabetic-${encounter.id}`}
+                                >
+                                  <Activity className="h-3 w-3 mr-1" />
+                                  {encounter.diabeticStatus}
+                                </Badge>
+                              )}
+                              {encounter.infectionStatus && (
+                                <Badge 
+                                  variant={encounter.infectionStatus === 'None' ? 'outline' : 'destructive'}
+                                  className="text-xs ml-1"
+                                >
+                                  {encounter.infectionStatus}
+                                </Badge>
+                              )}
+                            </div>
+                          </TableCell>
+                          <TableCell>
+                            {encounter.vascularAssessment ? (
+                              <div className="text-xs space-y-1" data-testid={`vascular-${encounter.id}`}>
+                                {encounter.vascularAssessment.dorsalisPedis && (
+                                  <p><strong>DP:</strong> {encounter.vascularAssessment.dorsalisPedis}</p>
+                                )}
+                                {encounter.vascularAssessment.edema && (
+                                  <p><strong>Edema:</strong> {encounter.vascularAssessment.edema}</p>
+                                )}
+                                {encounter.vascularAssessment.capillaryRefill && (
+                                  <p><strong>CR:</strong> {encounter.vascularAssessment.capillaryRefill}</p>
+                                )}
+                              </div>
+                            ) : (
+                              <Heart className="h-4 w-4 text-muted-foreground/50" />
+                            )}
+                          </TableCell>
+                          <TableCell>
+                            {encounter.functionalStatus ? (
+                              <div className="text-xs space-y-1" data-testid={`functional-${encounter.id}`}>
+                                {encounter.functionalStatus.mobility && (
+                                  <div className="flex items-center gap-1">
+                                    <Footprints className="h-3 w-3 text-muted-foreground" />
+                                    <span>{encounter.functionalStatus.mobility}</span>
+                                  </div>
+                                )}
+                                {encounter.functionalStatus.assistiveDevice && (
+                                  <p className="text-muted-foreground">{encounter.functionalStatus.assistiveDevice}</p>
+                                )}
+                                {encounter.functionalStatus.adlScore !== undefined && (
+                                  <Badge variant="outline" className="text-xs">
+                                    ADL: {encounter.functionalStatus.adlScore}
+                                  </Badge>
+                                )}
+                              </div>
+                            ) : (
+                              <Footprints className="h-4 w-4 text-muted-foreground/50" />
+                            )}
+                          </TableCell>
+                          <TableCell>
+                            <Button variant="outline" size="sm" data-testid={`button-view-encounter-${encounter.id}`}>
+                              View Details
+                            </Button>
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
               ) : (
                 <div className="text-center py-8">
                   <Calendar className="mx-auto h-12 w-12 text-muted-foreground/50" />
