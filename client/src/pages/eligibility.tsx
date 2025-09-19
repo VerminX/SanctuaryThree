@@ -8,6 +8,7 @@ import Sidebar from "@/components/layout/sidebar";
 import Header from "@/components/layout/header";
 import AnalysisPanel from "@/components/eligibility/analysis-panel";
 import { Card, CardContent } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
 import { SearchCheck, Brain, CheckCircle, AlertTriangle, XCircle } from "lucide-react";
 
 const MAC_REGIONS = [
@@ -41,8 +42,12 @@ export default function Eligibility() {
   }, [isAuthenticated, isLoading, toast]);
 
   const currentTenant = user?.tenants?.[0];
+  
+  // Validate tenant ID format
+  const tenantId = currentTenant?.id;
+  const isValidTenant = tenantId && typeof tenantId === 'string' && tenantId.length >= 10;
 
-  // OPTIMIZED: Use bulk endpoints instead of N+1 queries
+  // OPTIMIZED: Use bulk endpoints instead of N+1 queries with proper array-segmented query keys
   // Get all encounters with patient information in a single API call
   const { data: encounters, isLoading: encountersLoading, error: encountersError } = useQuery<Array<{
     id: string;
@@ -60,8 +65,8 @@ export default function Eligibility() {
     createdAt?: Date;
     updatedAt?: Date;
   }>>({
-    queryKey: ["/api/encounters-with-patients", currentTenant?.id],
-    enabled: !!currentTenant?.id,
+    queryKey: ["/api/encounters-with-patients", tenantId],
+    enabled: isValidTenant,
     retry: false,
   });
 
@@ -80,15 +85,15 @@ export default function Eligibility() {
     createdAt?: Date | null;
     updatedAt?: Date | null;
   }>>({
-    queryKey: ["/api/episodes-with-patients", currentTenant?.id],
-    enabled: !!currentTenant?.id,
+    queryKey: ["/api/episodes-with-patients", tenantId],
+    enabled: isValidTenant,
     retry: false,
   });
 
-  // Get recent eligibility checks
+  // Get recent eligibility checks with tenant scoping
   const { data: recentChecks, isLoading: checksLoading } = useQuery({
-    queryKey: ["/api/recent-eligibility-checks"],
-    enabled: !!currentTenant?.id,
+    queryKey: ["/api/recent-eligibility-checks", tenantId],
+    enabled: isValidTenant,
     retry: false,
   });
 
@@ -102,7 +107,7 @@ export default function Eligibility() {
     },
     onSuccess: (data) => {
       setAnalysisResult(data);
-      queryClient.invalidateQueries({ queryKey: ["/api/recent-eligibility-checks"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/recent-eligibility-checks", tenantId] });
       toast({
         title: "Analysis Complete",
         description: "Single encounter eligibility analysis completed successfully",
@@ -138,7 +143,7 @@ export default function Eligibility() {
     },
     onSuccess: (data) => {
       setAnalysisResult(data);
-      queryClient.invalidateQueries({ queryKey: ["/api/recent-eligibility-checks"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/recent-eligibility-checks", tenantId] });
       toast({
         title: "Analysis Complete",
         description: "Episode eligibility analysis with full patient history completed successfully",
@@ -164,7 +169,8 @@ export default function Eligibility() {
     },
   });
 
-  if (isLoading || !isAuthenticated || !currentTenant) {
+  // Handle auth loading
+  if (isLoading || !isAuthenticated) {
     return (
       <div className="min-h-screen bg-background flex items-center justify-center">
         <div className="text-center">
@@ -174,6 +180,80 @@ export default function Eligibility() {
       </div>
     );
   }
+
+  // Handle no tenant case
+  if (!currentTenant) {
+    return (
+      <div className="min-h-screen flex bg-background" data-testid="page-eligibility-no-tenant">
+        <Sidebar />
+        
+        <main className="flex-1">
+          <Header title="Eligibility Analysis" subtitle="AI-powered Medicare LCD policy checking and coverage determination" />
+          
+          <div className="p-6 space-y-6">
+            <Card className="bg-muted/30 border-muted" data-testid="card-no-tenant">
+              <CardContent className="p-8 text-center">
+                <AlertTriangle className="mx-auto h-12 w-12 text-muted-foreground/50 mb-4" />
+                <h3 className="text-lg font-medium text-foreground mb-2">No Tenant Access</h3>
+                <p className="text-sm text-muted-foreground mb-4">
+                  You don't have access to any tenant organizations. Please contact your administrator to get access to a tenant.
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  Tenant access is required to view patient data and perform eligibility analyses.
+                </p>
+              </CardContent>
+            </Card>
+          </div>
+        </main>
+      </div>
+    );
+  }
+
+  // Handle invalid tenant ID
+  if (!isValidTenant) {
+    console.error('Invalid tenant ID:', tenantId);
+    return (
+      <div className="min-h-screen flex bg-background" data-testid="page-eligibility-invalid-tenant">
+        <Sidebar />
+        
+        <main className="flex-1">
+          <Header title="Eligibility Analysis" subtitle="AI-powered Medicare LCD policy checking and coverage determination" />
+          
+          <div className="p-6 space-y-6">
+            <Card className="bg-destructive/5 border-destructive/20" data-testid="card-invalid-tenant">
+              <CardContent className="p-8 text-center">
+                <AlertTriangle className="mx-auto h-12 w-12 text-destructive/70 mb-4" />
+                <h3 className="text-lg font-medium text-foreground mb-2">Invalid Tenant Configuration</h3>
+                <p className="text-sm text-muted-foreground mb-4">
+                  There's an issue with your tenant configuration. Please contact support.
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  Error: Invalid tenant ID format
+                </p>
+              </CardContent>
+            </Card>
+          </div>
+        </main>
+      </div>
+    );
+  }
+
+  // Combined loading state for bulk queries
+  const bulkDataLoading = encountersLoading || episodesLoading;
+
+  // Error handling for bulk queries
+  const bulkDataError = encountersError || episodesError;
+  
+  // Retry function for bulk queries with proper array-segmented keys
+  const retryBulkData = () => {
+    queryClient.invalidateQueries({ queryKey: ["/api/encounters-with-patients", tenantId] });
+    queryClient.invalidateQueries({ queryKey: ["/api/episodes-with-patients", tenantId] });
+    queryClient.invalidateQueries({ queryKey: ["/api/recent-eligibility-checks", tenantId] });
+    toast({
+      title: "Refreshing Data",
+      description: "Retrying to load patient data...",
+    });
+  };
 
   const handleAnalyze = async (params: { mode: 'episode' | 'encounter'; id: string; macRegion: string }) => {
     const { mode, id, macRegion } = params;
@@ -267,16 +347,78 @@ export default function Eligibility() {
             </Card>
           </div>
 
+          {/* Error State for Bulk Data */}
+          {bulkDataError && (
+            <Card className="bg-destructive/5 border-destructive/20" data-testid="card-bulk-data-error">
+              <CardContent className="p-6">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center space-x-3">
+                    <AlertTriangle className="w-5 h-5 text-destructive" />
+                    <div>
+                      <h3 className="text-sm font-medium text-foreground">Failed to Load Patient Data</h3>
+                      <p className="text-xs text-muted-foreground">
+                        Unable to load encounters and episodes. This may affect dropdown performance.
+                      </p>
+                    </div>
+                  </div>
+                  <Button
+                    onClick={retryBulkData}
+                    variant="outline"
+                    size="sm"
+                    className="border-destructive/20 hover:bg-destructive/10"
+                    data-testid="button-retry-bulk-data"
+                  >
+                    Retry
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+          )}
+
           {/* Main Analysis Panel */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            <AnalysisPanel
-              encounters={encounters ?? []}
-              episodes={episodes ?? []}
-              macRegions={MAC_REGIONS}
-              onAnalyze={handleAnalyze}
-              result={analysisResult?.result}
-              isLoading={analyzeEligibilityMutation.isPending || analyzeEpisodeEligibilityMutation.isPending}
-            />
+            {bulkDataLoading ? (
+              <Card data-testid="card-analysis-loading">
+                <div className="p-6 border-b border-border">
+                  <div className="animate-pulse">
+                    <div className="h-6 bg-muted rounded w-1/3 mb-2"></div>
+                    <div className="h-4 bg-muted rounded w-2/3"></div>
+                  </div>
+                </div>
+                <CardContent className="p-6">
+                  <div className="space-y-4">
+                    <div className="animate-pulse">
+                      <div className="h-4 bg-muted rounded w-1/4 mb-2"></div>
+                      <div className="h-10 bg-muted rounded w-full"></div>
+                    </div>
+                    <div className="animate-pulse">
+                      <div className="h-4 bg-muted rounded w-1/4 mb-2"></div>
+                      <div className="h-10 bg-muted rounded w-full"></div>
+                    </div>
+                    <div className="animate-pulse">
+                      <div className="h-4 bg-muted rounded w-1/4 mb-2"></div>
+                      <div className="h-10 bg-muted rounded w-full"></div>
+                    </div>
+                    <div className="animate-pulse">
+                      <div className="h-10 bg-muted rounded w-32"></div>
+                    </div>
+                  </div>
+                  <div className="mt-6 text-center">
+                    <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-primary mx-auto mb-2"></div>
+                    <p className="text-sm text-muted-foreground">Loading patient data for dropdown optimization...</p>
+                  </div>
+                </CardContent>
+              </Card>
+            ) : (
+              <AnalysisPanel
+                encounters={encounters ?? []}
+                episodes={episodes ?? []}
+                macRegions={MAC_REGIONS}
+                onAnalyze={handleAnalyze}
+                result={analysisResult?.result}
+                isLoading={analyzeEligibilityMutation.isPending || analyzeEpisodeEligibilityMutation.isPending}
+              />
+            )}
 
             {/* Recent Analyses */}
             <Card data-testid="card-recent-analyses">
