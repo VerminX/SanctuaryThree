@@ -247,33 +247,60 @@ export function encryptEncounterNotes(notes: string[]): string[] {
   return notes.map(note => encryptPHI(note));
 }
 
-// Track encounter note failures to reduce log noise
-const encounterNoteFailureCache = new Map<string, number>();
+// Track encounter note failures with proper time-based rate limiting (like patient data)
+const encounterNoteFailureCache = new Map<string, { count: number; lastLoggedAt: number; lastAttempt: number }>();
 
 export function decryptEncounterNotes(encryptedNotes: string[]): string[] {
   return encryptedNotes.map((note, index) => {
     try {
       return decryptPHI(note);
     } catch (error) {
-      const cacheKey = `${note.substring(0, 20)}:${index}`; // Use note prefix + index as key
-      const failureCount = (encounterNoteFailureCache.get(cacheKey) || 0) + 1;
-      encounterNoteFailureCache.set(cacheKey, failureCount);
+      const now = Date.now();
+      // Create reliable cache key using note content hash + index
+      const noteHash = crypto.createHmac('sha256', process.env.ENCRYPTION_KEY || 'fallback')
+        .update(note)
+        .digest('hex')
+        .substring(0, 12);
+      const cacheKey = `${noteHash}:${index}`;
+      const cached = encounterNoteFailureCache.get(cacheKey);
       
-      // Only log the first few failures per note to reduce noise
-      if (failureCount <= 3) {
-        console.error(`Error decrypting encounter note ${index} (attempt #${failureCount}):`, error instanceof Error ? error.message : 'Unknown error');
+      // Rate limit logging for known failed notes (only log once per hour, like patient data)
+      const shouldLog = !cached || (now - cached.lastLoggedAt > 3600000); // 1 hour
+      
+      // Update failure tracking
+      const updatedCache = {
+        count: (cached?.count || 0) + 1,
+        lastLoggedAt: shouldLog ? now : (cached?.lastLoggedAt || 0),
+        lastAttempt: now
+      };
+      encounterNoteFailureCache.set(cacheKey, updatedCache);
+      
+      // Only log if we haven't logged recently for this note (HIPAA-safe)
+      if (shouldLog) {
+        console.error(`Error decrypting encounter note [${noteHash}:${index}] (attempt #${updatedCache.count}):`, {
+          noteHash,
+          index,
+          error: error instanceof Error ? error.message : 'Unknown error',
+          noteLength: note.length,
+          isBase64: /^[A-Za-z0-9+/]*={0,2}$/.test(note)
+        });
         
-        // Report to health monitor on first failure for each note
-        if (failureCount === 1) {
-          healthMonitor.reportEncounterNoteFailure();
-        }
+        // Report to health monitor with note hash instead of content
+        healthMonitor.reportEncounterNoteFailure();
       }
       
-      // Periodically clean cache to prevent memory leaks
-      if (encounterNoteFailureCache.size > 100) {
+      // Periodically clean cache to prevent memory leaks (keep reasonable size)
+      if (encounterNoteFailureCache.size > 200) {
         const entries = Array.from(encounterNoteFailureCache.entries());
-        const toDelete = entries.slice(0, entries.length - 50);
-        toDelete.forEach(([key]) => encounterNoteFailureCache.delete(key));
+        const oldEntries = entries.filter(([_, data]) => now - data.lastAttempt > 7200000); // Remove entries older than 2 hours
+        oldEntries.forEach(([key]) => encounterNoteFailureCache.delete(key));
+        
+        // If still too large, remove oldest entries
+        if (encounterNoteFailureCache.size > 150) {
+          const remainingEntries = Array.from(encounterNoteFailureCache.entries());
+          const toDelete = remainingEntries.slice(0, remainingEntries.length - 100);
+          toDelete.forEach(([key]) => encounterNoteFailureCache.delete(key));
+        }
       }
       
       // Return placeholder text instead of throwing to allow analysis to continue
