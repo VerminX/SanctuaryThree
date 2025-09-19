@@ -950,6 +950,80 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Bulk data endpoints for performance optimization
+  app.get('/api/encounters-with-patients/:tenantId', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const { tenantId } = req.params;
+      
+      // Verify user has access to tenant
+      const userTenantRole = await storage.getUserTenantRole(userId, tenantId);
+      if (!userTenantRole) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+
+      const encountersWithPatients = await storage.getAllEncountersWithPatientsByTenant(tenantId);
+      
+      // Decrypt encounter notes and remove encrypted notes from response for data minimization
+      const encountersWithDecryptedNotes = encountersWithPatients.map(encounter => {
+        const { encryptedNotes, ...encounterData } = encounter;
+        return {
+          ...encounterData,
+          notes: encryptedNotes ? decryptEncounterNotes(encryptedNotes as string[]) : [],
+        };
+      });
+
+      // Log audit event for bulk PHI access
+      await storage.createAuditLog({
+        tenantId,
+        userId,
+        action: 'VIEW_BULK_ENCOUNTERS',
+        entity: 'Encounter',
+        entityId: `bulk-${tenantId}`,
+        ipAddress: req.ip,
+        userAgent: req.get('User-Agent'),
+        previousHash: '',
+      });
+
+      res.json(encountersWithDecryptedNotes);
+    } catch (error) {
+      console.error("Error fetching encounters with patients:", error);
+      res.status(500).json({ message: "Failed to fetch encounters with patients" });
+    }
+  });
+
+  app.get('/api/episodes-with-patients/:tenantId', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const { tenantId } = req.params;
+      
+      // Verify user has access to tenant
+      const userTenantRole = await storage.getUserTenantRole(userId, tenantId);
+      if (!userTenantRole) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+
+      const episodesWithPatients = await storage.getAllEpisodesWithPatientsByTenant(tenantId);
+      
+      // Log audit event for bulk PHI access
+      await storage.createAuditLog({
+        tenantId,
+        userId,
+        action: 'VIEW_BULK_EPISODES',
+        entity: 'Episode',
+        entityId: `bulk-${tenantId}`,
+        ipAddress: req.ip,
+        userAgent: req.get('User-Agent'),
+        previousHash: '',
+      });
+
+      res.json(episodesWithPatients);
+    } catch (error) {
+      console.error("Error fetching episodes with patients:", error);
+      res.status(500).json({ message: "Failed to fetch episodes with patients" });
+    }
+  });
+
   // Document generation routes
   app.post('/api/patients/:patientId/documents', isAuthenticated, async (req: any, res) => {
     try {

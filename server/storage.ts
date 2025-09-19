@@ -183,6 +183,10 @@ export interface IStorage {
   updatePdfExtractedDataValidation(id: string, status: string, reviewedBy: string, comments?: string): Promise<PdfExtractedData>;
   updatePdfExtractedData(id: string, data: Partial<InsertPdfExtractedData>): Promise<PdfExtractedData>;
   linkPdfExtractedDataToRecords(id: string, patientId?: string, encounterId?: string): Promise<PdfExtractedData>;
+  
+  // Bulk operations for performance optimization
+  getAllEncountersWithPatientsByTenant(tenantId: string): Promise<Array<Encounter & { patientName: string; patientId: string; }>>;
+  getAllEpisodesWithPatientsByTenant(tenantId: string): Promise<Array<Episode & { patientName: string; patientId: string; encounterCount: number; }>>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -516,6 +520,53 @@ export class DatabaseStorage implements IStorage {
       .from(documents)
       .where(eq(documents.episodeId, episodeId))
       .orderBy(desc(documents.createdAt));
+  }
+
+  // Bulk operations for performance optimization
+  async getAllEncountersWithPatientsByTenant(tenantId: string): Promise<Array<Encounter & { patientName: string; patientId: string; }>> {
+    const { safeDecryptPatientData } = await import('./services/encryption');
+    
+    const encounterResults = await db
+      .select({
+        encounter: encounters,
+        patient: patients
+      })
+      .from(encounters)
+      .innerJoin(patients, eq(encounters.patientId, patients.id))
+      .where(eq(patients.tenantId, tenantId))
+      .orderBy(desc(encounters.date));
+
+    return encounterResults.map(row => {
+      const { patientData } = safeDecryptPatientData(row.patient);
+      return {
+        ...row.encounter,
+        patientName: `${patientData.firstName} ${patientData.lastName}`.trim(),
+      };
+    });
+  }
+
+  async getAllEpisodesWithPatientsByTenant(tenantId: string): Promise<Array<Episode & { patientName: string; patientId: string; encounterCount: number; }>> {
+    const { safeDecryptPatientData } = await import('./services/encryption');
+    
+    const episodeResults = await db
+      .select({
+        episode: episodes,
+        patient: patients,
+        encounterCount: sql<number>`(SELECT COUNT(*) FROM ${encounters} WHERE ${encounters.episodeId} = ${episodes.id})`.as('encounterCount')
+      })
+      .from(episodes)
+      .innerJoin(patients, eq(episodes.patientId, patients.id))
+      .where(eq(patients.tenantId, tenantId))
+      .orderBy(desc(episodes.episodeStartDate));
+
+    return episodeResults.map(row => {
+      const { patientData } = safeDecryptPatientData(row.patient);
+      return {
+        ...row.episode,
+        patientName: `${patientData.firstName} ${patientData.lastName}`.trim(),
+        encounterCount: row.encounterCount,
+      };
+    });
   }
 
   // Policy operations
