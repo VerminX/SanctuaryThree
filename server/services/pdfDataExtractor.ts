@@ -251,8 +251,39 @@ Return JSON in this exact format:
   "warnings": ["string"]
 }`;
 
+  // DEBUGGING: Log key parts of the document being processed
+  console.log('\n=== PDF EXTRACTION DEBUGGING ===');
+  console.log('Document length:', pdfText.length, 'characters');
+  
+  // Look for wound measurements in the text
+  const measurementPatterns = [
+    /measuring\s+approximately\s+(\d+(?:\.\d+)?)\s*(?:cm|mm)?\s*[xX×]\s*(\d+(?:\.\d+)?)\s*(?:cm|mm)?/gi,
+    /(\d+(?:\.\d+)?)\s*[xX×]\s*(\d+(?:\.\d+)?)\s*(?:cm|mm)?/gi,
+    /size[:\s]+(\d+(?:\.\d+)?)\s*[xX×]\s*(\d+(?:\.\d+)?)/gi,
+    /wound.*?(\d+(?:\.\d+)?)\s*(?:cm|mm)?\s*[xX×]\s*(\d+(?:\.\d+)?)\s*(?:cm|mm)?/gi
+  ];
+  
+  let foundMeasurements = false;
+  for (const pattern of measurementPatterns) {
+    const matches = Array.from(pdfText.matchAll(pattern));
+    if (matches.length > 0) {
+      console.log('Found wound measurements in PDF text:');
+      matches.forEach(match => {
+        console.log('  - Match:', match[0]);
+        console.log('    Length:', match[1], 'Width:', match[2] || 'not found');
+      });
+      foundMeasurements = true;
+    }
+  }
+  
+  if (!foundMeasurements) {
+    console.log('WARNING: No wound measurements found in PDF text using regex patterns');
+  }
+  
   try {
     const modelName = azureApiKey ? azureDeployment : "gpt-4o-mini";
+    console.log('Using AI model:', modelName);
+    
     const response = await openai.chat.completions.create({
       model: modelName,
       messages: [
@@ -270,6 +301,7 @@ CRITICAL MEASUREMENT EXTRACTION RULES:
 - Convert empty or missing measurements to null (NOT empty strings)
 - Ensure length, width, depth, area are numbers or null - NEVER strings
 - Common formats: "1×1", "2×2", "4×3", "1.5x2.0 cm", "area 3.2 cm²"
+- IMPORTANT: Look for text like "measuring approximately X cm x Y cm" or similar patterns
 
 SPECIFIC REQUIREMENTS:
 - Extract COMPLETE clinical notes, assessments, and plans for each encounter date
@@ -290,6 +322,25 @@ ${truncatedText}`,
     });
 
     const result = JSON.parse(response.choices[0].message.content || '{}');
+    
+    // DEBUGGING: Log what the AI extracted
+    console.log('\n=== AI EXTRACTION RESULT ===');
+    console.log('Number of encounters extracted:', result.encounterData?.length || 0);
+    
+    if (result.encounterData && Array.isArray(result.encounterData)) {
+      result.encounterData.forEach((encounter: any, index: number) => {
+        console.log(`\nEncounter ${index + 1}:`);
+        console.log('  Date:', encounter.encounterDate);
+        console.log('  Wound Details:', JSON.stringify(encounter.woundDetails, null, 2));
+        if (encounter.woundDetails?.measurements) {
+          const m = encounter.woundDetails.measurements;
+          console.log('  Measurement Types:');
+          console.log('    - length:', typeof m.length, 'value:', m.length);
+          console.log('    - width:', typeof m.width, 'value:', m.width);
+          console.log('    - depth:', typeof m.depth, 'value:', m.depth);
+        }
+      });
+    }
     
     // Handle both array and object formats for encounterData
     if (!result.patientData || !result.encounterData || typeof result.confidence !== 'number') {

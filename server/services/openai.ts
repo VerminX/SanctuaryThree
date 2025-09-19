@@ -427,12 +427,15 @@ COMPREHENSIVE PATIENT HISTORY ANALYSIS RULES:
 - Focus on comprehensive medical necessity assessment rather than isolated episode evaluation
 
 CRITICAL WOUND MEASUREMENT ANALYSIS:
-- Thoroughly examine ALL wound details across ALL episodes and encounters for numeric measurements (length, width, depth, area)
+- Thoroughly examine ALL wound details across ALL episodes and encounters for numeric measurements
+- PRIMARY MEASUREMENTS (Required): Length and width are the primary indicators of wound size
+- SUPPLEMENTARY MEASUREMENTS (Optional): Depth and area provide additional detail but are not always clinically required
 - Search through encounter notes, wound details JSON, and clinical findings for measurement data
 - Look for measurements in ALL formats: numeric values, strings containing numbers, descriptive text like "1×1", "2×2", "4×3"
-- If measurements exist anywhere (JSON data, encounter notes, clinical findings), acknowledge them and analyze progression
-- Track wound size changes across episodes to assess long-term healing patterns
-- If no measurements are found anywhere in the comprehensive patient record, specifically state "detailed wound measurements over time" as a documentation gap
+- If length AND width measurements exist (even without depth/area), the wound is PROPERLY DOCUMENTED
+- Track wound size changes across episodes to assess healing patterns (e.g., 4×3cm → 2×2cm → 1×1cm shows improvement)
+- ONLY flag "detailed wound measurements" as a documentation gap if BOTH length AND width are missing
+- Do NOT list measurements as missing if you can see length×width values in the data
 
 PATIENT OVERVIEW:
 - Total Episodes: ${allPatientEpisodes.length}
@@ -474,6 +477,18 @@ ${JSON.stringify({
   episodePrimaryDiagnosis: targetEpisode.primaryDiagnosis,
   episodeStartDate: targetEpisode.episodeStartDate.toISOString().split('T')[0],
   episodeStatus: targetEpisode.status,
+  measurementSummary: targetEpisode.encounters.map(enc => {
+    const details = enc.woundDetails as any;
+    const hasMeasurements = details?.measurements?.length && details?.measurements?.width;
+    return {
+      date: enc.date.toISOString().split('T')[0],
+      hasMeasurements,
+      length: details?.measurements?.length || null,
+      width: details?.measurements?.width || null,
+      depth: details?.measurements?.depth || null,
+      unit: details?.measurements?.unit || 'cm'
+    };
+  }),
   encounterDetails: targetEpisode.encounters.map(enc => ({
     date: enc.date.toISOString().split('T')[0],
     woundDetails: enc.woundDetails,
@@ -494,7 +509,7 @@ Respond with JSON in this exact format:
 {
   "eligibility": "Yes" | "No" | "Unclear",
   "rationale": "Comprehensive patient history analysis considering all episodes, encounters, and previous decisions over time. Reference specific patterns, previous outcomes, and cross-episode context...",
-  "requiredDocumentationGaps": ["..."],
+  "requiredDocumentationGaps": ["ONLY list actual missing items. DO NOT list 'detailed wound measurements' if length×width values are present"],
   "citations": [{"title": "...","url": "...","section": "...","effectiveDate": "YYYY-MM-DD"}],
   "letterBullets": ["..."],
   "historicalContext": {
@@ -507,8 +522,8 @@ Respond with JSON in this exact format:
     {
       "date": "YYYY-MM-DD",
       "encounterType": "Initial/Follow-up/etc",
-      "keyFindings": ["Key finding 1", "Key finding 2"],
-      "woundProgression": "Improved/Worsened/Stable description",
+      "keyFindings": ["When measurements exist, ALWAYS include them (e.g., 'Wound measuring 2cm × 2cm')", "Key finding 2"],
+      "woundProgression": "Include specific measurements if available (e.g., 'Improved from 4×3cm to 2×2cm')",
       "careCompliance": "Compliant/Non-compliant/Partial description"
     }
   ],
