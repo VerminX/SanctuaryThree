@@ -2738,27 +2738,66 @@ export async function registerRoutes(app: Express): Promise<Server> {
           });
           
           episodeId = newEpisode.id;
-          console.log(`Created new episode: ${episodeId} for wound type: ${woundType}, location: ${woundLocation}`);
+          console.log(`Created new episode [redacted] for wound care case`);
         }
 
-        // Create all encounters and link them to the same episode
-        const { encryptEncounterNotes, encryptPHI } = await import('./services/encryption');
+        // Create encounters and link them to the same episode (skip duplicates)
+        const { encryptEncounterNotes } = await import('./services/encryption');
         const createdEncounters = [];
+        const skippedEncounters = [];
+        const creationErrors = [];
         
         for (const encounter of decryptedEncounters) {
-          const newEncounter = await storage.createEncounter({
-            patientId,
-            episodeId,
-            date: encounter.date,
-            encryptedNotes: encryptEncounterNotes(encounter.notes),
-            woundDetails: encounter.woundDetails,
-            conservativeCare: encounter.conservativeCare,
-            infectionStatus: encounter.infectionStatus,
-            comorbidities: encounter.comorbidities
-          });
+          // Check if encounter already exists for this patient on this date
+          const isDuplicate = await storage.checkEncounterDuplicate(patientId, encounter.date);
           
-          createdEncounters.push(newEncounter);
-          console.log(`Created encounter ${newEncounter.id} for episode ${episodeId} on ${encounter.date.toDateString()}`);
+          if (isDuplicate) {
+            // Skip duplicate encounter
+            skippedEncounters.push({
+              date: encounter.date,
+              reason: 'Encounter already exists for this patient on this date'
+            });
+            console.log(`Skipped duplicate encounter [redacted] on [redacted]`);
+          } else {
+            try {
+              // Create new encounter with proper error handling
+              const newEncounter = await storage.createEncounter({
+                patientId,
+                episodeId,
+                date: encounter.date,
+                encryptedNotes: encryptEncounterNotes(encounter.notes),
+                woundDetails: encounter.woundDetails,
+                conservativeCare: encounter.conservativeCare,
+                infectionStatus: encounter.infectionStatus,
+                comorbidities: encounter.comorbidities
+              });
+              
+              createdEncounters.push(newEncounter);
+              console.log(`Created encounter [redacted] for episode [redacted]`);
+            } catch (createError: any) {
+              // Handle creation errors gracefully
+              const errorMessage = createError.message || 'Unknown error';
+              
+              // Check if this is a duplicate constraint violation
+              if (errorMessage.includes('duplicate') || 
+                  errorMessage.includes('unique constraint') ||
+                  errorMessage.includes('already exists')) {
+                // Treat as duplicate and skip
+                skippedEncounters.push({
+                  date: encounter.date,
+                  reason: 'Encounter creation failed - likely race condition duplicate'
+                });
+                console.log(`Skipped encounter due to creation race condition [redacted]`);
+              } else {
+                // Log non-duplicate errors but continue processing
+                creationErrors.push({
+                  date: encounter.date,
+                  error: 'NON_DUPLICATE_CREATION_ERROR'
+                });
+                console.warn(`Encounter creation error [redacted]: NON_DUPLICATE_ERROR`);
+              }
+            }
+          }
         }
 
         // Update extraction data status to completed and link to episode if created
@@ -2814,11 +2853,35 @@ export async function registerRoutes(app: Express): Promise<Server> {
           });
         }
 
+        // Create success message with details about created vs skipped vs failed records
+        const totalEncounters = createdEncounters.length + skippedEncounters.length + creationErrors.length;
+        let message = `Record creation completed: `;
+        
+        if (!existingPatient) {
+          message += `Patient created, `;
+        } else {
+          message += `Existing patient used, `;
+        }
+        
+        message += `${createdEncounters.length} new encounters created`;
+        
+        if (skippedEncounters.length > 0) {
+          message += `, ${skippedEncounters.length} duplicate encounters skipped`;
+        }
+        
+        if (creationErrors.length > 0) {
+          message += `, ${creationErrors.length} encounters failed to create`;
+        }
+
         res.status(201).json({
-          message: `Patient and ${createdEncounters.length} encounter records created successfully`,
+          message,
           patientId,
           encounterIds: createdEncounters.map(enc => enc.id),
           encountersCreated: createdEncounters.length,
+          encountersSkipped: skippedEncounters.length,
+          encountersFailedToCreate: creationErrors.length,
+          skippedEncounterDates: skippedEncounters.map(enc => enc.date.toDateString()),
+          totalEncountersProcessed: totalEncounters,
           episodeId: episodeId || null,
           wasNewPatient: !existingPatient,
           wasNewEpisode: episodeId !== null,
