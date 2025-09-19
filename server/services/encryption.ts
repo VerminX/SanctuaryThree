@@ -1,4 +1,5 @@
 import crypto from 'crypto';
+import { healthMonitor } from './healthMonitoring.js';
 
 const ALGORITHM = 'aes-256-gcm';
 const KEY_LENGTH = 32;
@@ -160,13 +161,26 @@ export function decryptPatientData(patient: { encryptedFirstName: string; encryp
 }
 
 // RESILIENT DECRYPTION: Safely decrypt patient data with error handling
+// Track patient-level failures to avoid excessive logging
+const patientFailureCache = new Map<string, { count: number; lastLoggedAt: number; lastAttempt: number }>();
+
 export function safeDecryptPatientData(patient: { id: string; encryptedFirstName: string; encryptedLastName: string; encryptedDob: string | null; [key: string]: any }): { patientData: any; decryptionError: boolean } {
+  const now = Date.now();
+  const cacheKey = patient.id;
+  const cached = patientFailureCache.get(cacheKey);
+  
+  // Rate limit logging for known failed patients (only log once per hour)
+  const shouldLog = !cached || (now - cached.lastLoggedAt > 3600000); // 1 hour
+  
   try {
     const decryptedData = {
       firstName: decryptPHI(patient.encryptedFirstName),
       lastName: decryptPHI(patient.encryptedLastName),  
       dob: patient.encryptedDob ? decryptPHI(patient.encryptedDob) : null,
     };
+    
+    // Clear failure cache on success
+    patientFailureCache.delete(cacheKey);
     
     return {
       patientData: {
@@ -176,13 +190,43 @@ export function safeDecryptPatientData(patient: { id: string; encryptedFirstName
       decryptionError: false
     };
   } catch (error) {
-    console.error(`DECRYPTION FAILURE for patient ${patient.id}:`, {
-      patientId: patient.id,
-      error: error instanceof Error ? error.message : 'Unknown error',
-      hasFirstName: !!patient.encryptedFirstName,
-      hasLastName: !!patient.encryptedLastName,
-      hasDob: !!patient.encryptedDob
-    });
+    // Update failure tracking
+    const updatedCache = {
+      count: (cached?.count || 0) + 1,
+      lastLoggedAt: shouldLog ? now : (cached?.lastLoggedAt || 0),
+      lastAttempt: now
+    };
+    patientFailureCache.set(cacheKey, updatedCache);
+    
+    // Only log if we haven't logged recently for this patient
+    if (shouldLog) {
+      // Create non-reversible hash for logging (HIPAA-safe)
+      const patientHash = crypto.createHmac('sha256', process.env.ENCRYPTION_KEY || 'fallback')
+        .update(patient.id)
+        .digest('hex')
+        .substring(0, 8);
+      
+      console.error(`DECRYPTION FAILURE for patient [${patientHash}] (attempt #${updatedCache.count}):`, {
+        patientHash,
+        error: error instanceof Error ? error.message : 'Unknown error',
+        hasFirstName: !!patient.encryptedFirstName,
+        hasLastName: !!patient.encryptedLastName,
+        hasDob: !!patient.encryptedDob,
+        encryptedLengths: {
+          firstName: patient.encryptedFirstName?.length || 0,
+          lastName: patient.encryptedLastName?.length || 0,
+          dob: patient.encryptedDob?.length || 0
+        }
+      });
+      
+      // Report to health monitor with hash instead of ID
+      healthMonitor.reportPatientEncryptionFailure(patientHash);
+      
+      // Log aggregated warning for multiple patients with corrupted data
+      if (patientFailureCache.size > 1) {
+        console.warn(`PATIENT DECRYPTION WARNING: ${patientFailureCache.size} patients have corrupted encrypted data (total attempts: ${Array.from(patientFailureCache.values()).reduce((sum, data) => sum + data.count, 0)})`);
+      }
+    }
     
     // Return patient with placeholder data to indicate decryption failure
     return {
@@ -203,12 +247,35 @@ export function encryptEncounterNotes(notes: string[]): string[] {
   return notes.map(note => encryptPHI(note));
 }
 
+// Track encounter note failures to reduce log noise
+const encounterNoteFailureCache = new Map<string, number>();
+
 export function decryptEncounterNotes(encryptedNotes: string[]): string[] {
   return encryptedNotes.map((note, index) => {
     try {
       return decryptPHI(note);
     } catch (error) {
-      console.error(`Error decrypting encounter note ${index}:`, error instanceof Error ? error.message : 'Unknown error');
+      const cacheKey = `${note.substring(0, 20)}:${index}`; // Use note prefix + index as key
+      const failureCount = (encounterNoteFailureCache.get(cacheKey) || 0) + 1;
+      encounterNoteFailureCache.set(cacheKey, failureCount);
+      
+      // Only log the first few failures per note to reduce noise
+      if (failureCount <= 3) {
+        console.error(`Error decrypting encounter note ${index} (attempt #${failureCount}):`, error instanceof Error ? error.message : 'Unknown error');
+        
+        // Report to health monitor on first failure for each note
+        if (failureCount === 1) {
+          healthMonitor.reportEncounterNoteFailure();
+        }
+      }
+      
+      // Periodically clean cache to prevent memory leaks
+      if (encounterNoteFailureCache.size > 100) {
+        const entries = Array.from(encounterNoteFailureCache.entries());
+        const toDelete = entries.slice(0, entries.length - 50);
+        toDelete.forEach(([key]) => encounterNoteFailureCache.delete(key));
+      }
+      
       // Return placeholder text instead of throwing to allow analysis to continue
       return '[DECRYPTION_ERROR: Note could not be decrypted]';
     }

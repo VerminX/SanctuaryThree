@@ -74,6 +74,94 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Health monitoring endpoint
+  app.get('/api/health', async (req, res) => {
+    try {
+      const { healthMonitor } = await import('./services/healthMonitoring.js');
+      
+      // Test database connectivity
+      const dbTest = await healthMonitor.testDatabaseConnection(storage);
+      
+      // Get overall health status
+      const healthStatus = healthMonitor.getSimpleHealthCheck();
+      const detailedMetrics = healthMonitor.getHealthStatus();
+      
+      // Update total patient count for accurate corruption rate
+      try {
+        const user = (req as any).user?.claims?.sub;
+        if (user) {
+          const tenants = await storage.getTenantsByUser(user);
+          if (tenants.length > 0) {
+            const patients = await storage.getPatientsByTenant(tenants[0].id);
+            healthMonitor.updateTotalPatientCount(patients.length);
+          }
+        }
+      } catch (error) {
+        // Ignore errors getting patient count for health check
+      }
+      
+      res.json({
+        status: healthStatus.status,
+        timestamp: new Date().toISOString(),
+        uptime: process.uptime(),
+        database: {
+          connected: dbTest.success,
+          responseTime: dbTest.responseTime,
+          error: dbTest.error
+        },
+        issues: healthStatus.issues,
+        metrics: {
+          database: detailedMetrics.database,
+          encryption: detailedMetrics.encryption,
+          system: {
+            uptimeMinutes: Math.round(detailedMetrics.system.uptime / 60),
+            memoryUsageMB: Math.round(detailedMetrics.system.memoryUsage.heapUsed / 1024 / 1024),
+            memoryTotalMB: Math.round(detailedMetrics.system.memoryUsage.heapTotal / 1024 / 1024)
+          }
+        }
+      });
+    } catch (error) {
+      console.error('Health check failed:', error);
+      res.status(503).json({
+        status: 'unhealthy',
+        error: 'Health check system failure',
+        timestamp: new Date().toISOString()
+      });
+    }
+  });
+
+  // Detailed health report endpoint (admin only)
+  app.get('/api/health/report', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      
+      // Check if user has admin access to at least one tenant
+      const tenants = await storage.getTenantsByUser(userId);
+      const hasAdminAccess = await Promise.all(
+        tenants.map(async tenant => {
+          try {
+            const userRole = await storage.getUserTenantRole(userId, tenant.id);
+            return userRole?.role === 'Admin'; // Only Admin role access for health reports
+          } catch (error) {
+            return false;
+          }
+        })
+      ).then(results => results.some(isAdmin => isAdmin));
+      
+      if (!hasAdminAccess) {
+        return res.status(403).json({ message: "Admin access required for detailed health report" });
+      }
+      
+      const { healthMonitor } = await import('./services/healthMonitoring.js');
+      const report = healthMonitor.generateHealthReport();
+      
+      res.type('text/plain').send(report);
+    } catch (error) {
+      console.error('Health report generation failed:', error);
+      res.status(500).json({ message: "Failed to generate health report" });
+    }
+  });
+
   // Tenant routes
   app.post('/api/tenants', isAuthenticated, async (req: any, res) => {
     try {
