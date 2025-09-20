@@ -159,7 +159,10 @@ export async function analyzeEligibility(request: EligibilityAnalysisRequest): P
 
 Rules:
 - Use ONLY the provided policy context (LCDs, Articles, MAC pages, CMS documentation). Don't infer beyond context. If unclear, say "Insufficient evidence" and list gaps.
-- Align to the patient's MAC: ${patientInfo.macRegion}, payer type: ${patientInfo.payerType}. Prefer the latest effective policy; if a policy is postponed, flag it.
+- Align to the patient's MAC: ${patientInfo.macRegion}, payer type: ${patientInfo.payerType}.
+- Use ONLY the pre-selected policy provided below and cite ONLY this LCD in your analysis.
+- The system has already performed policy selection - do not attempt to select between policies.
+- If the provided policy is future-dated or postponed, flag this as a potential coverage issue.
 - Return structured JSON with the exact format specified.
 - Safety: No legal advice. If plan type is Medicare Advantage, note prior authorization is plan-specific; include plan checklist placeholders.
 
@@ -170,7 +173,7 @@ CRITICAL WOUND MEASUREMENT ANALYSIS:
 - If no measurements are found, specifically state "detailed wound measurements over time" as a documentation gap
 - Consider wound size progression over time when measurements are available from multiple encounters
 
-Policy Context:
+Selected Policy (Pre-selected by system):
 ${policyContext}
 
 Patient Information:
@@ -399,6 +402,9 @@ Rules:
 - Use ONLY the provided policy context (LCDs, Articles, MAC pages, CMS documentation)
 - Align to the patient's MAC: ${patientInfo.macRegion}, payer type: ${patientInfo.payerType}
 - If secondary insurance: ${patientInfo.secondaryPayerType || 'None'}
+- Use ONLY the pre-selected policy provided below and cite ONLY this LCD in your analysis
+- The system has already performed policy selection - do not attempt to select between policies
+- If the provided policy is future-dated or postponed, flag this as a potential coverage issue
 - Return structured JSON with the exact format specified
 
 CRITICAL TEMPORAL ANALYSIS:
@@ -408,7 +414,7 @@ CRITICAL TEMPORAL ANALYSIS:
 - Note any procedures performed (debridements, grafts) with dates
 - Track functional decline or improvement over time
 
-Policy Context:
+Selected Policy (Pre-selected by system):
 ${policyContext}
 
 Patient Insurance Information:
@@ -594,6 +600,9 @@ EPISODE-LEVEL ANALYSIS RULES:
 - Assess wound healing progression and failure of conservative measures across the episode timeline
 - Use ONLY the provided policy context (LCDs, Articles, MAC pages, CMS documentation)
 - Align to the patient's MAC: ${patientInfo.macRegion}, payer type: ${patientInfo.payerType}
+- Use ONLY the pre-selected policy provided below and cite ONLY this LCD in your analysis
+- The system has already performed policy selection - do not attempt to select between policies
+- If the provided policy is future-dated or postponed, flag this as a potential coverage issue
 - Focus on episode-level medical necessity rather than single encounter assessment
 
 CRITICAL WOUND MEASUREMENT ANALYSIS:
@@ -612,7 +621,7 @@ EPISODE INFORMATION:
 - Episode Status: ${episodeInfo.status}
 - Total Encounters: ${encounters.length}
 
-Policy Context:
+Selected Policy (Pre-selected by system):
 ${policyContext}
 
 Patient Information:
@@ -859,6 +868,9 @@ COMPREHENSIVE PATIENT HISTORY ANALYSIS RULES:
 - Consider cross-episode patterns that may affect current eligibility determination
 - Use ONLY the provided policy context (LCDs, Articles, MAC pages, CMS documentation)
 - Align to the patient's MAC: ${patientInfo.macRegion}, payer type: ${patientInfo.payerType}
+- Use ONLY the pre-selected policy provided below and cite ONLY this LCD in your analysis
+- The system has already performed policy selection - do not attempt to select between policies
+- If the provided policy is future-dated or postponed, flag this as a potential coverage issue
 - Focus on comprehensive medical necessity assessment rather than isolated episode evaluation
 
 CRITICAL WOUND MEASUREMENT ANALYSIS:
@@ -886,7 +898,7 @@ TARGET EPISODE DETAILS:
 - Episode Status: ${targetEpisode.status}
 - Encounters in Target Episode: ${targetEpisode.encounters.length}
 
-Policy Context:
+Selected Policy (Pre-selected by system):
 ${policyContext}
 
 Patient Information:
