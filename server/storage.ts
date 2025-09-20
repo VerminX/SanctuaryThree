@@ -120,6 +120,7 @@ export interface IStorage {
   createEligibilityCheck(check: InsertEligibilityCheck): Promise<EligibilityCheck>;
   getEligibilityCheck(id: string): Promise<EligibilityCheck | undefined>;
   getEligibilityChecksByEncounter(encounterId: string): Promise<EligibilityCheck[]>;
+  updateEligibilityCheck(id: string, updates: Partial<InsertEligibilityCheck>): Promise<EligibilityCheck>;
   getRecentEligibilityChecksByTenant(tenantId: string, limit?: number): Promise<Array<EligibilityCheck & { patientName: string; encounterId: string; encounterDate: string }>>;
   
   // Enhanced patient history analysis operations
@@ -183,6 +184,9 @@ export interface IStorage {
   updatePdfExtractedDataValidation(id: string, status: string, reviewedBy: string, comments?: string): Promise<PdfExtractedData>;
   updatePdfExtractedData(id: string, data: Partial<InsertPdfExtractedData>): Promise<PdfExtractedData>;
   linkPdfExtractedDataToRecords(id: string, patientId?: string, encounterId?: string): Promise<PdfExtractedData>;
+  
+  // Enhanced eligibility check operations for policy selection tracking  
+  updateEligibilityCheck(id: string, updates: { selectedPolicyId?: string; selectionAudit?: any; } & Partial<InsertEligibilityCheck>): Promise<EligibilityCheck>;
   
   // Bulk operations for performance optimization
   getAllEncountersWithPatientsByTenant(tenantId: string): Promise<Array<Encounter & { patientName: string; patientId: string; patient: { id: string; firstName: string; lastName: string; mrn: string; _decryptionFailed?: boolean }; }>>;
@@ -852,6 +856,15 @@ export class DatabaseStorage implements IStorage {
       .from(eligibilityChecks)
       .where(eq(eligibilityChecks.encounterId, encounterId))
       .orderBy(desc(eligibilityChecks.createdAt));
+  }
+
+  async updateEligibilityCheck(id: string, updates: Partial<InsertEligibilityCheck>): Promise<EligibilityCheck> {
+    const [updatedCheck] = await db
+      .update(eligibilityChecks)
+      .set(updates)
+      .where(eq(eligibilityChecks.id, id))
+      .returning();
+    return updatedCheck;
   }
 
   async getRecentEligibilityChecksByTenant(tenantId: string, limit: number = 10): Promise<Array<EligibilityCheck & { patientName: string; encounterId: string; encounterDate: string }>> {
