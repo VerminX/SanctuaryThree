@@ -156,6 +156,8 @@ export const eligibilityChecks = pgTable("eligibility_checks", {
   result: jsonb("result").notNull(), // {status, rationale, gaps}
   citations: jsonb("citations").notNull(), // Array of citation objects
   llmModel: varchar("llm_model", { length: 50 }).notNull(),
+  selectedPolicyId: uuid("selected_policy_id").references(() => policySources.id, { onDelete: "set null" }), // Reference to the selected LCD policy
+  selectionAudit: jsonb("selection_audit"), // Audit trail from selectBestPolicy explaining why this policy was chosen
   createdAt: timestamp("created_at").defaultNow(),
 });
 
@@ -320,9 +322,14 @@ export const episodesRelations = relations(episodes, ({ one, many }) => ({
   documents: many(documents),
 }));
 
+export const policySourcesRelations = relations(policySources, ({ many }) => ({
+  eligibilityChecks: many(eligibilityChecks),
+}));
+
 export const eligibilityChecksRelations = relations(eligibilityChecks, ({ one }) => ({
   encounter: one(encounters, { fields: [eligibilityChecks.encounterId], references: [encounters.id] }),
   episode: one(episodes, { fields: [eligibilityChecks.episodeId], references: [episodes.id] }),
+  selectedPolicy: one(policySources, { fields: [eligibilityChecks.selectedPolicyId], references: [policySources.id] }),
 }));
 
 export const documentsRelations = relations(documents, ({ one, many }) => ({

@@ -863,6 +863,8 @@ export class DatabaseStorage implements IStorage {
         result: eligibilityChecks.result,
         citations: eligibilityChecks.citations,
         llmModel: eligibilityChecks.llmModel,
+        selectedPolicyId: eligibilityChecks.selectedPolicyId,
+        selectionAudit: eligibilityChecks.selectionAudit,
         createdAt: eligibilityChecks.createdAt,
         patientName: patients.encryptedFirstName, // Will need to decrypt
         encounterDate: encounters.date
@@ -893,6 +895,8 @@ export class DatabaseStorage implements IStorage {
         result: eligibilityChecks.result,
         citations: eligibilityChecks.citations,
         llmModel: eligibilityChecks.llmModel,
+        selectedPolicyId: eligibilityChecks.selectedPolicyId,
+        selectionAudit: eligibilityChecks.selectionAudit,
         createdAt: eligibilityChecks.createdAt,
       })
       .from(eligibilityChecks)
