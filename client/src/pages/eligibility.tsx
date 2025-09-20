@@ -415,7 +415,7 @@ export default function Eligibility() {
                 episodes={episodes ?? []}
                 macRegions={MAC_REGIONS}
                 onAnalyze={handleAnalyze}
-                result={analysisResult?.result}
+                result={analysisResult}
                 isLoading={analyzeEligibilityMutation.isPending || analyzeEpisodeEligibilityMutation.isPending}
               />
             )}
@@ -491,7 +491,7 @@ export default function Eligibility() {
                 <div>
                   <h4 className="font-medium text-foreground mb-2">Model Information</h4>
                   <ul className="space-y-2 text-sm text-muted-foreground">
-                    <li>• <strong>Model:</strong> OpenAI GPT-5</li>
+                    <li>• <strong>Model:</strong> OpenAI GPT-4o-mini</li>
                     <li>• <strong>Compliance:</strong> HIPAA-eligible configuration</li>
                     <li>• <strong>Data Logging:</strong> Disabled for PHI protection</li>
                     <li>• <strong>Citations:</strong> Includes source URLs and effective dates</li>

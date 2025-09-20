@@ -1057,6 +1057,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
         selectionAudit: ragContext.audit,
       });
 
+      // Fetch selected policy details if available
+      let selectedPolicy = null;
+      if (ragContext.selectedPolicyId) {
+        selectedPolicy = await storage.getPolicySource(ragContext.selectedPolicyId);
+      }
+
       // Log audit event
       await storage.createAuditLog({
         tenantId: patient.tenantId,
@@ -1069,7 +1075,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
         previousHash: '',
       });
 
-      res.json(eligibilityCheck);
+      res.json({
+        ...eligibilityCheck,
+        selectedPolicy,
+        selectionAudit: ragContext.audit
+      });
     } catch (error) {
       console.error("Error analyzing eligibility:", error);
       res.status(500).json({ message: "Failed to analyze eligibility" });
@@ -1157,6 +1167,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
         selectionAudit: ragContext.audit,
       });
 
+      // Fetch selected policy details if available
+      let selectedPolicy = null;
+      if (ragContext.selectedPolicyId) {
+        selectedPolicy = await storage.getPolicySource(ragContext.selectedPolicyId);
+      }
+
       // Log audit event
       await storage.createAuditLog({
         tenantId: patient.tenantId,
@@ -1169,7 +1185,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
         previousHash: '',
       });
 
-      res.json(eligibilityCheck);
+      res.json({
+        ...eligibilityCheck,
+        selectedPolicy,
+        selectionAudit: ragContext.audit
+      });
     } catch (error) {
       console.error("Error analyzing episode eligibility:", error);
       res.status(500).json({ message: "Failed to analyze episode eligibility" });
