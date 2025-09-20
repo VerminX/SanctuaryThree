@@ -30,6 +30,7 @@ interface RAGContext {
     effectiveDate: string;
     mac: string;
   }>;
+  selectedPolicyId?: string;
   audit?: {
     considered: number;
     filtersApplied: string[];
@@ -313,14 +314,22 @@ export async function selectBestPolicy(params: SelectBestPolicyParams): Promise<
 }
 
 
-export async function buildRAGContext(macRegion: string, woundType: string): Promise<RAGContext> {
+export async function buildRAGContext(
+  macRegion: string, 
+  woundType: string,
+  woundLocation?: string,
+  patientCharacteristics?: {
+    isDiabetic?: boolean;
+    hasVenousDisease?: boolean;
+  }
+): Promise<RAGContext> {
   try {
     // Use the new intelligent single policy selection algorithm
     const result = await selectBestPolicy({
       macRegion,
       woundType,
-      woundLocation: undefined,
-      patientCharacteristics: undefined
+      woundLocation,
+      patientCharacteristics
     });
 
     const { policy, audit } = result;
@@ -337,6 +346,7 @@ export async function buildRAGContext(macRegion: string, woundType: string): Pro
       return {
         content,
         citations: [],
+        selectedPolicyId: undefined,
         audit
       };
     }
@@ -363,6 +373,7 @@ ${policy.content}`;
     return {
       content,
       citations,
+      selectedPolicyId: policy.lcdId,
       audit
     };
   } catch (error) {
@@ -370,6 +381,7 @@ ${policy.content}`;
     return {
       content: 'Error retrieving policy information. Please ensure policies are up to date.',
       citations: [],
+      selectedPolicyId: undefined,
       audit: {
         considered: 0,
         filtersApplied: [],

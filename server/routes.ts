@@ -15,7 +15,7 @@ import {
   insertDocumentSignatureSchema
 } from "@shared/schema";
 import { encryptPatientData, decryptPatientData, safeDecryptPatientData, encryptEncounterNotes, decryptEncounterNotes, encryptPHI } from "./services/encryption";
-import { buildRAGContext } from "./services/ragService";
+import { buildRAGContext, selectBestPolicy } from "./services/ragService";
 import { generateDocument } from "./services/documentGenerator";
 import { performPolicyUpdate, performPolicyUpdateForMAC, scheduledPolicyUpdate, getPolicyUpdateStatus } from "./services/policyUpdater";
 import { z } from "zod";
@@ -969,11 +969,28 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(403).json({ message: "Access denied" });
       }
 
-      // Build RAG context from policy database
+      // Extract patient characteristics for better policy selection
+      const patientCharacteristics = {
+        isDiabetic: (encounter as any).diabeticStatus === 'diabetic' || 
+                   ((encounter.woundDetails as any)?.diabeticStatus === 'diabetic'),
+        hasVenousDisease: (encounter.woundDetails as any)?.venousDisease === true ||
+                         ((encounter as any).comorbidities?.includes('venous disease'))
+      };
+
+      // Build RAG context with enhanced policy selection using patient characteristics
       const ragContext = await buildRAGContext(
         patient.macRegion || 'default',
-        (encounter.woundDetails as any)?.type || 'DFU'
+        (encounter.woundDetails as any)?.type || 'DFU',
+        (encounter.woundDetails as any)?.location,
+        patientCharacteristics
       );
+
+      // Log policy selection result for audit purposes
+      if (ragContext.selectedPolicyId) {
+        console.log(`Policy selection successful: Selected LCD ${ragContext.selectedPolicyId} for MAC ${patient.macRegion}, wound type: ${(encounter.woundDetails as any)?.type || 'DFU'}`);
+      } else {
+        console.warn(`Policy selection failed: No applicable policy found for MAC ${patient.macRegion}, wound type: ${(encounter.woundDetails as any)?.type || 'DFU'}. Reason: ${ragContext.audit?.selectedReason}`);
+      }
 
       // Get ALL encounters in the episode for complete context
       let allEpisodeEncounters: any[] = [];
@@ -1030,12 +1047,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
         policyContext: ragContext.content,
       });
 
-      // Store eligibility check result
+      // Store eligibility check result with policy selection data
       const eligibilityCheck = await storage.createEligibilityCheck({
         encounterId: encounter.id,
         result: analysisResult,
         citations: [...ragContext.citations, ...analysisResult.citations],
         llmModel: 'gpt-4o-mini',
+        selectedPolicyId: ragContext.selectedPolicyId,
+        selectionAudit: ragContext.audit,
       });
 
       // Log audit event
@@ -1085,11 +1104,32 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: "No encounters found for this episode" });
       }
 
-      // Build RAG context from policy database
+      // Extract patient characteristics from all encounters in the episode
+      // Use the most recent encounter data for characteristics, fall back to episode data
+      const latestEncounter = encounters.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())[0];
+      const patientCharacteristics = {
+        isDiabetic: (latestEncounter as any).diabeticStatus === 'diabetic' || 
+                   ((latestEncounter.woundDetails as any)?.diabeticStatus === 'diabetic') ||
+                   encounters.some(enc => (enc as any).diabeticStatus === 'diabetic'),
+        hasVenousDisease: (latestEncounter.woundDetails as any)?.venousDisease === true ||
+                         ((latestEncounter as any).comorbidities?.includes('venous disease')) ||
+                         encounters.some(enc => (enc.woundDetails as any)?.venousDisease === true)
+      };
+
+      // Build RAG context with enhanced policy selection using patient characteristics
       const ragContext = await buildRAGContext(
         patient.macRegion || 'default',
-        episode.woundType || 'DFU'
+        episode.woundType || 'DFU',
+        episode.woundLocation || (latestEncounter.woundDetails as any)?.location,
+        patientCharacteristics
       );
+
+      // Log policy selection result for audit purposes
+      if (ragContext.selectedPolicyId) {
+        console.log(`Episode-level policy selection successful: Selected LCD ${ragContext.selectedPolicyId} for MAC ${patient.macRegion}, wound type: ${episode.woundType || 'DFU'}`);
+      } else {
+        console.warn(`Episode-level policy selection failed: No applicable policy found for MAC ${patient.macRegion}, wound type: ${episode.woundType || 'DFU'}. Reason: ${ragContext.audit?.selectedReason}`);
+      }
 
       // Perform enhanced AI episode-level eligibility analysis with full patient history (NEW DEFAULT)
       const { prepareAndAnalyzeEpisodeWithFullHistory } = await import('./services/openai');
@@ -1104,17 +1144,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
         ragContext.content
       );
 
-      // Get latest encounter for eligibility check linking (with safe date handling)
-      const toTime = (date: any) => new Date(date as any).getTime();
-      const latestEncounter = encounters.sort((a, b) => toTime(b.date) - toTime(a.date))[0];
+      // Use the already extracted latestEncounter for eligibility check linking
 
-      // Store eligibility check result with episodeId
+      // Store eligibility check result with episodeId and policy selection data
       const eligibilityCheck = await storage.createEligibilityCheck({
         encounterId: latestEncounter.id, // Link to the latest encounter
         episodeId: episode.id, // Link to the episode for episode-level analysis
         result: analysisResult,
         citations: [...ragContext.citations, ...analysisResult.citations],
         llmModel: 'gpt-4o-mini',
+        selectedPolicyId: ragContext.selectedPolicyId,
+        selectionAudit: ragContext.audit,
       });
 
       // Log audit event
