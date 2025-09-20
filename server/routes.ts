@@ -2944,9 +2944,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
 
         // Decrypt all encounters
-        const decryptedEncounters = encountersArray.map((encounter, index) => ({
+        const decryptedEncounters = await Promise.all(encountersArray.map(async (encounter, index) => ({
           date: encounter?.encounterDate ? new Date(encounter.encounterDate) : new Date(),
-          notes: encounter?.notes ? decryptEncounterNotes(encounter.notes) : [],
+          notes: encounter?.notes ? await decryptEncounterNotes(encounter.notes) : [],
           assessment: encounter?.assessment ? decryptPHI(encounter.assessment) : '',
           plan: encounter?.plan ? decryptPHI(encounter.plan) : '',
           woundDetails: encounter?.woundDetails ? JSON.parse(decryptPHI(encounter.woundDetails)) : {},
@@ -2954,7 +2954,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           infectionStatus: encounter?.infectionStatus || 'None',
           comorbidities: encounter?.comorbidities || [],
           originalIndex: index
-        }));
+        })));
 
         console.log(`Processing ${decryptedEncounters.length} encounters from PDF`);
 

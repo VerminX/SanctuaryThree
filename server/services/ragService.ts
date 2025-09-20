@@ -30,6 +30,13 @@ interface RAGContext {
     effectiveDate: string;
     mac: string;
   }>;
+  audit?: {
+    considered: number;
+    filtersApplied: string[];
+    scored: PolicyScore[];
+    selectedReason: string;
+    fallbackUsed?: string;
+  };
 }
 
 interface SelectBestPolicyParams {
@@ -305,84 +312,71 @@ export async function selectBestPolicy(params: SelectBestPolicyParams): Promise<
   }
 }
 
-// Priority-based policy selection algorithm from implementation plan
-function calculatePolicyPriority(policy: PolicySource, currentDate: Date): number {
-  const daysFromEffective = Math.abs(currentDate.getTime() - policy.effectiveDate.getTime()) / (1000 * 60 * 60 * 24);
-  
-  // Current policies get highest priority
-  if (policy.status === 'current') return 1000 - daysFromEffective;
-  
-  // Future policies (within 90 days) get medium priority  
-  if (policy.status === 'future' && daysFromEffective <= 90) return 500 - daysFromEffective;
-  
-  // Proposed policies get lower priority but still included
-  if (policy.status === 'proposed') return 100 - daysFromEffective;
-  
-  return 0;
-}
 
 export async function buildRAGContext(macRegion: string, woundType: string): Promise<RAGContext> {
   try {
-    // Get current and future policies using the new intelligent method
-    const policies = await storage.getCurrentAndFuturePoliciesByMAC(macRegion, 90);
-    
-    if (policies.length === 0) {
-      console.warn(`No active policies found for MAC region: ${macRegion}`);
+    // Use the new intelligent single policy selection algorithm
+    const result = await selectBestPolicy({
+      macRegion,
+      woundType,
+      woundLocation: undefined,
+      patientCharacteristics: undefined
+    });
+
+    const { policy, audit } = result;
+
+    // Handle the case where no policy was found
+    if (!policy) {
+      // Use audit trail to build informative content explaining why no policy was found
+      const auditInfo = audit.fallbackUsed ? ` (${audit.selectedReason})` : '';
+      const content = `No specific LCD policies found for MAC region ${macRegion} and wound type "${woundType}"${auditInfo}. ` +
+        `General Medicare coverage principles apply: ` +
+        `Coverage may be available for medically necessary wound care treatments when they meet Medicare criteria. ` +
+        `Providers should refer to general Medicare guidelines and consult with the MAC for specific coverage determinations.`;
+
       return {
-        content: `No specific LCD policies found for MAC region ${macRegion}. General Medicare coverage principles apply.`,
-        citations: []
+        content,
+        citations: [],
+        audit
       };
     }
 
-    // Filter for wound care relevance using consistent filtering logic
-    const woundCareRelevantPolicies = filterSupersededPolicies(
-      policies.filter(policy => isWoundCareRelevant(policy, woundType))
-    );
-
-    // Apply priority-based sorting algorithm
-    const currentDate = new Date();
-    const prioritizedPolicies = woundCareRelevantPolicies
-      .map(policy => ({
-        policy,
-        priority: calculatePolicyPriority(policy, currentDate)
-      }))
-      .sort((a, b) => b.priority - a.priority) // Sort by priority (highest first)
-      .slice(0, 5) // Limit to top 5 most relevant policies
-      .map(item => item.policy);
-
-    // Build consolidated content with policy status annotations
-    const content = prioritizedPolicies.map(policy => {
-      return `
-LCD: ${policy.title} (${policy.lcdId})
+    // Build content for the single selected policy
+    const content = `LCD: ${policy.title} (${policy.lcdId})
 MAC: ${policy.mac}
 Effective Date: ${policy.effectiveDate.toISOString().split('T')[0]}
-Status: ${policy.status} ${policy.status === 'future' ? '(Effective in future)' : ''}
+Status: ${policy.status}${policy.status === 'future' ? ' (Effective in future)' : ''}
 Policy Type: ${policy.policyType || 'final'}
 
 Content:
-${policy.content}
+${policy.content}`;
 
----`;
-    }).join('\n');
-
-    // Build citations (only declared RAGContext fields to prevent type drift)
-    const citations = prioritizedPolicies.map(policy => ({
+    // Build single citation
+    const citations = [{
       title: policy.title,
       url: policy.url,
       lcdId: policy.lcdId,
       effectiveDate: policy.effectiveDate.toISOString().split('T')[0],
       mac: policy.mac
-    }));
+    }];
 
     return {
-      content: content || 'No relevant policy content found.',
-      citations
+      content,
+      citations,
+      audit
     };
   } catch (error) {
     console.error('Error building RAG context:', error);
     return {
       content: 'Error retrieving policy information. Please ensure policies are up to date.',
-      citations: []
+      citations: [],
+      audit: {
+        considered: 0,
+        filtersApplied: [],
+        scored: [],
+        selectedReason: `Error during RAG context building: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        fallbackUsed: 'error_occurred'
+      }
     };
   }
 }
