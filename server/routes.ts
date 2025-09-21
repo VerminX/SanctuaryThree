@@ -14,6 +14,11 @@ import {
   insertDocumentVersionSchema,
   insertDocumentSignatureSchema,
   insertProductApplicationSchema,
+  insertAnalyticsSnapshotSchema,
+  insertHealingTrendSchema,
+  insertPerformanceMetricSchema,
+  insertCostAnalyticSchema,
+  insertComplianceTrackingSchema,
   PRODUCT_CATEGORY,
   CLINICAL_EVIDENCE_LEVEL
 } from "@shared/schema";
@@ -4059,6 +4064,984 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error('Error in create-records endpoint:', error);
       res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
+  // ===============================================================================
+  // ANALYTICS API ENDPOINTS - COMPREHENSIVE DATA AGGREGATION
+  // ===============================================================================
+
+  // Analytics Snapshots Endpoints
+  app.get('/api/analytics/snapshots', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const { tenantId, aggregationPeriod, startDate, endDate, limit = 50 } = req.query;
+
+      // Get user's tenants for access control
+      const userTenants = await storage.getTenantsByUser(userId);
+      const accessibleTenantIds = userTenants.map(t => t.id);
+
+      // Validate tenant access
+      if (tenantId && !accessibleTenantIds.includes(tenantId)) {
+        return res.status(403).json({ message: "Access denied to specified tenant" });
+      }
+
+      const targetTenantId = tenantId || accessibleTenantIds[0];
+      if (!targetTenantId) {
+        return res.status(403).json({ message: "No accessible tenants found" });
+      }
+
+      let snapshots;
+      if (startDate && endDate) {
+        const parsedStartDate = new Date(startDate);
+        const parsedEndDate = new Date(endDate);
+        if (isNaN(parsedStartDate.getTime()) || isNaN(parsedEndDate.getTime())) {
+          return res.status(400).json({ message: "Invalid date format" });
+        }
+        snapshots = await storage.getAnalyticsSnapshotsByDateRange(
+          targetTenantId, 
+          parsedStartDate, 
+          parsedEndDate, 
+          aggregationPeriod || 'daily'
+        );
+      } else {
+        snapshots = await storage.getAnalyticsSnapshotsByTenant(
+          targetTenantId, 
+          aggregationPeriod, 
+          parseInt(limit)
+        );
+      }
+
+      await trackActivity(targetTenantId, userId, 'view', 'analytics_snapshots', 'query');
+      res.json(snapshots);
+    } catch (error) {
+      console.error('Error fetching analytics snapshots:', error);
+      res.status(500).json({ message: "Failed to fetch analytics snapshots" });
+    }
+  });
+
+  app.post('/api/analytics/snapshots', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const snapshotData = insertAnalyticsSnapshotSchema.parse(req.body);
+
+      // Verify user has access to tenant
+      const userTenants = await storage.getTenantsByUser(userId);
+      const accessibleTenantIds = userTenants.map(t => t.id);
+      
+      if (!accessibleTenantIds.includes(snapshotData.tenantId)) {
+        return res.status(403).json({ message: "Access denied to specified tenant" });
+      }
+
+      const snapshot = await storage.createAnalyticsSnapshot(snapshotData);
+      await trackActivity(snapshotData.tenantId, userId, 'create', 'analytics_snapshot', snapshot.id);
+      res.status(201).json(snapshot);
+    } catch (error) {
+      console.error('Error creating analytics snapshot:', error);
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ message: "Validation error", errors: error.errors });
+      }
+      res.status(500).json({ message: "Failed to create analytics snapshot" });
+    }
+  });
+
+  app.get('/api/analytics/snapshots/latest', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const { tenantId, aggregationPeriod = 'daily' } = req.query;
+
+      const userTenants = await storage.getTenantsByUser(userId);
+      const accessibleTenantIds = userTenants.map(t => t.id);
+
+      if (tenantId && !accessibleTenantIds.includes(tenantId)) {
+        return res.status(403).json({ message: "Access denied to specified tenant" });
+      }
+
+      const targetTenantId = tenantId || accessibleTenantIds[0];
+      if (!targetTenantId) {
+        return res.status(403).json({ message: "No accessible tenants found" });
+      }
+
+      const snapshot = await storage.getLatestAnalyticsSnapshot(targetTenantId, aggregationPeriod);
+      await trackActivity(targetTenantId, userId, 'view', 'analytics_snapshots', 'latest');
+      res.json(snapshot || null);
+    } catch (error) {
+      console.error('Error fetching latest analytics snapshot:', error);
+      res.status(500).json({ message: "Failed to fetch latest analytics snapshot" });
+    }
+  });
+
+  app.get('/api/analytics/snapshots/trends', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const { tenantId, aggregationPeriod = 'daily', periods = 12 } = req.query;
+
+      const userTenants = await storage.getTenantsByUser(userId);
+      const accessibleTenantIds = userTenants.map(t => t.id);
+
+      if (tenantId && !accessibleTenantIds.includes(tenantId)) {
+        return res.status(403).json({ message: "Access denied to specified tenant" });
+      }
+
+      const targetTenantId = tenantId || accessibleTenantIds[0];
+      if (!targetTenantId) {
+        return res.status(403).json({ message: "No accessible tenants found" });
+      }
+
+      const endDate = new Date();
+      let startDate = new Date();
+      
+      // Calculate start date based on aggregation period and number of periods
+      switch (aggregationPeriod) {
+        case 'daily':
+          startDate.setDate(startDate.getDate() - parseInt(periods));
+          break;
+        case 'weekly':
+          startDate.setDate(startDate.getDate() - (parseInt(periods) * 7));
+          break;
+        case 'monthly':
+          startDate.setMonth(startDate.getMonth() - parseInt(periods));
+          break;
+        case 'quarterly':
+          startDate.setMonth(startDate.getMonth() - (parseInt(periods) * 3));
+          break;
+        default:
+          startDate.setDate(startDate.getDate() - parseInt(periods));
+      }
+
+      const trends = await storage.getAnalyticsSnapshotsByDateRange(
+        targetTenantId, 
+        startDate, 
+        endDate, 
+        aggregationPeriod
+      );
+
+      await trackActivity(targetTenantId, userId, 'view', 'analytics_snapshots', 'trends');
+      res.json(trends);
+    } catch (error) {
+      console.error('Error fetching analytics trends:', error);
+      res.status(500).json({ message: "Failed to fetch analytics trends" });
+    }
+  });
+
+  // Healing Trends Endpoints
+  app.get('/api/analytics/healing-trends', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const { tenantId, episodeId, patientId, startDate, endDate, limit = 100 } = req.query;
+
+      const userTenants = await storage.getTenantsByUser(userId);
+      const accessibleTenantIds = userTenants.map(t => t.id);
+
+      if (tenantId && !accessibleTenantIds.includes(tenantId)) {
+        return res.status(403).json({ message: "Access denied to specified tenant" });
+      }
+
+      let trends;
+      if (episodeId) {
+        trends = await storage.getHealingTrendsByEpisode(episodeId);
+      } else if (patientId) {
+        trends = await storage.getHealingTrendsByPatient(patientId);
+      } else if (startDate && endDate) {
+        const targetTenantId = tenantId || accessibleTenantIds[0];
+        const parsedStartDate = new Date(startDate);
+        const parsedEndDate = new Date(endDate);
+        if (isNaN(parsedStartDate.getTime()) || isNaN(parsedEndDate.getTime())) {
+          return res.status(400).json({ message: "Invalid date format" });
+        }
+        trends = await storage.getHealingTrendsByDateRange(targetTenantId, parsedStartDate, parsedEndDate);
+      } else {
+        const targetTenantId = tenantId || accessibleTenantIds[0];
+        trends = await storage.getHealingTrendsByTenant(targetTenantId, parseInt(limit));
+      }
+
+      const trackingTenantId = tenantId || accessibleTenantIds[0];
+      await trackActivity(trackingTenantId, userId, 'view', 'healing_trends', 'query');
+      res.json(trends);
+    } catch (error) {
+      console.error('Error fetching healing trends:', error);
+      res.status(500).json({ message: "Failed to fetch healing trends" });
+    }
+  });
+
+  app.post('/api/analytics/healing-trends', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const trendData = insertHealingTrendSchema.parse(req.body);
+
+      // Verify access to episode/patient
+      const episode = await storage.getEpisode(trendData.episodeId);
+      if (!episode) {
+        return res.status(404).json({ message: "Episode not found" });
+      }
+
+      const patient = await storage.getPatient(episode.patientId);
+      if (!patient) {
+        return res.status(404).json({ message: "Patient not found" });
+      }
+
+      const userTenantRole = await storage.getUserTenantRole(userId, patient.tenantId);
+      if (!userTenantRole) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+
+      const trend = await storage.createHealingTrend(trendData);
+      await trackActivity(patient.tenantId, userId, 'create', 'healing_trend', trend.id);
+      res.status(201).json(trend);
+    } catch (error) {
+      console.error('Error creating healing trend:', error);
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ message: "Validation error", errors: error.errors });
+      }
+      res.status(500).json({ message: "Failed to create healing trend" });
+    }
+  });
+
+  app.get('/api/analytics/healing-trends/episode/:episodeId', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const { episodeId } = req.params;
+
+      const episode = await storage.getEpisode(episodeId);
+      if (!episode) {
+        return res.status(404).json({ message: "Episode not found" });
+      }
+
+      const patient = await storage.getPatient(episode.patientId);
+      if (!patient) {
+        return res.status(404).json({ message: "Patient not found" });
+      }
+
+      const userTenantRole = await storage.getUserTenantRole(userId, patient.tenantId);
+      if (!userTenantRole) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+
+      const trends = await storage.getEpisodeHealingTrajectory(episodeId);
+      await trackActivity(patient.tenantId, userId, 'view', 'healing_trends', episodeId);
+      res.json(trends);
+    } catch (error) {
+      console.error('Error fetching episode healing trends:', error);
+      res.status(500).json({ message: "Failed to fetch episode healing trends" });
+    }
+  });
+
+  app.get('/api/analytics/healing-trends/patient/:patientId', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const { patientId } = req.params;
+
+      const patient = await storage.getPatient(patientId);
+      if (!patient) {
+        return res.status(404).json({ message: "Patient not found" });
+      }
+
+      const userTenantRole = await storage.getUserTenantRole(userId, patient.tenantId);
+      if (!userTenantRole) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+
+      const trends = await storage.getHealingTrendsByPatient(patientId);
+      await trackActivity(patient.tenantId, userId, 'view', 'healing_trends', patientId);
+      res.json(trends);
+    } catch (error) {
+      console.error('Error fetching patient healing trends:', error);
+      res.status(500).json({ message: "Failed to fetch patient healing trends" });
+    }
+  });
+
+  app.get('/api/analytics/healing-trends/velocity', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const { tenantId, period = 'monthly' } = req.query;
+
+      const userTenants = await storage.getTenantsByUser(userId);
+      const accessibleTenantIds = userTenants.map(t => t.id);
+
+      if (tenantId && !accessibleTenantIds.includes(tenantId)) {
+        return res.status(403).json({ message: "Access denied to specified tenant" });
+      }
+
+      const targetTenantId = tenantId || accessibleTenantIds[0];
+      if (!targetTenantId) {
+        return res.status(403).json({ message: "No accessible tenants found" });
+      }
+
+      // Get healing velocity analytics
+      const endDate = new Date();
+      const startDate = new Date();
+      startDate.setMonth(startDate.getMonth() - (period === 'quarterly' ? 3 : 1));
+
+      const trends = await storage.getHealingTrendsByDateRange(targetTenantId, startDate, endDate);
+      
+      // Calculate velocity analytics
+      const velocityAnalytics = {
+        averageHealingVelocity: trends.reduce((sum, t) => sum + (parseFloat(t.healingVelocity || '0')), 0) / trends.length || 0,
+        totalTrends: trends.length,
+        improvingTrends: trends.filter(t => t.woundCondition === 'improving').length,
+        stableTrends: trends.filter(t => t.woundCondition === 'stable').length,
+        deterioratingTrends: trends.filter(t => t.woundCondition === 'deteriorating').length,
+        period,
+        startDate,
+        endDate
+      };
+
+      await trackActivity(targetTenantId, userId, 'view', 'healing_velocity', 'analytics');
+      res.json(velocityAnalytics);
+    } catch (error) {
+      console.error('Error fetching healing velocity analytics:', error);
+      res.status(500).json({ message: "Failed to fetch healing velocity analytics" });
+    }
+  });
+
+  // Performance Metrics Endpoints
+  app.get('/api/analytics/performance', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const { tenantId, providerId, metricScope, metricPeriod, startDate, endDate, limit = 50 } = req.query;
+
+      const userTenants = await storage.getTenantsByUser(userId);
+      const accessibleTenantIds = userTenants.map(t => t.id);
+
+      if (tenantId && !accessibleTenantIds.includes(tenantId)) {
+        return res.status(403).json({ message: "Access denied to specified tenant" });
+      }
+
+      let metrics;
+      if (providerId) {
+        metrics = await storage.getPerformanceMetricsByProvider(providerId, parseInt(limit));
+      } else if (startDate && endDate) {
+        const targetTenantId = tenantId || accessibleTenantIds[0];
+        const parsedStartDate = new Date(startDate);
+        const parsedEndDate = new Date(endDate);
+        if (isNaN(parsedStartDate.getTime()) || isNaN(parsedEndDate.getTime())) {
+          return res.status(400).json({ message: "Invalid date format" });
+        }
+        metrics = await storage.getPerformanceMetricsByDateRange(
+          targetTenantId, 
+          parsedStartDate, 
+          parsedEndDate, 
+          metricPeriod || 'monthly'
+        );
+      } else {
+        const targetTenantId = tenantId || accessibleTenantIds[0];
+        metrics = await storage.getPerformanceMetricsByTenant(targetTenantId, metricScope, parseInt(limit));
+      }
+
+      const trackingTenantId = tenantId || accessibleTenantIds[0];
+      await trackActivity(trackingTenantId, userId, 'view', 'performance_metrics', 'query');
+      res.json(metrics);
+    } catch (error) {
+      console.error('Error fetching performance metrics:', error);
+      res.status(500).json({ message: "Failed to fetch performance metrics" });
+    }
+  });
+
+  app.post('/api/analytics/performance', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const metricData = insertPerformanceMetricSchema.parse(req.body);
+
+      // Verify user has access to tenant
+      const userTenants = await storage.getTenantsByUser(userId);
+      const accessibleTenantIds = userTenants.map(t => t.id);
+      
+      if (!accessibleTenantIds.includes(metricData.tenantId)) {
+        return res.status(403).json({ message: "Access denied to specified tenant" });
+      }
+
+      const metric = await storage.createPerformanceMetric(metricData);
+      await trackActivity(metricData.tenantId, userId, 'create', 'performance_metric', metric.id);
+      res.status(201).json(metric);
+    } catch (error) {
+      console.error('Error creating performance metric:', error);
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ message: "Validation error", errors: error.errors });
+      }
+      res.status(500).json({ message: "Failed to create performance metric" });
+    }
+  });
+
+  app.get('/api/analytics/performance/provider/:providerId', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const { providerId } = req.params;
+      const { limit = 50 } = req.query;
+
+      // Verify provider access through tenant membership
+      const userTenants = await storage.getTenantsByUser(userId);
+      const metrics = await storage.getPerformanceMetricsByProvider(providerId, parseInt(limit));
+      
+      // Filter metrics to only those from accessible tenants
+      const accessibleTenantIds = userTenants.map(t => t.id);
+      const filteredMetrics = metrics.filter(m => accessibleTenantIds.includes(m.tenantId));
+
+      const trackingTenantId = userTenants[0]?.id;
+      if (trackingTenantId) {
+        await trackActivity(trackingTenantId, userId, 'view', 'performance_metrics', providerId);
+      }
+      res.json(filteredMetrics);
+    } catch (error) {
+      console.error('Error fetching provider performance metrics:', error);
+      res.status(500).json({ message: "Failed to fetch provider performance metrics" });
+    }
+  });
+
+  app.get('/api/analytics/performance/benchmarks', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const { tenantId, metricPeriod = 'monthly', limit = 10 } = req.query;
+
+      const userTenants = await storage.getTenantsByUser(userId);
+      const accessibleTenantIds = userTenants.map(t => t.id);
+
+      if (tenantId && !accessibleTenantIds.includes(tenantId)) {
+        return res.status(403).json({ message: "Access denied to specified tenant" });
+      }
+
+      const targetTenantId = tenantId || accessibleTenantIds[0];
+      if (!targetTenantId) {
+        return res.status(403).json({ message: "No accessible tenants found" });
+      }
+
+      const benchmarks = await storage.getProviderPerformanceComparison(
+        targetTenantId, 
+        metricPeriod, 
+        parseInt(limit)
+      );
+
+      await trackActivity(targetTenantId, userId, 'view', 'performance_benchmarks', 'query');
+      res.json(benchmarks);
+    } catch (error) {
+      console.error('Error fetching performance benchmarks:', error);
+      res.status(500).json({ message: "Failed to fetch performance benchmarks" });
+    }
+  });
+
+  app.get('/api/analytics/performance/kpis', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const { tenantId, metricType = 'healingSuccessRate', periods = 6 } = req.query;
+
+      const userTenants = await storage.getTenantsByUser(userId);
+      const accessibleTenantIds = userTenants.map(t => t.id);
+
+      if (tenantId && !accessibleTenantIds.includes(tenantId)) {
+        return res.status(403).json({ message: "Access denied to specified tenant" });
+      }
+
+      const targetTenantId = tenantId || accessibleTenantIds[0];
+      if (!targetTenantId) {
+        return res.status(403).json({ message: "No accessible tenants found" });
+      }
+
+      const kpiTrends = await storage.getPerformanceTrends(targetTenantId, metricType, parseInt(periods));
+
+      await trackActivity(targetTenantId, userId, 'view', 'performance_kpis', metricType);
+      res.json(kpiTrends);
+    } catch (error) {
+      console.error('Error fetching performance KPIs:', error);
+      res.status(500).json({ message: "Failed to fetch performance KPIs" });
+    }
+  });
+
+  // Cost Analytics Endpoints
+  app.get('/api/analytics/costs', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const { tenantId, episodeId, analysisPeriod, startDate, endDate, limit = 50 } = req.query;
+
+      const userTenants = await storage.getTenantsByUser(userId);
+      const accessibleTenantIds = userTenants.map(t => t.id);
+
+      if (tenantId && !accessibleTenantIds.includes(tenantId)) {
+        return res.status(403).json({ message: "Access denied to specified tenant" });
+      }
+
+      let costs;
+      if (episodeId) {
+        costs = await storage.getCostAnalyticsByEpisode(episodeId);
+      } else if (startDate && endDate) {
+        const targetTenantId = tenantId || accessibleTenantIds[0];
+        const parsedStartDate = new Date(startDate);
+        const parsedEndDate = new Date(endDate);
+        if (isNaN(parsedStartDate.getTime()) || isNaN(parsedEndDate.getTime())) {
+          return res.status(400).json({ message: "Invalid date format" });
+        }
+        costs = await storage.getCostAnalyticsByDateRange(targetTenantId, parsedStartDate, parsedEndDate);
+      } else {
+        const targetTenantId = tenantId || accessibleTenantIds[0];
+        costs = await storage.getCostAnalyticsByTenant(targetTenantId, analysisPeriod, parseInt(limit));
+      }
+
+      const trackingTenantId = tenantId || accessibleTenantIds[0];
+      await trackActivity(trackingTenantId, userId, 'view', 'cost_analytics', 'query');
+      res.json(costs);
+    } catch (error) {
+      console.error('Error fetching cost analytics:', error);
+      res.status(500).json({ message: "Failed to fetch cost analytics" });
+    }
+  });
+
+  app.post('/api/analytics/costs', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const costData = insertCostAnalyticSchema.parse(req.body);
+
+      // Verify user has access to tenant
+      const userTenants = await storage.getTenantsByUser(userId);
+      const accessibleTenantIds = userTenants.map(t => t.id);
+      
+      if (!accessibleTenantIds.includes(costData.tenantId)) {
+        return res.status(403).json({ message: "Access denied to specified tenant" });
+      }
+
+      const cost = await storage.createCostAnalytic(costData);
+      await trackActivity(costData.tenantId, userId, 'create', 'cost_analytic', cost.id);
+      res.status(201).json(cost);
+    } catch (error) {
+      console.error('Error creating cost analytic:', error);
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ message: "Validation error", errors: error.errors });
+      }
+      res.status(500).json({ message: "Failed to create cost analytic" });
+    }
+  });
+
+  app.get('/api/analytics/costs/episode/:episodeId', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const { episodeId } = req.params;
+
+      const episode = await storage.getEpisode(episodeId);
+      if (!episode) {
+        return res.status(404).json({ message: "Episode not found" });
+      }
+
+      const patient = await storage.getPatient(episode.patientId);
+      if (!patient) {
+        return res.status(404).json({ message: "Patient not found" });
+      }
+
+      const userTenantRole = await storage.getUserTenantRole(userId, patient.tenantId);
+      if (!userTenantRole) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+
+      const costs = await storage.getCostAnalyticsByEpisode(episodeId);
+      await trackActivity(patient.tenantId, userId, 'view', 'episode_costs', episodeId);
+      res.json(costs);
+    } catch (error) {
+      console.error('Error fetching episode cost analytics:', error);
+      res.status(500).json({ message: "Failed to fetch episode cost analytics" });
+    }
+  });
+
+  app.get('/api/analytics/costs/efficiency', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const { tenantId, period = 'monthly' } = req.query;
+
+      const userTenants = await storage.getTenantsByUser(userId);
+      const accessibleTenantIds = userTenants.map(t => t.id);
+
+      if (tenantId && !accessibleTenantIds.includes(tenantId)) {
+        return res.status(403).json({ message: "Access denied to specified tenant" });
+      }
+
+      const targetTenantId = tenantId || accessibleTenantIds[0];
+      if (!targetTenantId) {
+        return res.status(403).json({ message: "No accessible tenants found" });
+      }
+
+      const efficiencyMetrics = await storage.getCostEfficiencyMetrics(targetTenantId, period);
+      await trackActivity(targetTenantId, userId, 'view', 'cost_efficiency', 'metrics');
+      res.json(efficiencyMetrics);
+    } catch (error) {
+      console.error('Error fetching cost efficiency metrics:', error);
+      res.status(500).json({ message: "Failed to fetch cost efficiency metrics" });
+    }
+  });
+
+  app.get('/api/analytics/costs/reimbursement', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const { tenantId, startDate, endDate } = req.query;
+
+      const userTenants = await storage.getTenantsByUser(userId);
+      const accessibleTenantIds = userTenants.map(t => t.id);
+
+      if (tenantId && !accessibleTenantIds.includes(tenantId)) {
+        return res.status(403).json({ message: "Access denied to specified tenant" });
+      }
+
+      const targetTenantId = tenantId || accessibleTenantIds[0];
+      if (!targetTenantId) {
+        return res.status(403).json({ message: "No accessible tenants found" });
+      }
+
+      const parsedStartDate = startDate ? new Date(startDate) : new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+      const parsedEndDate = endDate ? new Date(endDate) : new Date();
+
+      if (isNaN(parsedStartDate.getTime()) || isNaN(parsedEndDate.getTime())) {
+        return res.status(400).json({ message: "Invalid date format" });
+      }
+
+      const reimbursementAnalysis = await storage.getTenantCostSummary(
+        targetTenantId, 
+        parsedStartDate, 
+        parsedEndDate
+      );
+
+      await trackActivity(targetTenantId, userId, 'view', 'reimbursement_analysis', 'summary');
+      res.json(reimbursementAnalysis);
+    } catch (error) {
+      console.error('Error fetching reimbursement analysis:', error);
+      res.status(500).json({ message: "Failed to fetch reimbursement analysis" });
+    }
+  });
+
+  // Compliance Tracking Endpoints
+  app.get('/api/analytics/compliance', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const { tenantId, assessmentType, complianceScope, riskLevel, startDate, endDate, limit = 50 } = req.query;
+
+      const userTenants = await storage.getTenantsByUser(userId);
+      const accessibleTenantIds = userTenants.map(t => t.id);
+
+      if (tenantId && !accessibleTenantIds.includes(tenantId)) {
+        return res.status(403).json({ message: "Access denied to specified tenant" });
+      }
+
+      let compliance;
+      if (startDate && endDate) {
+        const targetTenantId = tenantId || accessibleTenantIds[0];
+        const parsedStartDate = new Date(startDate);
+        const parsedEndDate = new Date(endDate);
+        if (isNaN(parsedStartDate.getTime()) || isNaN(parsedEndDate.getTime())) {
+          return res.status(400).json({ message: "Invalid date format" });
+        }
+        compliance = await storage.getComplianceTrackingByDateRange(targetTenantId, parsedStartDate, parsedEndDate);
+      } else {
+        const targetTenantId = tenantId || accessibleTenantIds[0];
+        compliance = await storage.getComplianceTrackingByTenant(targetTenantId, assessmentType, parseInt(limit));
+      }
+
+      // Filter by additional criteria if provided
+      if (complianceScope) {
+        compliance = compliance.filter(c => c.complianceScope === complianceScope);
+      }
+      if (riskLevel) {
+        compliance = compliance.filter(c => c.complianceRiskLevel === riskLevel);
+      }
+
+      const trackingTenantId = tenantId || accessibleTenantIds[0];
+      await trackActivity(trackingTenantId, userId, 'view', 'compliance_tracking', 'query');
+      res.json(compliance);
+    } catch (error) {
+      console.error('Error fetching compliance tracking:', error);
+      res.status(500).json({ message: "Failed to fetch compliance tracking" });
+    }
+  });
+
+  app.post('/api/analytics/compliance', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const complianceData = insertComplianceTrackingSchema.parse(req.body);
+
+      // Verify user has access to tenant
+      const userTenants = await storage.getTenantsByUser(userId);
+      const accessibleTenantIds = userTenants.map(t => t.id);
+      
+      if (!accessibleTenantIds.includes(complianceData.tenantId)) {
+        return res.status(403).json({ message: "Access denied to specified tenant" });
+      }
+
+      const compliance = await storage.createComplianceTracking(complianceData);
+      await trackActivity(complianceData.tenantId, userId, 'create', 'compliance_tracking', compliance.id);
+      res.status(201).json(compliance);
+    } catch (error) {
+      console.error('Error creating compliance tracking:', error);
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ message: "Validation error", errors: error.errors });
+      }
+      res.status(500).json({ message: "Failed to create compliance tracking" });
+    }
+  });
+
+  app.get('/api/analytics/compliance/medicare', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const { tenantId, startDate, endDate } = req.query;
+
+      const userTenants = await storage.getTenantsByUser(userId);
+      const accessibleTenantIds = userTenants.map(t => t.id);
+
+      if (tenantId && !accessibleTenantIds.includes(tenantId)) {
+        return res.status(403).json({ message: "Access denied to specified tenant" });
+      }
+
+      const targetTenantId = tenantId || accessibleTenantIds[0];
+      if (!targetTenantId) {
+        return res.status(403).json({ message: "No accessible tenants found" });
+      }
+
+      const parsedStartDate = startDate ? new Date(startDate) : new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+      const parsedEndDate = endDate ? new Date(endDate) : new Date();
+
+      if (isNaN(parsedStartDate.getTime()) || isNaN(parsedEndDate.getTime())) {
+        return res.status(400).json({ message: "Invalid date format" });
+      }
+
+      const medicareCompliance = await storage.getTenantComplianceSummary(
+        targetTenantId, 
+        parsedStartDate, 
+        parsedEndDate
+      );
+
+      await trackActivity(targetTenantId, userId, 'view', 'medicare_compliance', 'summary');
+      res.json(medicareCompliance);
+    } catch (error) {
+      console.error('Error fetching Medicare compliance:', error);
+      res.status(500).json({ message: "Failed to fetch Medicare compliance" });
+    }
+  });
+
+  app.get('/api/analytics/compliance/audit', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const { tenantId, startDate, endDate, limit = 100 } = req.query;
+
+      const userTenants = await storage.getTenantsByUser(userId);
+      const accessibleTenantIds = userTenants.map(t => t.id);
+
+      if (tenantId && !accessibleTenantIds.includes(tenantId)) {
+        return res.status(403).json({ message: "Access denied to specified tenant" });
+      }
+
+      const targetTenantId = tenantId || accessibleTenantIds[0];
+      if (!targetTenantId) {
+        return res.status(403).json({ message: "No accessible tenants found" });
+      }
+
+      const parsedStartDate = startDate ? new Date(startDate) : new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+      const parsedEndDate = endDate ? new Date(endDate) : new Date();
+
+      if (isNaN(parsedStartDate.getTime()) || isNaN(parsedEndDate.getTime())) {
+        return res.status(400).json({ message: "Invalid date format" });
+      }
+
+      const auditTrail = await storage.getComplianceTrackingByDateRange(
+        targetTenantId, 
+        parsedStartDate, 
+        parsedEndDate
+      );
+
+      // Sort by assessment date for audit trail
+      const sortedAuditTrail = auditTrail
+        .sort((a, b) => new Date(b.assessmentDate).getTime() - new Date(a.assessmentDate).getTime())
+        .slice(0, parseInt(limit));
+
+      await trackActivity(targetTenantId, userId, 'view', 'compliance_audit', 'trail');
+      res.json(sortedAuditTrail);
+    } catch (error) {
+      console.error('Error fetching compliance audit trail:', error);
+      res.status(500).json({ message: "Failed to fetch compliance audit trail" });
+    }
+  });
+
+  app.get('/api/analytics/compliance/violations', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const { tenantId, riskLevel = 'high' } = req.query;
+
+      const userTenants = await storage.getTenantsByUser(userId);
+      const accessibleTenantIds = userTenants.map(t => t.id);
+
+      if (tenantId && !accessibleTenantIds.includes(tenantId)) {
+        return res.status(403).json({ message: "Access denied to specified tenant" });
+      }
+
+      const targetTenantId = tenantId || accessibleTenantIds[0];
+      if (!targetTenantId) {
+        return res.status(403).json({ message: "No accessible tenants found" });
+      }
+
+      const violations = await storage.getComplianceRiskAnalysis(targetTenantId);
+      
+      // Filter by risk level if specified
+      const filteredViolations = riskLevel !== 'all' 
+        ? violations.filter(v => v.complianceRiskLevel === riskLevel)
+        : violations;
+
+      await trackActivity(targetTenantId, userId, 'view', 'compliance_violations', riskLevel);
+      res.json(filteredViolations);
+    } catch (error) {
+      console.error('Error fetching compliance violations:', error);
+      res.status(500).json({ message: "Failed to fetch compliance violations" });
+    }
+  });
+
+  // Dashboard Aggregation Endpoints
+  app.get('/api/analytics/dashboard/summary', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const { tenantId, period = 'monthly' } = req.query;
+
+      const userTenants = await storage.getTenantsByUser(userId);
+      const accessibleTenantIds = userTenants.map(t => t.id);
+
+      if (tenantId && !accessibleTenantIds.includes(tenantId)) {
+        return res.status(403).json({ message: "Access denied to specified tenant" });
+      }
+
+      const targetTenantId = tenantId || accessibleTenantIds[0];
+      if (!targetTenantId) {
+        return res.status(403).json({ message: "No accessible tenants found" });
+      }
+
+      const dashboardData = await storage.getTenantAnalyticsDashboard(targetTenantId, period);
+      await trackActivity(targetTenantId, userId, 'view', 'dashboard_summary', period);
+      res.json(dashboardData);
+    } catch (error) {
+      console.error('Error fetching dashboard summary:', error);
+      res.status(500).json({ message: "Failed to fetch dashboard summary" });
+    }
+  });
+
+  app.get('/api/analytics/dashboard/clinical', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const { tenantId, period = 'monthly' } = req.query;
+
+      const userTenants = await storage.getTenantsByUser(userId);
+      const accessibleTenantIds = userTenants.map(t => t.id);
+
+      if (tenantId && !accessibleTenantIds.includes(tenantId)) {
+        return res.status(403).json({ message: "Access denied to specified tenant" });
+      }
+
+      const targetTenantId = tenantId || accessibleTenantIds[0];
+      if (!targetTenantId) {
+        return res.status(403).json({ message: "No accessible tenants found" });
+      }
+
+      const endDate = new Date();
+      const startDate = new Date();
+      startDate.setMonth(startDate.getMonth() - (period === 'quarterly' ? 3 : 1));
+
+      // Get clinical performance data
+      const [healingTrends, performanceMetrics, complianceData] = await Promise.all([
+        storage.getHealingTrendsByDateRange(targetTenantId, startDate, endDate),
+        storage.getPerformanceMetricsByDateRange(targetTenantId, startDate, endDate, period),
+        storage.getComplianceTrackingByDateRange(targetTenantId, startDate, endDate)
+      ]);
+
+      const clinicalDashboard = {
+        healingTrends,
+        performanceMetrics,
+        complianceData,
+        period,
+        startDate,
+        endDate
+      };
+
+      await trackActivity(targetTenantId, userId, 'view', 'clinical_dashboard', period);
+      res.json(clinicalDashboard);
+    } catch (error) {
+      console.error('Error fetching clinical dashboard:', error);
+      res.status(500).json({ message: "Failed to fetch clinical dashboard" });
+    }
+  });
+
+  app.get('/api/analytics/dashboard/financial', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const { tenantId, period = 'monthly' } = req.query;
+
+      const userTenants = await storage.getTenantsByUser(userId);
+      const accessibleTenantIds = userTenants.map(t => t.id);
+
+      if (tenantId && !accessibleTenantIds.includes(tenantId)) {
+        return res.status(403).json({ message: "Access denied to specified tenant" });
+      }
+
+      const targetTenantId = tenantId || accessibleTenantIds[0];
+      if (!targetTenantId) {
+        return res.status(403).json({ message: "No accessible tenants found" });
+      }
+
+      const endDate = new Date();
+      const startDate = new Date();
+      startDate.setMonth(startDate.getMonth() - (period === 'quarterly' ? 3 : 1));
+
+      // Get financial performance data
+      const [costAnalytics, costSummary, efficiencyMetrics] = await Promise.all([
+        storage.getCostAnalyticsByDateRange(targetTenantId, startDate, endDate),
+        storage.getTenantCostSummary(targetTenantId, startDate, endDate),
+        storage.getCostEfficiencyMetrics(targetTenantId, period)
+      ]);
+
+      const financialDashboard = {
+        costAnalytics,
+        costSummary,
+        efficiencyMetrics,
+        period,
+        startDate,
+        endDate
+      };
+
+      await trackActivity(targetTenantId, userId, 'view', 'financial_dashboard', period);
+      res.json(financialDashboard);
+    } catch (error) {
+      console.error('Error fetching financial dashboard:', error);
+      res.status(500).json({ message: "Failed to fetch financial dashboard" });
+    }
+  });
+
+  app.get('/api/analytics/dashboard/compliance', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const { tenantId, period = 'monthly' } = req.query;
+
+      const userTenants = await storage.getTenantsByUser(userId);
+      const accessibleTenantIds = userTenants.map(t => t.id);
+
+      if (tenantId && !accessibleTenantIds.includes(tenantId)) {
+        return res.status(403).json({ message: "Access denied to specified tenant" });
+      }
+
+      const targetTenantId = tenantId || accessibleTenantIds[0];
+      if (!targetTenantId) {
+        return res.status(403).json({ message: "No accessible tenants found" });
+      }
+
+      const endDate = new Date();
+      const startDate = new Date();
+      startDate.setMonth(startDate.getMonth() - (period === 'quarterly' ? 3 : 1));
+
+      // Get compliance performance data
+      const [complianceTracking, complianceSummary, violations] = await Promise.all([
+        storage.getComplianceTrackingByDateRange(targetTenantId, startDate, endDate),
+        storage.getTenantComplianceSummary(targetTenantId, startDate, endDate),
+        storage.getComplianceRiskAnalysis(targetTenantId)
+      ]);
+
+      const complianceDashboard = {
+        complianceTracking,
+        complianceSummary,
+        violations,
+        period,
+        startDate,
+        endDate
+      };
+
+      await trackActivity(targetTenantId, userId, 'view', 'compliance_dashboard', period);
+      res.json(complianceDashboard);
+    } catch (error) {
+      console.error('Error fetching compliance dashboard:', error);
+      res.status(500).json({ message: "Failed to fetch compliance dashboard" });
     }
   });
 

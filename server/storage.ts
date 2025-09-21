@@ -3042,6 +3042,244 @@ export class DatabaseStorage implements IStorage {
     }
   }
 
+  async getComplianceTrackingByEligibilityCheck(eligibilityCheckId: string): Promise<ComplianceTracking[]> {
+    try {
+      return db
+        .select()
+        .from(complianceTracking)
+        .where(eq(complianceTracking.eligibilityCheckId, eligibilityCheckId))
+        .orderBy(asc(complianceTracking.assessmentDate));
+    } catch (error) {
+      console.error('Error fetching compliance tracking by eligibility check:', error);
+      throw new Error(`Failed to fetch compliance tracking: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+
+  async getTenantComplianceSummary(tenantId: string, startDate: Date, endDate: Date): Promise<{
+    overallComplianceRate: number;
+    medicareComplianceRate: number;
+    criticalViolations: number;
+    minorViolations: number;
+    assessmentCount: number;
+  }> {
+    try {
+      // Get all compliance tracking records for the period
+      const complianceRecords = await db
+        .select()
+        .from(complianceTracking)
+        .where(
+          and(
+            eq(complianceTracking.tenantId, tenantId),
+            gte(complianceTracking.assessmentDate, startDate),
+            lte(complianceTracking.assessmentDate, endDate)
+          )
+        );
+
+      const totalAssessments = complianceRecords.length;
+      
+      if (totalAssessments === 0) {
+        return {
+          overallComplianceRate: 0,
+          medicareComplianceRate: 0,
+          criticalViolations: 0,
+          minorViolations: 0,
+          assessmentCount: 0
+        };
+      }
+
+      // Calculate compliance metrics
+      let compliantRecords = 0;
+      let medicareCompliantRecords = 0;
+      let criticalViolations = 0;
+      let minorViolations = 0;
+
+      for (const record of complianceRecords) {
+        // Check overall compliance (score >= 80%)
+        if (record.overallComplianceScore && record.overallComplianceScore >= 80) {
+          compliantRecords++;
+        }
+
+        // Check Medicare-specific compliance
+        if (record.complianceScope === 'medicare_lcd' && record.overallComplianceScore && record.overallComplianceScore >= 80) {
+          medicareCompliantRecords++;
+        }
+
+        // Count violations based on risk level
+        if (record.complianceRiskLevel === 'high' || record.complianceRiskLevel === 'critical') {
+          criticalViolations++;
+        } else if (record.complianceRiskLevel === 'medium' || record.complianceRiskLevel === 'low') {
+          minorViolations++;
+        }
+      }
+
+      const medicareRecords = complianceRecords.filter(r => r.complianceScope === 'medicare_lcd').length;
+
+      return {
+        overallComplianceRate: Math.round((compliantRecords / totalAssessments) * 100),
+        medicareComplianceRate: medicareRecords > 0 ? Math.round((medicareCompliantRecords / medicareRecords) * 100) : 0,
+        criticalViolations,
+        minorViolations,
+        assessmentCount: totalAssessments
+      };
+    } catch (error) {
+      console.error('Error calculating tenant compliance summary:', error);
+      throw new Error(`Failed to calculate tenant compliance summary: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+
+  async getComplianceRiskAnalysis(tenantId: string): Promise<ComplianceTracking[]> {
+    try {
+      // Get compliance records with identified risks (non-compliant or with violations)
+      return db
+        .select()
+        .from(complianceTracking)
+        .where(
+          and(
+            eq(complianceTracking.tenantId, tenantId),
+            or(
+              sql`${complianceTracking.overallComplianceScore} < 80`,
+              sql`${complianceTracking.complianceRiskLevel} IN ('medium', 'high', 'critical')`,
+              sql`${complianceTracking.reviewStatus} = 'flagged'`
+            )
+          )
+        )
+        .orderBy(desc(complianceTracking.assessmentDate));
+    } catch (error) {
+      console.error('Error fetching compliance risk analysis:', error);
+      throw new Error(`Failed to fetch compliance risk analysis: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+
+  // ===============================================================================
+  // MISSING ANALYTICS METHODS IMPLEMENTATION
+  // ===============================================================================
+
+  async getHealingTrendsByPatient(patientId: string): Promise<HealingTrend[]> {
+    try {
+      return db
+        .select()
+        .from(healingTrends)
+        .where(eq(healingTrends.patientId, patientId))
+        .orderBy(asc(healingTrends.trendDate));
+    } catch (error) {
+      console.error('Error fetching healing trends by patient:', error);
+      throw new Error(`Failed to fetch healing trends by patient: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+
+  async getEpisodeHealingTrajectory(episodeId: string): Promise<HealingTrend[]> {
+    try {
+      return db
+        .select()
+        .from(healingTrends)
+        .where(eq(healingTrends.episodeId, episodeId))
+        .orderBy(asc(healingTrends.trendDate));
+    } catch (error) {
+      console.error('Error fetching episode healing trajectory:', error);
+      throw new Error(`Failed to fetch episode healing trajectory: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+
+  async getProviderPerformanceComparison(tenantId: string, metricPeriod: string, limit?: number): Promise<PerformanceMetric[]> {
+    try {
+      let query = db
+        .select()
+        .from(performanceMetrics)
+        .where(
+          and(
+            eq(performanceMetrics.tenantId, tenantId),
+            eq(performanceMetrics.metricPeriod, metricPeriod),
+            eq(performanceMetrics.metricScope, 'provider')
+          )
+        )
+        .orderBy(desc(performanceMetrics.metricDate));
+
+      if (limit) {
+        query = query.limit(limit);
+      }
+
+      return query;
+    } catch (error) {
+      console.error('Error fetching provider performance comparison:', error);
+      throw new Error(`Failed to fetch provider performance comparison: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+
+  async getPerformanceTrends(tenantId: string, metricType: string, periods: number): Promise<PerformanceMetric[]> {
+    try {
+      // Get the most recent metrics and work backwards for the specified number of periods
+      const recentMetrics = await db
+        .select()
+        .from(performanceMetrics)
+        .where(
+          and(
+            eq(performanceMetrics.tenantId, tenantId),
+            sql`${performanceMetrics.metricType} = ${metricType} OR ${performanceMetrics.metricScope} = ${metricType}`
+          )
+        )
+        .orderBy(desc(performanceMetrics.metricDate))
+        .limit(periods);
+
+      // Return in ascending date order for trend analysis
+      return recentMetrics.reverse();
+    } catch (error) {
+      console.error('Error fetching performance trends:', error);
+      throw new Error(`Failed to fetch performance trends: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+
+  async getCostEfficiencyMetrics(tenantId: string, period: string): Promise<CostAnalytic[]> {
+    try {
+      // Calculate period boundaries based on the period parameter
+      let startDate: Date, endDate: Date;
+      const now = new Date();
+      
+      switch (period) {
+        case 'daily':
+          startDate = new Date(now);
+          endDate = new Date(now);
+          break;
+        case 'weekly':
+          startDate = new Date(now);
+          startDate.setDate(startDate.getDate() - 7);
+          endDate = new Date(now);
+          break;
+        case 'monthly':
+          startDate = new Date(now.getFullYear(), now.getMonth(), 1);
+          endDate = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+          break;
+        case 'quarterly':
+          const quarter = Math.floor(now.getMonth() / 3);
+          startDate = new Date(now.getFullYear(), quarter * 3, 1);
+          endDate = new Date(now.getFullYear(), quarter * 3 + 3, 0);
+          break;
+        case 'yearly':
+          startDate = new Date(now.getFullYear(), 0, 1);
+          endDate = new Date(now.getFullYear(), 11, 31);
+          break;
+        default:
+          // Default to monthly if period is not recognized
+          startDate = new Date(now.getFullYear(), now.getMonth(), 1);
+          endDate = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+      }
+
+      return db
+        .select()
+        .from(costAnalytics)
+        .where(
+          and(
+            eq(costAnalytics.tenantId, tenantId),
+            gte(costAnalytics.analysisDate, startDate),
+            lte(costAnalytics.analysisDate, endDate)
+          )
+        )
+        .orderBy(desc(costAnalytics.analysisDate));
+    } catch (error) {
+      console.error('Error fetching cost efficiency metrics:', error);
+      throw new Error(`Failed to fetch cost efficiency metrics: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+
   // Analytics aggregation and calculation operations
   async calculateTenantAnalyticsSnapshot(tenantId: string, snapshotDate: Date, aggregationPeriod: string): Promise<AnalyticsSnapshot> {
     try {
@@ -3493,7 +3731,7 @@ export class DatabaseStorage implements IStorage {
     performanceMetrics: PerformanceMetric[];
     healingOutcomes: HealingTrend[];
     costEfficiency: CostAnalytic[];
-    complianceMetrics: ComplianceTracking[];
+    complianceRecord: ComplianceTracking[];
   }> {
     try {
       // Get provider performance metrics
@@ -3506,13 +3744,13 @@ export class DatabaseStorage implements IStorage {
       const costEfficiency = await this.getCostAnalyticsByTenant(tenantId, undefined, 15);
 
       // Get compliance metrics
-      const complianceMetrics = await this.getComplianceTrackingByTenant(tenantId, undefined, 20);
+      const complianceRecord = await this.getComplianceTrackingByTenant(tenantId, undefined, 20);
 
       return {
         performanceMetrics,
         healingOutcomes,
         costEfficiency,
-        complianceMetrics
+        complianceRecord
       };
     } catch (error) {
       console.error('Error fetching provider analytics dashboard:', error);
