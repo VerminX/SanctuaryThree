@@ -33,6 +33,8 @@ import DiagnosisTab from "../components/episodes/tabs/DiagnosisTab";
 import VascularDiabeticTab from "../components/episodes/tabs/VascularDiabeticTab";
 import ProductsTab from "../components/episodes/tabs/ProductsTab";
 import ComplianceTab from "../components/episodes/tabs/ComplianceTab";
+// Analytics widgets
+import EpisodeAnalyticsWidgets from "../components/episodes/analytics-widgets";
 
 export default function EpisodeDetailWorkspace() {
   const { episodeId } = useParams();
@@ -305,6 +307,14 @@ export default function EpisodeDetailWorkspace() {
               )}
             </CardContent>
           </Card>
+
+          {/* Analytics Widgets Section */}
+          <EpisodeAnalyticsWidgets
+            episodeId={episodeId!}
+            episode={episode}
+            encounters={encounters || []}
+            isLoading={episodeLoading || encountersLoading || patientLoading}
+          />
 
           {/* Tabbed Interface */}
           <Card data-testid="card-episode-tabs">
