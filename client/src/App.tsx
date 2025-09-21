@@ -10,6 +10,7 @@ import Dashboard from "@/pages/dashboard";
 import Patients from "@/pages/patients";
 import PatientDetail from "@/components/patients/patient-detail";
 import Episodes from "@/pages/episodes";
+import EpisodeDetailWorkspace from "@/pages/episode-detail";
 import Encounters from "@/pages/encounters";
 import Eligibility from "@/pages/eligibility";
 import Documents from "@/pages/documents";
@@ -23,16 +24,49 @@ import Upload from "@/pages/upload";
 function Router() {
   const { isAuthenticated, isLoading } = useAuth();
 
+  // If loading, show a loading state
+  if (isLoading) {
+    return (
+      <div className="min-h-screen bg-background flex items-center justify-center">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary mx-auto mb-4"></div>
+          <p className="text-muted-foreground">Loading...</p>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <Switch>
-      {isLoading || !isAuthenticated ? (
-        <Route path="/" component={Landing} />
+      {!isAuthenticated ? (
+        <>
+          {/* Public routes for unauthenticated users */}
+          <Route path="/" component={Landing} />
+          {/* Redirect unauthenticated users from /login to auth flow */}
+          <Route path="/login">
+            {() => {
+              // Redirect to backend auth endpoint
+              window.location.href = "/api/login";
+              return null;
+            }}
+          </Route>
+          {/* For any other route, redirect to auth flow */}
+          <Route>
+            {() => {
+              window.location.href = "/api/login";
+              return null;
+            }}
+          </Route>
+        </>
       ) : (
         <>
+          {/* Protected routes for authenticated users - more specific routes first */}
           <Route path="/" component={Dashboard} />
           <Route path="/tenant-setup" component={TenantSetup} />
           <Route path="/patients/:patientId" component={PatientDetail} />
           <Route path="/patients" component={Patients} />
+          {/* More specific episode route first */}
+          <Route path="/episodes/:episodeId" component={EpisodeDetailWorkspace} />
           <Route path="/episodes" component={Episodes} />
           <Route path="/encounters" component={Encounters} />
           <Route path="/eligibility" component={Eligibility} />
@@ -42,9 +76,10 @@ function Router() {
           <Route path="/validation" component={Validation} />
           <Route path="/upload" component={Upload} />
           <Route path="/settings" component={Settings} />
+          {/* 404 for authenticated users only */}
+          <Route component={NotFound} />
         </>
       )}
-      <Route component={NotFound} />
     </Switch>
   );
 }

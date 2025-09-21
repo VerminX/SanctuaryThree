@@ -617,25 +617,47 @@ export class DatabaseStorage implements IStorage {
   async getAllEpisodesWithPatientsByTenant(tenantId: string): Promise<Array<Episode & { patientName: string; patientId: string; encounterCount: number; }>> {
     const { safeDecryptPatientData } = await import('./services/encryption');
     
-    const episodeResults = await db
-      .select({
-        episode: episodes,
-        patient: patients,
-        encounterCount: sql<number>`(SELECT COUNT(*) FROM ${encounters} WHERE ${encounters.episodeId} = ${episodes.id})`.as('encounterCount')
-      })
-      .from(episodes)
-      .innerJoin(patients, eq(episodes.patientId, patients.id))
-      .where(eq(patients.tenantId, tenantId))
-      .orderBy(desc(episodes.episodeStartDate));
+    try {
+      // Simplified query to reduce connection timeout risk
+      // First get episodes with patients
+      const episodeResults = await db
+        .select({
+          episode: episodes,
+          patient: patients
+        })
+        .from(episodes)
+        .innerJoin(patients, eq(episodes.patientId, patients.id))
+        .where(eq(patients.tenantId, tenantId))
+        .orderBy(desc(episodes.episodeStartDate));
 
-    return episodeResults.map(row => {
-      const { patientData } = safeDecryptPatientData(row.patient);
-      return {
-        ...row.episode,
-        patientName: `${patientData.firstName} ${patientData.lastName}`.trim(),
-        encounterCount: row.encounterCount,
-      };
-    });
+      // Then get encounter counts in a separate query to avoid complex subquery timeouts
+      const episodeIds = episodeResults.map(row => row.episode.id);
+      const encounterCounts = episodeIds.length > 0 ? await db
+        .select({
+          episodeId: encounters.episodeId,
+          count: sql<number>`COUNT(*)`.as('count')
+        })
+        .from(encounters)
+        .where(inArray(encounters.episodeId, episodeIds))
+        .groupBy(encounters.episodeId) : [];
+
+      // Create lookup map for encounter counts
+      const countMap = new Map(
+        encounterCounts.map(row => [row.episodeId, row.count])
+      );
+
+      return episodeResults.map(row => {
+        const { patientData } = safeDecryptPatientData(row.patient);
+        return {
+          ...row.episode,
+          patientName: `${patientData.firstName} ${patientData.lastName}`.trim(),
+          encounterCount: countMap.get(row.episode.id) || 0,
+        };
+      });
+    } catch (error) {
+      console.error('Database error in getAllEpisodesWithPatientsByTenant:', error);
+      throw new Error(`Failed to fetch episodes with patients: ${error.message}`);
+    }
   }
 
   // Bulk endpoint for Documents page performance optimization

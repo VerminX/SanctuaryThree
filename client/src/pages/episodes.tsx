@@ -48,15 +48,19 @@ export default function Episodes() {
   const currentTenant = user?.tenants?.[0];
 
   // Get patients for dropdown (only needed for create episode form)
-  const { data: patients } = useQuery<Array<{
+  const { data: patients, isLoading: patientsLoading, error: patientsError } = useQuery<Array<{
     id: string;
     firstName: string;
     lastName: string;
     mrn: string;
   }>>({
-    queryKey: ["/api/tenants", currentTenant?.id, "patients"],
+    queryKey: [`/api/tenants/${currentTenant?.id}/patients`],
     enabled: !!currentTenant?.id,
-    retry: false,
+    retry: (failureCount, error) => {
+      console.error('Patients query failed:', error);
+      return failureCount < 1; // Retry once
+    },
+    staleTime: 1000 * 60 * 5, // Cache for 5 minutes
   });
 
   // OPTIMIZED: Use bulk endpoint instead of N+1 queries for Episodes page  
@@ -248,10 +252,30 @@ export default function Episodes() {
                     <label className="text-sm font-medium">Select Patient</label>
                     <Select value={selectedPatientId} onValueChange={setSelectedPatientId}>
                       <SelectTrigger data-testid="select-patient-for-episode">
-                        <SelectValue placeholder="Choose a patient" />
+                        <SelectValue placeholder={
+                          patientsLoading ? "Loading patients..." : 
+                          patientsError ? "Error loading patients" :
+                          !patients || patients.length === 0 ? "No patients found" :
+                          "Choose a patient"
+                        } />
                       </SelectTrigger>
                       <SelectContent>
-                        {patients && Array.isArray(patients) && 
+                        {patientsLoading && (
+                          <div className="p-2 text-sm text-muted-foreground text-center">
+                            Loading patients...
+                          </div>
+                        )}
+                        {patientsError && (
+                          <div className="p-2 text-sm text-destructive text-center">
+                            Error loading patients: {patientsError instanceof Error ? patientsError.message : 'Unknown error'}
+                          </div>
+                        )}
+                        {!patientsLoading && !patientsError && patients && Array.isArray(patients) && patients.length === 0 && (
+                          <div className="p-2 text-sm text-muted-foreground text-center">
+                            No patients found. Create a patient first.
+                          </div>
+                        )}
+                        {!patientsLoading && !patientsError && patients && Array.isArray(patients) && 
                           patients.map((patient: any) => (
                             <SelectItem key={patient.id} value={patient.id}>
                               {patient.firstName} {patient.lastName} - {patient.mrn}
@@ -260,6 +284,11 @@ export default function Episodes() {
                         }
                       </SelectContent>
                     </Select>
+                    {patientsError && (
+                      <p className="text-sm text-destructive mt-1">
+                        Failed to load patients. Please try refreshing the page.
+                      </p>
+                    )}
                   </div>
                   {selectedPatientId && (
                     <EpisodeForm

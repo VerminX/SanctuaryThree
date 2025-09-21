@@ -716,10 +716,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Create episode
       const episode = await storage.createEpisode(episodeData);
 
-      // Track activity
-      await trackActivity(patient.tenantId, userId, 'CREATE_EPISODE', 'Episode', episode.id, `${episodeData.woundType} episode`);
-
+      // Send response immediately to prevent blocking on activity tracking
       res.status(201).json(episode);
+      
+      // Track activity asynchronously after response (fire-and-forget)
+      setImmediate(async () => {
+        try {
+          await trackActivity(patient.tenantId, userId, 'CREATE_EPISODE', 'Episode', episode.id, `${episodeData.woundType} episode`);
+        } catch (activityError) {
+          console.error('Non-critical: Failed to track episode creation activity:', activityError);
+        }
+      });
     } catch (error) {
       console.error("Error creating episode:", error);
       if (error instanceof z.ZodError) {
@@ -834,10 +841,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Update episode
       const updatedEpisode = await storage.updateEpisode(episodeId, episodeData);
 
-      // Track activity
-      await trackActivity(patient.tenantId, userId, 'UPDATE_EPISODE', 'Episode', episode.id, `${episodeData.woundType} episode`);
-
+      // Send response immediately to prevent blocking on activity tracking
       res.json(updatedEpisode);
+      
+      // Track activity asynchronously after response (fire-and-forget)
+      setImmediate(async () => {
+        try {
+          await trackActivity(patient.tenantId, userId, 'UPDATE_EPISODE', 'Episode', episode.id, `${episodeData.woundType || 'Unknown'} episode`);
+        } catch (activityError) {
+          console.error('Non-critical: Failed to track episode update activity:', activityError);
+        }
+      });
     } catch (error) {
       console.error("Error updating episode:", error);
       if (error instanceof z.ZodError) {
@@ -872,10 +886,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Delete episode (cascade will handle encounters)
       await storage.deleteEpisode(episodeId);
 
-      // Track activity
-      await trackActivity(patient.tenantId, userId, 'DELETE_EPISODE', 'Episode', episode.id, `${episode.woundType} episode`);
-
+      // Send response immediately to prevent blocking on activity tracking
       res.status(204).send();
+      
+      // Track activity asynchronously after response (fire-and-forget)
+      setImmediate(async () => {
+        try {
+          await trackActivity(patient.tenantId, userId, 'DELETE_EPISODE', 'Episode', episode.id, `${episode.woundType} episode`);
+        } catch (activityError) {
+          console.error('Non-critical: Failed to track episode deletion activity:', activityError);
+        }
+      });
     } catch (error) {
       console.error("Error deleting episode:", error);
       res.status(500).json({ message: "Failed to delete episode" });
@@ -1701,6 +1722,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   app.get('/api/episodes-with-patients/:tenantId', isAuthenticated, async (req: any, res) => {
+    let hasResponded = false;
+    
     try {
       const userId = req.user.claims.sub;
       const { tenantId } = req.params;
@@ -1708,27 +1731,50 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Verify user has access to tenant
       const userTenantRole = await storage.getUserTenantRole(userId, tenantId);
       if (!userTenantRole) {
+        hasResponded = true;
         return res.status(403).json({ message: "Access denied" });
       }
 
-      const episodesWithPatients = await storage.getAllEpisodesWithPatientsByTenant(tenantId);
-      
-      // Log audit event for bulk PHI access
-      await storage.createAuditLog({
-        tenantId,
-        userId,
-        action: 'VIEW_BULK_EPISODES',
-        entity: 'Episode',
-        entityId: `bulk-${tenantId}`,
-        ipAddress: req.ip,
-        userAgent: req.get('User-Agent'),
-        previousHash: '',
-      });
+      // Fetch episodes data with improved error handling
+      let episodesWithPatients;
+      try {
+        episodesWithPatients = await storage.getAllEpisodesWithPatientsByTenant(tenantId);
+      } catch (dbError) {
+        console.error("Database error fetching episodes with patients:", dbError);
+        hasResponded = true;
+        return res.status(500).json({ 
+          message: "Database connection error while fetching episodes",
+          error: process.env.NODE_ENV === 'development' ? dbError.message : undefined
+        });
+      }
 
+      // Send response immediately to prevent double-response issues
+      hasResponded = true;
       res.json(episodesWithPatients);
+      
+      // Log audit event asynchronously after response (fire-and-forget)
+      setImmediate(async () => {
+        try {
+          await storage.createAuditLog({
+            tenantId,
+            userId,
+            action: 'VIEW_BULK_EPISODES',
+            entity: 'Episode',
+            entityId: `bulk-${tenantId}`,
+            ipAddress: req.ip,
+            userAgent: req.get('User-Agent'),
+            previousHash: '',
+          });
+        } catch (auditError) {
+          console.error('Non-critical: Failed to log audit event for episodes bulk view:', auditError);
+        }
+      });
+      
     } catch (error) {
       console.error("Error fetching episodes with patients:", error);
-      res.status(500).json({ message: "Failed to fetch episodes with patients" });
+      if (!hasResponded) {
+        res.status(500).json({ message: "Failed to fetch episodes with patients" });
+      }
     }
   });
 
