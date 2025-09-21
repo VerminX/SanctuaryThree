@@ -373,7 +373,7 @@ ${policy.content}`;
     return {
       content,
       citations,
-      selectedPolicyId: policy.lcdId,
+      selectedPolicyId: policy.id,
       audit
     };
   } catch (error) {
