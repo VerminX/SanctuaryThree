@@ -1949,6 +1949,508 @@ export const QUALITY_ASSESSMENT_TYPE = {
 } as const;
 
 // ================================================================================
+// ANALYTICS DATA MODEL - PHASE 5.2: CLINICAL METRICS & PERFORMANCE TRACKING
+// ================================================================================
+
+// Analytics Snapshots - Daily/weekly aggregated metrics per tenant/provider
+export const analyticsSnapshots = pgTable("analytics_snapshots", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: uuid("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
+  
+  // Temporal aggregation settings
+  snapshotDate: timestamp("snapshot_date").notNull(), // Date for which metrics are calculated
+  aggregationPeriod: varchar("aggregation_period", { length: 20 }).notNull(), // daily, weekly, monthly, quarterly
+  periodStartDate: timestamp("period_start_date").notNull(), // Start of aggregation period
+  periodEndDate: timestamp("period_end_date").notNull(), // End of aggregation period
+  
+  // Clinical volume metrics
+  totalPatients: integer("total_patients").default(0),
+  newPatients: integer("new_patients").default(0),
+  activeEpisodes: integer("active_episodes").default(0),
+  newEpisodes: integer("new_episodes").default(0),
+  completedEpisodes: integer("completed_episodes").default(0),
+  totalEncounters: integer("total_encounters").default(0),
+  
+  // Wound type distribution
+  woundTypeDistribution: jsonb("wound_type_distribution"), // {DFU: count, VLU: count, PU: count, etc.}
+  
+  // Clinical metrics aggregation
+  averageHealingVelocity: decimal("average_healing_velocity", { precision: 8, scale: 4 }), // cm²/day
+  averageEpisodeDuration: decimal("average_episode_duration", { precision: 8, scale: 2 }), // days
+  averageInitialWoundArea: decimal("average_initial_wound_area", { precision: 10, scale: 4 }), // cm²
+  averageFinalWoundArea: decimal("average_final_wound_area", { precision: 10, scale: 4 }), // cm²
+  averageAreaReduction: decimal("average_area_reduction", { precision: 5, scale: 2 }), // percentage
+  
+  // Medicare 20% reduction compliance tracking
+  episodesWithMeasurements: integer("episodes_with_measurements").default(0),
+  episodesWithBaselineMeasurement: integer("episodes_with_baseline_measurement").default(0),
+  episodesWithFourWeekMeasurement: integer("episodes_with_four_week_measurement").default(0),
+  episodesMeetingTwentyPercentReduction: integer("episodes_meeting_twenty_percent_reduction").default(0),
+  medicareComplianceRate: decimal("medicare_compliance_rate", { precision: 5, scale: 2 }), // percentage
+  
+  // Diagnosis validation metrics  
+  totalEligibilityChecks: integer("total_eligibility_checks").default(0),
+  passedDiagnosisValidation: integer("passed_diagnosis_validation").default(0),
+  averageDiagnosisValidationScore: decimal("average_diagnosis_validation_score", { precision: 5, scale: 2 }),
+  averageClinicalNecessityScore: decimal("average_clinical_necessity_score", { precision: 5, scale: 2 }),
+  averageComplexityScore: decimal("average_complexity_score", { precision: 5, scale: 2 }),
+  
+  // Product utilization metrics
+  totalProductApplications: integer("total_product_applications").default(0),
+  uniqueProductsUsed: integer("unique_products_used").default(0),
+  totalProductCost: decimal("total_product_cost", { precision: 12, scale: 2 }),
+  averageCostPerApplication: decimal("average_cost_per_application", { precision: 10, scale: 2 }),
+  productWastageRate: decimal("product_wastage_rate", { precision: 5, scale: 2 }), // percentage
+  
+  // Provider productivity metrics
+  averageEncountersPerDay: decimal("average_encounters_per_day", { precision: 6, scale: 2 }),
+  averageDocumentationTime: decimal("average_documentation_time", { precision: 6, scale: 2 }), // minutes
+  totalDocumentsGenerated: integer("total_documents_generated").default(0),
+  averageDocumentApprovalTime: decimal("average_document_approval_time", { precision: 8, scale: 2 }), // hours
+  
+  // Quality metrics
+  dataQualityScore: integer("data_quality_score"), // 0-100 aggregate data quality
+  measurementComplianceRate: decimal("measurement_compliance_rate", { precision: 5, scale: 2 }), // percentage
+  documentationComplianceRate: decimal("documentation_compliance_rate", { precision: 5, scale: 2 }), // percentage
+  
+  // Metadata and versioning
+  calculationVersion: varchar("calculation_version", { length: 20 }).default("1.0"),
+  calculatedAt: timestamp("calculated_at").defaultNow(),
+  calculatedBy: varchar("calculated_by").references(() => users.id, { onDelete: "set null" }),
+  
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+}, (table) => [
+  // Unique constraints for data integrity
+  uniqueIndex("unique_tenant_snapshot_period").on(table.tenantId, table.aggregationPeriod, table.snapshotDate),
+  
+  // Performance indexes for dashboard queries
+  index("idx_analytics_snapshots_tenant_date").on(table.tenantId, table.snapshotDate),
+  index("idx_analytics_snapshots_tenant_period_dates").on(table.tenantId, table.aggregationPeriod, table.periodStartDate, table.periodEndDate),
+  index("idx_analytics_snapshots_period").on(table.aggregationPeriod, table.snapshotDate),
+  index("idx_analytics_snapshots_compliance").on(table.medicareComplianceRate),
+  
+  // Data integrity constraints
+  check("check_snapshot_date_within_period", sql`${table.periodStartDate} <= ${table.snapshotDate} AND ${table.snapshotDate} <= ${table.periodEndDate}`),
+  check("check_period_dates_valid", sql`${table.periodStartDate} <= ${table.periodEndDate}`),
+  check("check_compliance_rate_valid", sql`${table.medicareComplianceRate} IS NULL OR (${table.medicareComplianceRate} >= 0 AND ${table.medicareComplianceRate} <= 100)`),
+  check("check_data_quality_score_valid", sql`${table.dataQualityScore} IS NULL OR (${table.dataQualityScore} >= 0 AND ${table.dataQualityScore} <= 100)`),
+  check("check_aggregation_period_enum", sql`${table.aggregationPeriod} IN ('daily', 'weekly', 'monthly', 'quarterly')`),
+  
+  // Non-negative constraints for count fields
+  check("check_counts_non_negative", sql`
+    ${table.totalPatients} >= 0 AND ${table.newPatients} >= 0 AND 
+    ${table.activeEpisodes} >= 0 AND ${table.newEpisodes} >= 0 AND 
+    ${table.completedEpisodes} >= 0 AND ${table.totalEncounters} >= 0
+  `),
+]);
+
+// Healing Trends - Time-series data for wound progression and outcomes
+export const healingTrends = pgTable("healing_trends", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: uuid("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
+  episodeId: uuid("episode_id").notNull().references(() => episodes.id, { onDelete: "cascade" }),
+  patientId: uuid("patient_id").notNull().references(() => patients.id, { onDelete: "cascade" }),
+  
+  // Temporal tracking
+  trendDate: timestamp("trend_date").notNull(), // Date of this trend data point
+  daysSinceEpisodeStart: integer("days_since_episode_start").notNull(),
+  weekNumber: integer("week_number").notNull(), // Week number since episode start
+  
+  // Wound progression metrics
+  currentWoundArea: decimal("current_wound_area", { precision: 10, scale: 4 }), // cm²
+  baselineWoundArea: decimal("baseline_wound_area", { precision: 10, scale: 4 }), // cm²
+  areaReductionFromBaseline: decimal("area_reduction_from_baseline", { precision: 5, scale: 2 }), // percentage
+  healingVelocity: decimal("healing_velocity", { precision: 8, scale: 4 }), // cm²/day
+  
+  // 7-day and 14-day rolling averages for trend smoothing
+  sevenDayAverageHealingVelocity: decimal("seven_day_average_healing_velocity", { precision: 8, scale: 4 }),
+  fourteenDayAverageHealingVelocity: decimal("fourteen_day_average_healing_velocity", { precision: 8, scale: 4 }),
+  
+  // Medicare LCD compliance tracking per timepoint
+  meetsTwentyPercentReduction: boolean("meets_twenty_percent_reduction").default(false),
+  onTrackForHealing: boolean("on_track_for_healing").default(false), // Predictive indicator
+  
+  // Clinical status at this timepoint
+  woundCondition: varchar("wound_condition", { length: 100 }), // improving, stable, deteriorating
+  infectionStatus: varchar("infection_status", { length: 100 }),
+  painLevel: integer("pain_level"), // 0-10 scale
+  functionalStatus: jsonb("functional_status"), // ADL scores, mobility metrics
+  
+  // Treatment interventions during this period
+  conservativeTreatments: jsonb("conservative_treatments"), // Active conservative care
+  productApplications: jsonb("product_applications"), // Products applied in this period
+  treatmentChanges: jsonb("treatment_changes"), // Any treatment modifications
+  
+  // Predictive analytics fields
+  projectedHealingDate: timestamp("projected_healing_date"), // ML/statistical projection
+  healingProbability: decimal("healing_probability", { precision: 5, scale: 2 }), // 0-100 percentage
+  riskFactors: jsonb("risk_factors"), // Identified risk factors for delayed healing
+  
+  // Quality and data integrity
+  measurementQuality: integer("measurement_quality"), // 0-100 quality score
+  dataCompleteness: decimal("data_completeness", { precision: 5, scale: 2 }), // percentage
+  outlierFlag: boolean("outlier_flag").default(false),
+  outlierReason: varchar("outlier_reason", { length: 255 }),
+  
+  // Metadata
+  calculatedAt: timestamp("calculated_at").defaultNow(),
+  sourceEpisodeData: jsonb("source_episode_data"), // References to source measurements
+  
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+}, (table) => [
+  // Unique constraints for data integrity  
+  uniqueIndex("unique_episode_trend_date").on(table.episodeId, table.trendDate),
+  
+  // Critical performance indexes for dashboard queries
+  index("idx_healing_trends_episode_observation").on(table.episodeId, table.trendDate), // Maps to (episode_id, observation_date)
+  index("idx_healing_trends_tenant_observation").on(table.tenantId, table.trendDate), // Maps to (tenant_id, observation_date)
+  index("idx_healing_trends_tenant_date").on(table.tenantId, table.trendDate),
+  index("idx_healing_trends_episode_day").on(table.episodeId, table.daysSinceEpisodeStart),
+  index("idx_healing_trends_healing_velocity").on(table.healingVelocity),
+  index("idx_healing_trends_compliance").on(table.meetsTwentyPercentReduction),
+  index("idx_healing_trends_condition").on(table.woundCondition),
+  
+  // Data validation constraints
+  check("check_healing_probability_valid", sql`${table.healingProbability} IS NULL OR (${table.healingProbability} >= 0 AND ${table.healingProbability} <= 100)`),
+  check("check_pain_level_valid", sql`${table.painLevel} IS NULL OR (${table.painLevel} >= 0 AND ${table.painLevel} <= 10)`),
+  check("check_wound_condition_enum", sql`${table.woundCondition} IS NULL OR ${table.woundCondition} IN ('improving', 'stable', 'deteriorating')`),
+  check("check_measurement_quality_range", sql`${table.measurementQuality} IS NULL OR (${table.measurementQuality} >= 0 AND ${table.measurementQuality} <= 100)`),
+  check("check_data_completeness_valid", sql`${table.dataCompleteness} IS NULL OR (${table.dataCompleteness} >= 0 AND ${table.dataCompleteness} <= 100)`),
+  check("check_days_since_start_non_negative", sql`${table.daysSinceEpisodeStart} >= 0`),
+  check("check_week_number_positive", sql`${table.weekNumber} > 0`),
+]);
+
+// Performance Metrics - Provider and system-wide KPIs
+export const performanceMetrics = pgTable("performance_metrics", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: uuid("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
+  
+  // Metric scope and timeframe
+  metricDate: timestamp("metric_date").notNull(),
+  metricPeriod: varchar("metric_period", { length: 20 }).notNull(), // daily, weekly, monthly, quarterly, yearly
+  metricScope: varchar("metric_scope", { length: 20 }).notNull(), // provider, tenant, system
+  providerId: varchar("provider_id").references(() => users.id, { onDelete: "cascade" }), // Null for tenant/system scope
+  
+  // Clinical performance KPIs
+  healingSuccessRate: decimal("healing_success_rate", { precision: 5, scale: 2 }), // percentage
+  averageTimeToHealing: decimal("average_time_to_healing", { precision: 8, scale: 2 }), // days
+  patientSatisfactionScore: decimal("patient_satisfaction_score", { precision: 3, scale: 1 }), // 0-10 scale
+  adverseEventRate: decimal("adverse_event_rate", { precision: 5, scale: 2 }), // percentage
+  
+  // Medicare compliance KPIs
+  medicareComplianceRate: decimal("medicare_compliance_rate", { precision: 5, scale: 2 }), // percentage
+  documentationComplianceRate: decimal("documentation_compliance_rate", { precision: 5, scale: 2 }), // percentage
+  measurementComplianceRate: decimal("measurement_compliance_rate", { precision: 5, scale: 2 }), // percentage
+  conservativeCareComplianceRate: decimal("conservative_care_compliance_rate", { precision: 5, scale: 2 }), // percentage
+  
+  // Productivity KPIs
+  patientsPerDay: decimal("patients_per_day", { precision: 6, scale: 2 }),
+  encountersPerDay: decimal("encounters_per_day", { precision: 6, scale: 2 }),
+  documentsGeneratedPerDay: decimal("documents_generated_per_day", { precision: 6, scale: 2 }),
+  averageEncounterDuration: decimal("average_encounter_duration", { precision: 6, scale: 2 }), // minutes
+  
+  // Quality KPIs
+  dataQualityScore: integer("data_quality_score"), // 0-100
+  diagnosticAccuracyRate: decimal("diagnostic_accuracy_rate", { precision: 5, scale: 2 }), // percentage
+  treatmentEffectivenessScore: decimal("treatment_effectiveness_score", { precision: 5, scale: 2 }), // 0-100
+  protocolAdherenceRate: decimal("protocol_adherence_rate", { precision: 5, scale: 2 }), // percentage
+  
+  // Cost efficiency KPIs
+  costPerEpisode: decimal("cost_per_episode", { precision: 10, scale: 2 }),
+  costPerHealedCm: decimal("cost_per_healed_cm", { precision: 10, scale: 4 }),
+  reimbursementCaptureRate: decimal("reimbursement_capture_rate", { precision: 5, scale: 2 }), // percentage
+  operationalEfficiencyScore: decimal("operational_efficiency_score", { precision: 5, scale: 2 }), // 0-100
+  
+  // Utilization KPIs
+  productUtilizationRate: decimal("product_utilization_rate", { precision: 5, scale: 2 }), // percentage
+  wastageRate: decimal("wastage_rate", { precision: 5, scale: 2 }), // percentage
+  inventoryTurnoverRate: decimal("inventory_turnover_rate", { precision: 6, scale: 2 }),
+  
+  // Benchmarking and targets
+  targetHealingSuccessRate: decimal("target_healing_success_rate", { precision: 5, scale: 2 }), // percentage
+  targetMedicareCompliance: decimal("target_medicare_compliance", { precision: 5, scale: 2 }), // percentage
+  targetCostPerEpisode: decimal("target_cost_per_episode", { precision: 10, scale: 2 }),
+  performanceVersusTarget: decimal("performance_versus_target", { precision: 5, scale: 2 }), // percentage deviation
+  
+  // Risk indicators
+  highRiskPatientCount: integer("high_risk_patient_count").default(0),
+  overdueMeasurementCount: integer("overdue_measurement_count").default(0),
+  complianceViolationCount: integer("compliance_violation_count").default(0),
+  qualityAlertCount: integer("quality_alert_count").default(0),
+  
+  // Metadata and calculation audit
+  calculationMethod: varchar("calculation_method", { length: 50 }).default("standard"),
+  calculationVersion: varchar("calculation_version", { length: 20 }).default("1.0"),
+  calculatedAt: timestamp("calculated_at").defaultNow(),
+  calculatedBy: varchar("calculated_by").references(() => users.id, { onDelete: "set null" }),
+  
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+}, (table) => [
+  // Unique constraints for data integrity
+  uniqueIndex("unique_tenant_provider_metric_period").on(table.tenantId, table.providerId, table.metricDate, table.metricPeriod),
+  
+  // Critical performance indexes for dashboard queries
+  index("idx_performance_metrics_tenant_provider_period").on(table.tenantId, table.providerId, table.metricPeriod), // Maps to (tenant_id, provider_id, metric_period, metric_type equivalent)
+  index("idx_performance_metrics_tenant_date").on(table.tenantId, table.metricDate),
+  index("idx_performance_metrics_provider").on(table.providerId, table.metricDate),
+  index("idx_performance_metrics_scope").on(table.metricScope, table.metricDate),
+  index("idx_performance_metrics_compliance").on(table.medicareComplianceRate),
+  index("idx_performance_metrics_healing").on(table.healingSuccessRate),
+  index("idx_performance_metrics_period_scope").on(table.metricPeriod, table.metricScope),
+  
+  // Comprehensive validation constraints
+  check("check_performance_percentages_valid", sql`
+    (${table.healingSuccessRate} IS NULL OR (${table.healingSuccessRate} >= 0 AND ${table.healingSuccessRate} <= 100)) AND
+    (${table.medicareComplianceRate} IS NULL OR (${table.medicareComplianceRate} >= 0 AND ${table.medicareComplianceRate} <= 100)) AND
+    (${table.documentationComplianceRate} IS NULL OR (${table.documentationComplianceRate} >= 0 AND ${table.documentationComplianceRate} <= 100)) AND
+    (${table.measurementComplianceRate} IS NULL OR (${table.measurementComplianceRate} >= 0 AND ${table.measurementComplianceRate} <= 100)) AND
+    (${table.conservativeCareComplianceRate} IS NULL OR (${table.conservativeCareComplianceRate} >= 0 AND ${table.conservativeCareComplianceRate} <= 100))
+  `),
+  check("check_metric_period_enum", sql`${table.metricPeriod} IN ('daily', 'weekly', 'monthly', 'quarterly', 'yearly')`),
+  check("check_metric_scope_enum", sql`${table.metricScope} IN ('provider', 'tenant', 'system')`),
+  check("check_data_quality_score_range", sql`${table.dataQualityScore} IS NULL OR (${table.dataQualityScore} >= 0 AND ${table.dataQualityScore} <= 100)`),
+  check("check_satisfaction_score_range", sql`${table.patientSatisfactionScore} IS NULL OR (${table.patientSatisfactionScore} >= 0 AND ${table.patientSatisfactionScore} <= 10)`),
+  check("check_count_fields_non_negative", sql`
+    ${table.highRiskPatientCount} >= 0 AND ${table.overdueMeasurementCount} >= 0 AND 
+    ${table.complianceViolationCount} >= 0 AND ${table.qualityAlertCount} >= 0
+  `),
+]);
+
+// Cost Analytics - Episode costs, reimbursement tracking, efficiency metrics
+export const costAnalytics = pgTable("cost_analytics", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: uuid("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
+  episodeId: uuid("episode_id").references(() => episodes.id, { onDelete: "cascade" }), // Null for aggregated data
+  patientId: uuid("patient_id").references(() => patients.id, { onDelete: "cascade" }), // Null for aggregated data
+  
+  // Temporal tracking
+  analysisDate: timestamp("analysis_date").notNull(),
+  analysisPeriod: varchar("analysis_period", { length: 20 }).notNull(), // episode, monthly, quarterly, yearly
+  costPeriodStart: timestamp("cost_period_start").notNull(),
+  costPeriodEnd: timestamp("cost_period_end").notNull(),
+  
+  // Direct clinical costs
+  productCosts: decimal("product_costs", { precision: 12, scale: 2 }).default('0.00'), // Skin substitutes, biologics
+  laborCosts: decimal("labor_costs", { precision: 12, scale: 2 }).default('0.00'), // Clinical staff time
+  facilityOverheadCosts: decimal("facility_overhead_costs", { precision: 12, scale: 2 }).default('0.00'),
+  diagnosticCosts: decimal("diagnostic_costs", { precision: 12, scale: 2 }).default('0.00'), // Lab work, imaging
+  supplyCosts: decimal("supply_costs", { precision: 12, scale: 2 }).default('0.00'), // Dressings, basic supplies
+  
+  // Administrative costs
+  documentationCosts: decimal("documentation_costs", { precision: 12, scale: 2 }).default('0.00'),
+  complianceCosts: decimal("compliance_costs", { precision: 12, scale: 2 }).default('0.00'),
+  administrationCosts: decimal("administration_costs", { precision: 12, scale: 2 }).default('0.00'),
+  
+  // Total cost calculations
+  totalDirectCosts: decimal("total_direct_costs", { precision: 12, scale: 2 }).notNull(),
+  totalIndirectCosts: decimal("total_indirect_costs", { precision: 12, scale: 2 }).default('0.00'),
+  totalCosts: decimal("total_costs", { precision: 12, scale: 2 }).notNull(),
+  
+  // Reimbursement tracking
+  expectedMedicareReimbursement: decimal("expected_medicare_reimbursement", { precision: 12, scale: 2 }),
+  actualMedicareReimbursement: decimal("actual_medicare_reimbursement", { precision: 12, scale: 2 }),
+  secondaryInsuranceReimbursement: decimal("secondary_insurance_reimbursement", { precision: 12, scale: 2 }),
+  patientResponsibility: decimal("patient_responsibility", { precision: 12, scale: 2 }),
+  totalReimbursement: decimal("total_reimbursement", { precision: 12, scale: 2 }),
+  
+  // Financial performance metrics
+  netMargin: decimal("net_margin", { precision: 12, scale: 2 }), // Total reimbursement - Total costs
+  marginPercentage: decimal("margin_percentage", { precision: 5, scale: 2 }), // percentage
+  reimbursementCaptureRate: decimal("reimbursement_capture_rate", { precision: 5, scale: 2 }), // percentage
+  
+  // Efficiency metrics
+  costPerHealedArea: decimal("cost_per_healed_area", { precision: 10, scale: 4 }), // Cost per cm² healed
+  costPerHealingDay: decimal("cost_per_healing_day", { precision: 10, scale: 2 }), // Daily cost
+  costEfficiencyScore: decimal("cost_efficiency_score", { precision: 5, scale: 2 }), // 0-100 relative score
+  
+  // Volume and utilization data
+  encounterCount: integer("encounter_count").default(0),
+  productApplicationCount: integer("product_application_count").default(0),
+  totalHealedArea: decimal("total_healed_area", { precision: 10, scale: 4 }), // cm²
+  episodeDurationDays: integer("episode_duration_days"),
+  
+  // Product-specific cost analytics
+  highCostProductsCost: decimal("high_cost_products_cost", { precision: 12, scale: 2 }).default('0.00'),
+  lowCostProductsCost: decimal("low_cost_products_cost", { precision: 12, scale: 2 }).default('0.00'),
+  productWastageCost: decimal("product_wastage_cost", { precision: 12, scale: 2 }).default('0.00'),
+  inventoryCarryingCost: decimal("inventory_carrying_cost", { precision: 12, scale: 2 }).default('0.00'),
+  
+  // Benchmarking and variance analysis
+  benchmarkCostPerEpisode: decimal("benchmark_cost_per_episode", { precision: 12, scale: 2 }),
+  costVarianceFromBenchmark: decimal("cost_variance_from_benchmark", { precision: 12, scale: 2 }),
+  variancePercentage: decimal("variance_percentage", { precision: 5, scale: 2 }),
+  
+  // Quality-adjusted cost metrics
+  qualityAdjustedCost: decimal("quality_adjusted_cost", { precision: 12, scale: 2 }),
+  costPerQualityPoint: decimal("cost_per_quality_point", { precision: 10, scale: 2 }),
+  
+  // Risk and audit fields
+  costAccuracyScore: integer("cost_accuracy_score").default(100), // 0-100
+  auditFlag: boolean("audit_flag").default(false),
+  auditReason: varchar("audit_reason", { length: 255 }),
+  
+  // Metadata and calculation tracking
+  calculationMethod: varchar("calculation_method", { length: 50 }).default("standard"),
+  calculationVersion: varchar("calculation_version", { length: 20 }).default("1.0"),
+  calculatedAt: timestamp("calculated_at").defaultNow(),
+  calculatedBy: varchar("calculated_by").references(() => users.id, { onDelete: "set null" }),
+  
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+}, (table) => [
+  // Critical performance indexes for dashboard queries
+  index("idx_cost_analytics_tenant_episode_period").on(table.tenantId, table.episodeId, table.costPeriodStart), // Maps to (tenant_id, episode_id, period_start_date)
+  index("idx_cost_analytics_tenant_date").on(table.tenantId, table.analysisDate),
+  index("idx_cost_analytics_episode").on(table.episodeId),
+  index("idx_cost_analytics_period").on(table.analysisPeriod, table.analysisDate),
+  index("idx_cost_analytics_total_cost").on(table.totalCosts),
+  index("idx_cost_analytics_margin").on(table.marginPercentage),
+  index("idx_cost_analytics_efficiency").on(table.costEfficiencyScore),
+  index("idx_cost_analytics_period_dates").on(table.costPeriodStart, table.costPeriodEnd),
+  
+  // Data integrity and validation constraints
+  check("check_cost_values_non_negative", sql`
+    ${table.totalDirectCosts} >= 0 AND 
+    ${table.totalIndirectCosts} >= 0 AND 
+    ${table.totalCosts} >= 0 AND
+    ${table.productCosts} >= 0 AND
+    ${table.laborCosts} >= 0 AND
+    ${table.facilityOverheadCosts} >= 0
+  `),
+  check("check_cost_period_dates_valid", sql`${table.costPeriodStart} <= ${table.costPeriodEnd}`),
+  check("check_analysis_period_enum", sql`${table.analysisPeriod} IN ('episode', 'monthly', 'quarterly', 'yearly')`),
+  check("check_cost_accuracy_score_valid", sql`${table.costAccuracyScore} >= 0 AND ${table.costAccuracyScore} <= 100`),
+  check("check_percentage_ranges_valid", sql`
+    (${table.marginPercentage} IS NULL OR (${table.marginPercentage} >= -100 AND ${table.marginPercentage} <= 100)) AND
+    (${table.reimbursementCaptureRate} IS NULL OR (${table.reimbursementCaptureRate} >= 0 AND ${table.reimbursementCaptureRate} <= 100)) AND
+    (${table.costEfficiencyScore} IS NULL OR (${table.costEfficiencyScore} >= 0 AND ${table.costEfficiencyScore} <= 100))
+  `),
+  check("check_count_fields_non_negative", sql`
+    ${table.encounterCount} >= 0 AND ${table.productApplicationCount} >= 0 AND
+    (${table.episodeDurationDays} IS NULL OR ${table.episodeDurationDays} >= 0)
+  `),
+]);
+
+// Compliance Tracking - Medicare LCD adherence and audit trail metrics
+export const complianceTracking = pgTable("compliance_tracking", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: uuid("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
+  episodeId: uuid("episode_id").references(() => episodes.id, { onDelete: "cascade" }), // Null for aggregated tracking
+  encounterId: uuid("encounter_id").references(() => encounters.id, { onDelete: "cascade" }), // Null for episode-level tracking
+  eligibilityCheckId: uuid("eligibility_check_id").references(() => eligibilityChecks.id, { onDelete: "cascade" }),
+  
+  // Compliance assessment details
+  assessmentDate: timestamp("assessment_date").notNull(),
+  assessmentType: varchar("assessment_type", { length: 50 }).notNull(), // episode, encounter, product_application, documentation
+  complianceScope: varchar("compliance_scope", { length: 50 }).notNull(), // medicare_lcd, internal_protocol, regulatory
+  
+  // LCD policy reference
+  lcdPolicyId: uuid("lcd_policy_id").references(() => policySources.id, { onDelete: "set null" }),
+  lcdId: varchar("lcd_id", { length: 50 }),
+  macRegion: varchar("mac_region", { length: 50 }),
+  
+  // Medicare LCD compliance requirements tracking
+  medicareRequirements: jsonb("medicare_requirements").notNull(), // Required elements from LCD
+  metRequirements: jsonb("met_requirements").notNull(), // Requirements that have been satisfied
+  unmetRequirements: jsonb("unmet_requirements").notNull(), // Outstanding requirements
+  
+  // Specific compliance checks
+  appropriateDiagnosisCompliance: boolean("appropriate_diagnosis_compliance").default(false),
+  conservativeCareCompliance: boolean("conservative_care_compliance").default(false),
+  documentationCompliance: boolean("documentation_compliance").default(false),
+  measurementCompliance: boolean("measurement_compliance").default(false),
+  twentyPercentReductionCompliance: boolean("twenty_percent_reduction_compliance").default(false),
+  
+  // Compliance scoring
+  overallComplianceScore: integer("overall_compliance_score"), // 0-100
+  criticalViolationCount: integer("critical_violation_count").default(0),
+  minorViolationCount: integer("minor_violation_count").default(0),
+  warningCount: integer("warning_count").default(0),
+  
+  // Conservative care compliance tracking
+  conservativeCareStartDate: timestamp("conservative_care_start_date"),
+  conservativeCareDurationDays: integer("conservative_care_duration_days"),
+  requiredConservativeCareDays: integer("required_conservative_care_days").default(30),
+  conservativeCareTypes: jsonb("conservative_care_types"), // Array of conservative treatments
+  conservativeCareDocumentation: jsonb("conservative_care_documentation"), // Evidence of conservative care
+  
+  // Measurement compliance tracking
+  baselineMeasurementDate: timestamp("baseline_measurement_date"),
+  fourWeekMeasurementDate: timestamp("four_week_measurement_date"),
+  lastMeasurementDate: timestamp("last_measurement_date"),
+  measurementFrequencyCompliance: boolean("measurement_frequency_compliance").default(false),
+  measurementQualityScore: integer("measurement_quality_score"), // 0-100
+  
+  // Documentation compliance tracking
+  requiredDocumentationElements: jsonb("required_documentation_elements"),
+  presentDocumentationElements: jsonb("present_documentation_elements"),
+  missingDocumentationElements: jsonb("missing_documentation_elements"),
+  documentationCompletenessScore: integer("documentation_completeness_score"), // 0-100
+  
+  // Product application compliance (for skin substitutes)
+  productApplicationCompliance: boolean("product_application_compliance").default(false),
+  priorAuthorizationCompliance: boolean("prior_authorization_compliance").default(false),
+  frequencyLimitCompliance: boolean("frequency_limit_compliance").default(false),
+  dosageLimitCompliance: boolean("dosage_limit_compliance").default(false),
+  
+  // Risk and alert flags
+  complianceRiskLevel: varchar("compliance_risk_level", { length: 20 }), // low, moderate, high, critical
+  auditTriggerFlag: boolean("audit_trigger_flag").default(false),
+  interventionRequired: boolean("intervention_required").default(false),
+  deadlineForCompliance: timestamp("deadline_for_compliance"),
+  
+  // Compliance gaps and action items
+  identifiedGaps: jsonb("identified_gaps"), // Array of compliance gaps
+  correctiveActions: jsonb("corrective_actions"), // Array of required actions
+  progressNotes: jsonb("progress_notes"), // Array of progress updates
+  
+  // Audit trail and approvals
+  reviewStatus: varchar("review_status", { length: 20 }).default("pending"), // pending, reviewed, approved, flagged
+  reviewedBy: varchar("reviewed_by").references(() => users.id, { onDelete: "set null" }),
+  reviewedAt: timestamp("reviewed_at"),
+  reviewComments: text("review_comments"),
+  approvalRequired: boolean("approval_required").default(false),
+  
+  // Metadata and tracking
+  assessmentVersion: varchar("assessment_version", { length: 20 }).default("1.0"),
+  automatedAssessment: boolean("automated_assessment").default(false),
+  manualOverride: boolean("manual_override").default(false),
+  overrideReason: text("override_reason"),
+  
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+}, (table) => [
+  // Critical performance indexes for dashboard queries  
+  index("idx_compliance_tracking_tenant_status_date").on(table.tenantId, table.reviewStatus, table.assessmentDate), // Maps to (tenant_id, status, observed_date)
+  index("idx_compliance_tracking_tenant_date").on(table.tenantId, table.assessmentDate),
+  index("idx_compliance_tracking_episode").on(table.episodeId),
+  index("idx_compliance_tracking_eligibility").on(table.eligibilityCheckId),
+  index("idx_compliance_tracking_score").on(table.overallComplianceScore),
+  index("idx_compliance_tracking_risk").on(table.complianceRiskLevel),
+  index("idx_compliance_tracking_lcd").on(table.lcdPolicyId, table.macRegion),
+  index("idx_compliance_tracking_violations").on(table.criticalViolationCount, table.minorViolationCount),
+  index("idx_compliance_tracking_review").on(table.reviewStatus, table.assessmentDate),
+  index("idx_compliance_tracking_assessment_type").on(table.assessmentType, table.complianceScope),
+  
+  // Data integrity and validation constraints
+  check("check_compliance_score_valid", sql`${table.overallComplianceScore} IS NULL OR (${table.overallComplianceScore} >= 0 AND ${table.overallComplianceScore} <= 100)`),
+  check("check_measurement_quality_score_valid", sql`${table.measurementQualityScore} IS NULL OR (${table.measurementQualityScore} >= 0 AND ${table.measurementQualityScore} <= 100)`),
+  check("check_documentation_completeness_score_valid", sql`${table.documentationCompletenessScore} IS NULL OR (${table.documentationCompletenessScore} >= 0 AND ${table.documentationCompletenessScore} <= 100)`),
+  check("check_assessment_type_enum", sql`${table.assessmentType} IN ('episode', 'encounter', 'product_application', 'documentation')`),
+  check("check_compliance_scope_enum", sql`${table.complianceScope} IN ('medicare_lcd', 'internal_protocol', 'regulatory')`),
+  check("check_compliance_risk_level_enum", sql`${table.complianceRiskLevel} IS NULL OR ${table.complianceRiskLevel} IN ('low', 'moderate', 'high', 'critical')`),
+  check("check_review_status_enum", sql`${table.reviewStatus} IN ('pending', 'reviewed', 'approved', 'flagged')`),
+  check("check_violation_counts_non_negative", sql`
+    ${table.criticalViolationCount} >= 0 AND ${table.minorViolationCount} >= 0 AND ${table.warningCount} >= 0 AND
+    (${table.conservativeCareDurationDays} IS NULL OR ${table.conservativeCareDurationDays} >= 0) AND
+    ${table.requiredConservativeCareDays} >= 0
+  `),
+]);
+
+// ================================================================================
 // PHASE 3.2 ZOD SCHEMAS FOR VALIDATION
 // ================================================================================
 
@@ -2170,6 +2672,282 @@ export const insertProductCostTrackingSchema = createInsertSchema(productCostTra
   });
 
 // ================================================================================
+// ANALYTICS ZOD SCHEMAS FOR VALIDATION
+// ================================================================================
+
+export const insertAnalyticsSnapshotSchema = createInsertSchema(analyticsSnapshots)
+  .omit({ id: true, createdAt: true, updatedAt: true })
+  .extend({
+    snapshotDate: z.union([z.date(), z.string()]).pipe(z.coerce.date()),
+    periodStartDate: z.union([z.date(), z.string()]).pipe(z.coerce.date()),
+    periodEndDate: z.union([z.date(), z.string()]).pipe(z.coerce.date()),
+    calculatedAt: z.union([z.date(), z.string(), z.null()]).pipe(z.coerce.date().nullable()).optional(),
+    aggregationPeriod: z.enum(['daily', 'weekly', 'monthly', 'quarterly']),
+    // Decimal field validation for financial data
+    totalProductCost: z.string().optional().refine((val) => !val || parseFloat(val) >= 0, {
+      message: "Total product cost must be non-negative"
+    }),
+    averageCostPerApplication: z.string().optional().refine((val) => !val || parseFloat(val) >= 0, {
+      message: "Average cost per application must be non-negative"
+    }),
+    averageHealingVelocity: z.string().optional().refine((val) => !val || parseFloat(val) >= 0, {
+      message: "Average healing velocity must be non-negative"
+    }),
+    averageEpisodeDuration: z.string().optional().refine((val) => !val || parseFloat(val) >= 0, {
+      message: "Average episode duration must be non-negative"
+    }),
+    // Percentage validations
+    medicareComplianceRate: z.string().optional().refine((val) => {
+      if (!val) return true;
+      const num = parseFloat(val);
+      return num >= 0 && num <= 100;
+    }, {
+      message: "Medicare compliance rate must be between 0 and 100"
+    }),
+    productWastageRate: z.string().optional().refine((val) => {
+      if (!val) return true;
+      const num = parseFloat(val);
+      return num >= 0 && num <= 100;
+    }, {
+      message: "Product wastage rate must be between 0 and 100"
+    }),
+    // Score validations
+    dataQualityScore: z.number().int().min(0).max(100).optional(),
+    // Count field validations
+    totalPatients: z.number().int().min(0).default(0),
+    newPatients: z.number().int().min(0).default(0),
+    activeEpisodes: z.number().int().min(0).default(0),
+    newEpisodes: z.number().int().min(0).default(0),
+    completedEpisodes: z.number().int().min(0).default(0),
+    totalEncounters: z.number().int().min(0).default(0)
+  })
+  .refine((data) => {
+    // Validate period date constraints to mirror DB check constraint
+    const periodStart = new Date(data.periodStartDate);
+    const snapshotDate = new Date(data.snapshotDate);
+    const periodEnd = new Date(data.periodEndDate);
+    return periodStart <= snapshotDate && snapshotDate <= periodEnd;
+  }, {
+    message: "Snapshot date must be within the period range (periodStartDate <= snapshotDate <= periodEndDate)",
+    path: ["snapshotDate"]
+  })
+  .refine((data) => {
+    // Validate period start <= period end
+    const periodStart = new Date(data.periodStartDate);
+    const periodEnd = new Date(data.periodEndDate);
+    return periodStart <= periodEnd;
+  }, {
+    message: "Period start date must be before or equal to period end date",
+    path: ["periodStartDate"]
+  });
+
+export const insertHealingTrendSchema = createInsertSchema(healingTrends)
+  .omit({ id: true, createdAt: true, updatedAt: true })
+  .extend({
+    trendDate: z.union([z.date(), z.string()]).pipe(z.coerce.date()),
+    projectedHealingDate: z.union([z.date(), z.string(), z.null()]).pipe(z.coerce.date().nullable()).optional(),
+    calculatedAt: z.union([z.date(), z.string(), z.null()]).pipe(z.coerce.date().nullable()).optional(),
+    daysSinceEpisodeStart: z.number().int().min(0),
+    weekNumber: z.number().int().min(1),
+    // Decimal validations
+    currentWoundArea: z.string().optional().refine((val) => !val || parseFloat(val) >= 0, {
+      message: "Current wound area must be non-negative"
+    }),
+    baselineWoundArea: z.string().optional().refine((val) => !val || parseFloat(val) >= 0, {
+      message: "Baseline wound area must be non-negative"
+    }),
+    healingVelocity: z.string().optional().refine((val) => !val || parseFloat(val) >= 0, {
+      message: "Healing velocity must be non-negative"
+    }),
+    // Percentage validations
+    areaReductionFromBaseline: z.string().optional().refine((val) => {
+      if (!val) return true;
+      const num = parseFloat(val);
+      return num >= -100 && num <= 100;
+    }, {
+      message: "Area reduction must be between -100% and 100%"
+    }),
+    healingProbability: z.string().optional().refine((val) => {
+      if (!val) return true;
+      const num = parseFloat(val);
+      return num >= 0 && num <= 100;
+    }, {
+      message: "Healing probability must be between 0 and 100"
+    }),
+    dataCompleteness: z.string().optional().refine((val) => {
+      if (!val) return true;
+      const num = parseFloat(val);
+      return num >= 0 && num <= 100;
+    }, {
+      message: "Data completeness must be between 0 and 100"
+    }),
+    // Score validations
+    painLevel: z.number().int().min(0).max(10).optional(),
+    measurementQuality: z.number().int().min(0).max(100).optional(),
+    woundCondition: z.enum(['improving', 'stable', 'deteriorating']).optional()
+  });
+
+export const insertPerformanceMetricSchema = createInsertSchema(performanceMetrics)
+  .omit({ id: true, createdAt: true, updatedAt: true })
+  .extend({
+    metricDate: z.union([z.date(), z.string()]).pipe(z.coerce.date()),
+    calculatedAt: z.union([z.date(), z.string(), z.null()]).pipe(z.coerce.date().nullable()).optional(),
+    metricPeriod: z.enum(['daily', 'weekly', 'monthly', 'quarterly', 'yearly']),
+    metricScope: z.enum(['provider', 'tenant', 'system']),
+    // Percentage validations
+    healingSuccessRate: z.string().optional().refine((val) => {
+      if (!val) return true;
+      const num = parseFloat(val);
+      return num >= 0 && num <= 100;
+    }, {
+      message: "Healing success rate must be between 0 and 100"
+    }),
+    medicareComplianceRate: z.string().optional().refine((val) => {
+      if (!val) return true;
+      const num = parseFloat(val);
+      return num >= 0 && num <= 100;
+    }, {
+      message: "Medicare compliance rate must be between 0 and 100"
+    }),
+    documentationComplianceRate: z.string().optional().refine((val) => {
+      if (!val) return true;
+      const num = parseFloat(val);
+      return num >= 0 && num <= 100;
+    }, {
+      message: "Documentation compliance rate must be between 0 and 100"
+    }),
+    reimbursementCaptureRate: z.string().optional().refine((val) => {
+      if (!val) return true;
+      const num = parseFloat(val);
+      return num >= 0 && num <= 100;
+    }, {
+      message: "Reimbursement capture rate must be between 0 and 100"
+    }),
+    // Decimal validations
+    averageTimeToHealing: z.string().optional().refine((val) => !val || parseFloat(val) >= 0, {
+      message: "Average time to healing must be non-negative"
+    }),
+    costPerEpisode: z.string().optional().refine((val) => !val || parseFloat(val) >= 0, {
+      message: "Cost per episode must be non-negative"
+    }),
+    targetCostPerEpisode: z.string().optional().refine((val) => !val || parseFloat(val) >= 0, {
+      message: "Target cost per episode must be non-negative"
+    }),
+    // Score validations
+    patientSatisfactionScore: z.string().optional().refine((val) => {
+      if (!val) return true;
+      const num = parseFloat(val);
+      return num >= 0 && num <= 10;
+    }, {
+      message: "Patient satisfaction score must be between 0 and 10"
+    }),
+    dataQualityScore: z.number().int().min(0).max(100).optional(),
+    treatmentEffectivenessScore: z.string().optional().refine((val) => {
+      if (!val) return true;
+      const num = parseFloat(val);
+      return num >= 0 && num <= 100;
+    }, {
+      message: "Treatment effectiveness score must be between 0 and 100"
+    })
+  });
+
+export const insertCostAnalyticSchema = createInsertSchema(costAnalytics)
+  .omit({ id: true, createdAt: true, updatedAt: true })
+  .extend({
+    analysisDate: z.union([z.date(), z.string()]).pipe(z.coerce.date()),
+    costPeriodStart: z.union([z.date(), z.string()]).pipe(z.coerce.date()),
+    costPeriodEnd: z.union([z.date(), z.string()]).pipe(z.coerce.date()),
+    calculatedAt: z.union([z.date(), z.string(), z.null()]).pipe(z.coerce.date().nullable()).optional(),
+    analysisPeriod: z.enum(['episode', 'monthly', 'quarterly', 'yearly']),
+    // Cost validations - all must be non-negative
+    productCosts: z.string().refine((val) => parseFloat(val) >= 0, {
+      message: "Product costs must be non-negative"
+    }),
+    laborCosts: z.string().refine((val) => parseFloat(val) >= 0, {
+      message: "Labor costs must be non-negative"
+    }),
+    totalDirectCosts: z.string().refine((val) => parseFloat(val) >= 0, {
+      message: "Total direct costs must be non-negative"
+    }),
+    totalIndirectCosts: z.string().optional().refine((val) => !val || parseFloat(val) >= 0, {
+      message: "Total indirect costs must be non-negative"
+    }),
+    totalCosts: z.string().refine((val) => parseFloat(val) >= 0, {
+      message: "Total costs must be non-negative"
+    }),
+    // Financial performance validations
+    expectedMedicareReimbursement: z.string().optional().refine((val) => !val || parseFloat(val) >= 0, {
+      message: "Expected Medicare reimbursement must be non-negative"
+    }),
+    totalReimbursement: z.string().optional().refine((val) => !val || parseFloat(val) >= 0, {
+      message: "Total reimbursement must be non-negative"
+    }),
+    // Percentage validations
+    marginPercentage: z.string().optional().refine((val) => {
+      if (!val) return true;
+      const num = parseFloat(val);
+      return num >= -100 && num <= 100;
+    }, {
+      message: "Margin percentage must be between -100% and 100%"
+    }),
+    reimbursementCaptureRate: z.string().optional().refine((val) => {
+      if (!val) return true;
+      const num = parseFloat(val);
+      return num >= 0 && num <= 100;
+    }, {
+      message: "Reimbursement capture rate must be between 0 and 100"
+    }),
+    // Score validations
+    costEfficiencyScore: z.string().optional().refine((val) => {
+      if (!val) return true;
+      const num = parseFloat(val);
+      return num >= 0 && num <= 100;
+    }, {
+      message: "Cost efficiency score must be between 0 and 100"
+    }),
+    costAccuracyScore: z.number().int().min(0).max(100).default(100),
+    episodeDurationDays: z.number().int().min(0).optional(),
+    // Count field validations
+    encounterCount: z.number().int().min(0).default(0),
+    productApplicationCount: z.number().int().min(0).default(0)
+  })
+  .refine((data) => {
+    // Validate cost period dates
+    const periodStart = new Date(data.costPeriodStart);
+    const periodEnd = new Date(data.costPeriodEnd);
+    return periodStart <= periodEnd;
+  }, {
+    message: "Cost period start date must be before or equal to cost period end date",
+    path: ["costPeriodStart"]
+  });
+
+export const insertComplianceTrackingSchema = createInsertSchema(complianceTracking)
+  .omit({ id: true, createdAt: true, updatedAt: true })
+  .extend({
+    assessmentDate: z.union([z.date(), z.string()]).pipe(z.coerce.date()),
+    conservativeCareStartDate: z.union([z.date(), z.string(), z.null()]).pipe(z.coerce.date().nullable()).optional(),
+    baselineMeasurementDate: z.union([z.date(), z.string(), z.null()]).pipe(z.coerce.date().nullable()).optional(),
+    fourWeekMeasurementDate: z.union([z.date(), z.string(), z.null()]).pipe(z.coerce.date().nullable()).optional(),
+    lastMeasurementDate: z.union([z.date(), z.string(), z.null()]).pipe(z.coerce.date().nullable()).optional(),
+    deadlineForCompliance: z.union([z.date(), z.string(), z.null()]).pipe(z.coerce.date().nullable()).optional(),
+    reviewedAt: z.union([z.date(), z.string(), z.null()]).pipe(z.coerce.date().nullable()).optional(),
+    assessmentType: z.enum(['episode', 'encounter', 'product_application', 'documentation']),
+    complianceScope: z.enum(['medicare_lcd', 'internal_protocol', 'regulatory']),
+    complianceRiskLevel: z.enum(['low', 'moderate', 'high', 'critical']).optional(),
+    reviewStatus: z.enum(['pending', 'reviewed', 'approved', 'flagged']).default('pending'),
+    // Score validations
+    overallComplianceScore: z.number().int().min(0).max(100).optional(),
+    measurementQualityScore: z.number().int().min(0).max(100).optional(),
+    documentationCompletenessScore: z.number().int().min(0).max(100).optional(),
+    // Count validations
+    criticalViolationCount: z.number().int().min(0).default(0),
+    minorViolationCount: z.number().int().min(0).default(0),
+    warningCount: z.number().int().min(0).default(0),
+    conservativeCareDurationDays: z.number().int().min(0).optional(),
+    requiredConservativeCareDays: z.number().int().min(0).default(30)
+  });
+
+// ================================================================================
 // PHASE 3.2 PRODUCT TRACKING ENUMS
 // ================================================================================
 
@@ -2328,6 +3106,33 @@ export type InsertZeroWastageDocumentation = z.infer<typeof insertZeroWastageDoc
 export type ZeroWastageDocumentation = typeof zeroWastageDocumentation.$inferSelect;
 export type InsertProductCostTracking = z.infer<typeof insertProductCostTrackingSchema>;
 export type ProductCostTracking = typeof productCostTracking.$inferSelect;
+
+// ================================================================================
+// ANALYTICS DATA MODEL TYPES
+// ================================================================================
+
+// Analytics table types
+export type InsertAnalyticsSnapshot = z.infer<typeof insertAnalyticsSnapshotSchema>;
+export type AnalyticsSnapshot = typeof analyticsSnapshots.$inferSelect;
+export type InsertHealingTrend = z.infer<typeof insertHealingTrendSchema>;
+export type HealingTrend = typeof healingTrends.$inferSelect;
+export type InsertPerformanceMetric = z.infer<typeof insertPerformanceMetricSchema>;
+export type PerformanceMetric = typeof performanceMetrics.$inferSelect;
+export type InsertCostAnalytic = z.infer<typeof insertCostAnalyticSchema>;
+export type CostAnalytic = typeof costAnalytics.$inferSelect;
+export type InsertComplianceTracking = z.infer<typeof insertComplianceTrackingSchema>;
+export type ComplianceTracking = typeof complianceTracking.$inferSelect;
+
+// Analytics enum types
+export type AggregationPeriod = 'daily' | 'weekly' | 'monthly' | 'quarterly';
+export type MetricPeriod = 'daily' | 'weekly' | 'monthly' | 'quarterly' | 'yearly';
+export type MetricScope = 'provider' | 'tenant' | 'system';
+export type AnalysisPeriod = 'episode' | 'monthly' | 'quarterly' | 'yearly';
+export type WoundCondition = 'improving' | 'stable' | 'deteriorating';
+export type AssessmentType = 'episode' | 'encounter' | 'product_application' | 'documentation';
+export type ComplianceScope = 'medicare_lcd' | 'internal_protocol' | 'regulatory';
+export type ComplianceRiskLevel = 'low' | 'moderate' | 'high' | 'critical';
+export type ReviewStatus = 'pending' | 'reviewed' | 'approved' | 'flagged';
 
 // Product tracking enum types
 export type ProductInventoryStatus = keyof typeof PRODUCT_INVENTORY_STATUS;
