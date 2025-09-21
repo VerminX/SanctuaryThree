@@ -191,6 +191,64 @@ export interface IStorage {
   // Bulk operations for performance optimization
   getAllEncountersWithPatientsByTenant(tenantId: string): Promise<Array<Encounter & { patientName: string; patientId: string; patient: { id: string; firstName: string; lastName: string; mrn: string; _decryptionFailed?: boolean }; }>>;
   getAllEpisodesWithPatientsByTenant(tenantId: string): Promise<Array<Episode & { patientName: string; patientId: string; encounterCount: number; }>>;
+
+  // ===============================================================================
+  // PHASE 5.1: DIAGNOSIS VALIDATION STORAGE OPERATIONS
+  // ===============================================================================
+  
+  // Update eligibility check with diagnosis validation results
+  updateEligibilityCheckWithDiagnosisValidation(
+    checkId: string,
+    diagnosisValidationData: {
+      primaryDiagnosis: string;
+      secondaryDiagnoses?: string[];
+      diagnosisValidationResult?: any;
+      diagnosisValidationScore?: number;
+      diagnosisValidationStatus?: string;
+      clinicalNecessityResult?: any;
+      clinicalNecessityScore?: number;
+      clinicalNecessityLevel?: string;
+      woundTypeMappingResult?: any;
+      mappedWoundType?: string;
+      woundMappingConfidence?: number;
+      diagnosisComplexityResult?: any;
+      complexityScore?: number;
+      complexityLevel?: string;
+      diagnosisRecommendationsResult?: any;
+      recommendationsCount?: number;
+      criticalRecommendationsCount?: number;
+      overallDiagnosisScore?: number;
+      diagnosisValidationTimestamp?: Date;
+      diagnosisValidationVersion?: string;
+      validationAuditTrail?: any;
+    }
+  ): Promise<EligibilityCheck>;
+
+  // Get eligibility checks with diagnosis validation results
+  getEligibilityChecksWithDiagnosisValidation(encounterId: string): Promise<EligibilityCheck[]>;
+  
+  // Get diagnosis validation results by various criteria
+  getDiagnosisValidationsByTenant(tenantId: string, limit?: number): Promise<Array<EligibilityCheck & { patientName: string; encounterDate: string }>>;
+  getDiagnosisValidationsByPatient(patientId: string): Promise<EligibilityCheck[]>;
+  getDiagnosisValidationsByComplexityLevel(tenantId: string, complexityLevel: string): Promise<EligibilityCheck[]>;
+  getDiagnosisValidationsByNecessityLevel(tenantId: string, necessityLevel: string): Promise<EligibilityCheck[]>;
+  
+  // Get failed or warning diagnosis validations for review
+  getFailedDiagnosisValidations(tenantId: string): Promise<EligibilityCheck[]>;
+  getDiagnosisValidationsWithCriticalRecommendations(tenantId: string): Promise<EligibilityCheck[]>;
+  
+  // Analytics and reporting methods
+  getDiagnosisValidationMetrics(tenantId: string, dateRange?: { start: Date; end: Date }): Promise<{
+    totalValidations: number;
+    passedValidations: number;
+    failedValidations: number;
+    averageValidationScore: number;
+    averageComplexityScore: number;
+    averageNecessityScore: number;
+    complexityDistribution: Record<string, number>;
+    necessityDistribution: Record<string, number>;
+    commonRecommendations: Array<{ recommendation: string; count: number }>;
+  }>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -973,6 +1031,256 @@ export class DatabaseStorage implements IStorage {
     );
 
     return enrichedEpisodes;
+  }
+
+  // ===============================================================================
+  // PHASE 5.1: DIAGNOSIS VALIDATION STORAGE OPERATIONS IMPLEMENTATION
+  // ===============================================================================
+
+  async updateEligibilityCheckWithDiagnosisValidation(
+    checkId: string,
+    diagnosisValidationData: {
+      primaryDiagnosis: string;
+      secondaryDiagnoses?: string[];
+      diagnosisValidationResult?: any;
+      diagnosisValidationScore?: number;
+      diagnosisValidationStatus?: string;
+      clinicalNecessityResult?: any;
+      clinicalNecessityScore?: number;
+      clinicalNecessityLevel?: string;
+      woundTypeMappingResult?: any;
+      mappedWoundType?: string;
+      woundMappingConfidence?: number;
+      diagnosisComplexityResult?: any;
+      complexityScore?: number;
+      complexityLevel?: string;
+      diagnosisRecommendationsResult?: any;
+      recommendationsCount?: number;
+      criticalRecommendationsCount?: number;
+      overallDiagnosisScore?: number;
+      diagnosisValidationTimestamp?: Date;
+      diagnosisValidationVersion?: string;
+      validationAuditTrail?: any;
+    }
+  ): Promise<EligibilityCheck> {
+    const [updatedCheck] = await db
+      .update(eligibilityChecks)
+      .set({
+        ...diagnosisValidationData,
+        diagnosisValidationTimestamp: diagnosisValidationData.diagnosisValidationTimestamp || new Date()
+      })
+      .where(eq(eligibilityChecks.id, checkId))
+      .returning();
+    return updatedCheck;
+  }
+
+  async getEligibilityChecksWithDiagnosisValidation(encounterId: string): Promise<EligibilityCheck[]> {
+    return await db
+      .select()
+      .from(eligibilityChecks)
+      .where(and(
+        eq(eligibilityChecks.encounterId, encounterId),
+        sql`${eligibilityChecks.diagnosisValidationResult} IS NOT NULL`
+      ))
+      .orderBy(desc(eligibilityChecks.createdAt));
+  }
+
+  async getDiagnosisValidationsByTenant(tenantId: string, limit: number = 50): Promise<Array<EligibilityCheck & { patientName: string; encounterDate: string }>> {
+    const { safeDecryptPatientData } = await import('./services/encryption');
+    
+    const results = await db
+      .select({
+        eligibilityCheck: eligibilityChecks,
+        patient: patients,
+        encounter: encounters
+      })
+      .from(eligibilityChecks)
+      .innerJoin(encounters, eq(eligibilityChecks.encounterId, encounters.id))
+      .innerJoin(patients, eq(encounters.patientId, patients.id))
+      .where(and(
+        eq(patients.tenantId, tenantId),
+        sql`${eligibilityChecks.diagnosisValidationResult} IS NOT NULL`
+      ))
+      .orderBy(desc(eligibilityChecks.diagnosisValidationTimestamp))
+      .limit(limit);
+
+    return results.map(row => {
+      const { patientData } = safeDecryptPatientData(row.patient);
+      return {
+        ...row.eligibilityCheck,
+        patientName: `${patientData.firstName} ${patientData.lastName}`.trim(),
+        encounterDate: row.encounter.date.toISOString().split('T')[0]
+      };
+    });
+  }
+
+  async getDiagnosisValidationsByPatient(patientId: string): Promise<EligibilityCheck[]> {
+    return await db
+      .select({ eligibilityCheck: eligibilityChecks })
+      .from(eligibilityChecks)
+      .innerJoin(encounters, eq(eligibilityChecks.encounterId, encounters.id))
+      .where(and(
+        eq(encounters.patientId, patientId),
+        sql`${eligibilityChecks.diagnosisValidationResult} IS NOT NULL`
+      ))
+      .orderBy(desc(eligibilityChecks.diagnosisValidationTimestamp))
+      .then(results => results.map(row => row.eligibilityCheck));
+  }
+
+  async getDiagnosisValidationsByComplexityLevel(tenantId: string, complexityLevel: string): Promise<EligibilityCheck[]> {
+    return await db
+      .select({ eligibilityCheck: eligibilityChecks })
+      .from(eligibilityChecks)
+      .innerJoin(encounters, eq(eligibilityChecks.encounterId, encounters.id))
+      .innerJoin(patients, eq(encounters.patientId, patients.id))
+      .where(and(
+        eq(patients.tenantId, tenantId),
+        eq(eligibilityChecks.complexityLevel, complexityLevel)
+      ))
+      .orderBy(desc(eligibilityChecks.diagnosisValidationTimestamp))
+      .then(results => results.map(row => row.eligibilityCheck));
+  }
+
+  async getDiagnosisValidationsByNecessityLevel(tenantId: string, necessityLevel: string): Promise<EligibilityCheck[]> {
+    return await db
+      .select({ eligibilityCheck: eligibilityChecks })
+      .from(eligibilityChecks)
+      .innerJoin(encounters, eq(eligibilityChecks.encounterId, encounters.id))
+      .innerJoin(patients, eq(encounters.patientId, patients.id))
+      .where(and(
+        eq(patients.tenantId, tenantId),
+        eq(eligibilityChecks.clinicalNecessityLevel, necessityLevel)
+      ))
+      .orderBy(desc(eligibilityChecks.diagnosisValidationTimestamp))
+      .then(results => results.map(row => row.eligibilityCheck));
+  }
+
+  async getFailedDiagnosisValidations(tenantId: string): Promise<EligibilityCheck[]> {
+    return await db
+      .select({ eligibilityCheck: eligibilityChecks })
+      .from(eligibilityChecks)
+      .innerJoin(encounters, eq(eligibilityChecks.encounterId, encounters.id))
+      .innerJoin(patients, eq(encounters.patientId, patients.id))
+      .where(and(
+        eq(patients.tenantId, tenantId),
+        or(
+          eq(eligibilityChecks.diagnosisValidationStatus, 'failed'),
+          eq(eligibilityChecks.diagnosisValidationStatus, 'warning')
+        )
+      ))
+      .orderBy(desc(eligibilityChecks.diagnosisValidationTimestamp))
+      .then(results => results.map(row => row.eligibilityCheck));
+  }
+
+  async getDiagnosisValidationsWithCriticalRecommendations(tenantId: string): Promise<EligibilityCheck[]> {
+    return await db
+      .select({ eligibilityCheck: eligibilityChecks })
+      .from(eligibilityChecks)
+      .innerJoin(encounters, eq(eligibilityChecks.encounterId, encounters.id))
+      .innerJoin(patients, eq(encounters.patientId, patients.id))
+      .where(and(
+        eq(patients.tenantId, tenantId),
+        sql`${eligibilityChecks.criticalRecommendationsCount} > 0`
+      ))
+      .orderBy(desc(eligibilityChecks.criticalRecommendationsCount))
+      .then(results => results.map(row => row.eligibilityCheck));
+  }
+
+  async getDiagnosisValidationMetrics(tenantId: string, dateRange?: { start: Date; end: Date }): Promise<{
+    totalValidations: number;
+    passedValidations: number;
+    failedValidations: number;
+    averageValidationScore: number;
+    averageComplexityScore: number;
+    averageNecessityScore: number;
+    complexityDistribution: Record<string, number>;
+    necessityDistribution: Record<string, number>;
+    commonRecommendations: Array<{ recommendation: string; count: number }>;
+  }> {
+    let dateCondition = sql`TRUE`;
+    if (dateRange) {
+      dateCondition = and(
+        gte(eligibilityChecks.diagnosisValidationTimestamp, dateRange.start),
+        lte(eligibilityChecks.diagnosisValidationTimestamp, dateRange.end)
+      );
+    }
+
+    // Get basic metrics
+    const basicMetrics = await db
+      .select({
+        totalValidations: sql<number>`COUNT(*)`,
+        passedValidations: sql<number>`COUNT(CASE WHEN ${eligibilityChecks.diagnosisValidationStatus} = 'passed' THEN 1 END)`,
+        failedValidations: sql<number>`COUNT(CASE WHEN ${eligibilityChecks.diagnosisValidationStatus} IN ('failed', 'warning') THEN 1 END)`,
+        averageValidationScore: sql<number>`ROUND(AVG(${eligibilityChecks.diagnosisValidationScore}::numeric), 2)`,
+        averageComplexityScore: sql<number>`ROUND(AVG(${eligibilityChecks.complexityScore}::numeric), 2)`,
+        averageNecessityScore: sql<number>`ROUND(AVG(${eligibilityChecks.clinicalNecessityScore}::numeric), 2)`
+      })
+      .from(eligibilityChecks)
+      .innerJoin(encounters, eq(eligibilityChecks.encounterId, encounters.id))
+      .innerJoin(patients, eq(encounters.patientId, patients.id))
+      .where(and(
+        eq(patients.tenantId, tenantId),
+        sql`${eligibilityChecks.diagnosisValidationResult} IS NOT NULL`,
+        dateCondition
+      ));
+
+    // Get complexity distribution
+    const complexityDistribution = await db
+      .select({
+        complexityLevel: eligibilityChecks.complexityLevel,
+        count: sql<number>`COUNT(*)`
+      })
+      .from(eligibilityChecks)
+      .innerJoin(encounters, eq(eligibilityChecks.encounterId, encounters.id))
+      .innerJoin(patients, eq(encounters.patientId, patients.id))
+      .where(and(
+        eq(patients.tenantId, tenantId),
+        sql`${eligibilityChecks.complexityLevel} IS NOT NULL`,
+        dateCondition
+      ))
+      .groupBy(eligibilityChecks.complexityLevel);
+
+    // Get necessity distribution
+    const necessityDistribution = await db
+      .select({
+        necessityLevel: eligibilityChecks.clinicalNecessityLevel,
+        count: sql<number>`COUNT(*)`
+      })
+      .from(eligibilityChecks)
+      .innerJoin(encounters, eq(eligibilityChecks.encounterId, encounters.id))
+      .innerJoin(patients, eq(encounters.patientId, patients.id))
+      .where(and(
+        eq(patients.tenantId, tenantId),
+        sql`${eligibilityChecks.clinicalNecessityLevel} IS NOT NULL`,
+        dateCondition
+      ))
+      .groupBy(eligibilityChecks.clinicalNecessityLevel);
+
+    const metrics = basicMetrics[0] || {
+      totalValidations: 0,
+      passedValidations: 0,
+      failedValidations: 0,
+      averageValidationScore: 0,
+      averageComplexityScore: 0,
+      averageNecessityScore: 0
+    };
+
+    return {
+      ...metrics,
+      complexityDistribution: complexityDistribution.reduce((acc, item) => {
+        if (item.complexityLevel) {
+          acc[item.complexityLevel] = item.count;
+        }
+        return acc;
+      }, {} as Record<string, number>),
+      necessityDistribution: necessityDistribution.reduce((acc, item) => {
+        if (item.necessityLevel) {
+          acc[item.necessityLevel] = item.count;
+        }
+        return acc;
+      }, {} as Record<string, number>),
+      commonRecommendations: [] // Simplified for now - would need JSON aggregation for real implementation
+    };
   }
 
   // Enhanced Document operations with version control

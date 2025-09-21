@@ -18,6 +18,13 @@ import { encryptPatientData, decryptPatientData, safeDecryptPatientData, encrypt
 import { buildRAGContext, selectBestPolicy } from "./services/ragService";
 import { generateDocument } from "./services/documentGenerator";
 import { performPolicyUpdate, performPolicyUpdateForMAC, scheduledPolicyUpdate, getPolicyUpdateStatus } from "./services/policyUpdater";
+import { 
+  validateDiagnosisCodes, 
+  assessClinicalNecessity, 
+  mapICD10ToWoundType, 
+  analyzeDiagnosisComplexity, 
+  generateDiagnosisRecommendations 
+} from "./services/eligibilityValidator";
 import { z } from "zod";
 
 // Helper function to track user activity (HIPAA-compliant, no PHI in descriptions)
@@ -1360,6 +1367,294 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error("Error fetching recent eligibility checks:", error);
       res.status(500).json({ message: "Failed to fetch recent eligibility checks" });
+    }
+  });
+
+  // ===============================================================================
+  // PHASE 5.1: DIAGNOSIS VALIDATION API ENDPOINTS
+  // ===============================================================================
+
+  // Run diagnosis validation on an encounter
+  app.post('/api/encounters/:encounterId/validate-diagnosis', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const { encounterId } = req.params;
+      const { primaryDiagnosis, secondaryDiagnoses } = req.body;
+      
+      if (!primaryDiagnosis) {
+        return res.status(400).json({ message: "Primary diagnosis is required" });
+      }
+
+      const encounter = await storage.getEncounter(encounterId);
+      if (!encounter) {
+        return res.status(404).json({ message: "Encounter not found" });
+      }
+
+      const patient = await storage.getPatient(encounter.patientId);
+      if (!patient) {
+        return res.status(404).json({ message: "Patient not found" });
+      }
+
+      // Verify access
+      const userTenantRole = await storage.getUserTenantRole(userId, patient.tenantId);
+      if (!userTenantRole) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+
+      // Get or create eligibility check for this encounter
+      let eligibilityChecks = await storage.getEligibilityChecksByEncounter(encounterId);
+      let currentCheck = eligibilityChecks[0];
+      
+      if (!currentCheck) {
+        // Create new eligibility check
+        currentCheck = await storage.createEligibilityCheck({
+          encounterId: encounterId,
+          episodeId: encounter.episodeId,
+          result: { status: 'in_progress', eligibility: 'pending', rationale: 'Diagnosis validation in progress' },
+          citations: [],
+          llmModel: 'gpt-4',
+          primaryDiagnosis,
+          secondaryDiagnoses: secondaryDiagnoses || []
+        });
+      }
+
+      // Run comprehensive diagnosis validation
+      console.log(`[DIAGNOSIS_VALIDATION] Starting validation for encounter ${encounterId}`);
+      
+      // 1. Validate diagnosis codes
+      const diagnosisValidationResult = await validateDiagnosisCodes(primaryDiagnosis, secondaryDiagnoses);
+      console.log(`[DIAGNOSIS_VALIDATION] Code validation complete:`, diagnosisValidationResult);
+      
+      // 2. Assess clinical necessity - get wound characteristics and treatment history
+      const woundCharacteristics = encounter.woundDetails || {};
+      const treatmentHistory = encounter.conservativeCare || {};
+      const patientCondition = { vascularAssessment: encounter.vascularAssessment };
+      const clinicalNecessityResult = assessClinicalNecessity([primaryDiagnosis], woundCharacteristics, treatmentHistory, patientCondition);
+      console.log(`[DIAGNOSIS_VALIDATION] Clinical necessity assessment complete:`, clinicalNecessityResult);
+      
+      // 3. Map to wound type
+      const woundTypeMappingResult = await mapICD10ToWoundType(primaryDiagnosis);
+      console.log(`[DIAGNOSIS_VALIDATION] Wound type mapping complete:`, woundTypeMappingResult);
+      
+      // 4. Analyze complexity
+      const patientHistory = { treatmentFailures: encounter.functionalStatus ? 0 : 1 }; // Basic history derivation
+      const complexityResult = analyzeDiagnosisComplexity(primaryDiagnosis, secondaryDiagnoses || [], patientHistory, woundCharacteristics);
+      console.log(`[DIAGNOSIS_VALIDATION] Complexity analysis complete:`, complexityResult);
+      
+      // 5. Generate recommendations
+      const recommendationsResult = generateDiagnosisRecommendations(
+        diagnosisValidationResult, 
+        clinicalNecessityResult,
+        complexityResult,
+        woundTypeMappingResult
+      );
+      console.log(`[DIAGNOSIS_VALIDATION] Recommendations generated:`, recommendationsResult);
+
+      // Calculate overall scores
+      const overallValidationScore = Math.round(
+        (diagnosisValidationResult.validationScore * 0.3 +
+         clinicalNecessityResult.necessityScore * 0.4 +
+         complexityResult.complexityScore * 0.3)
+      );
+
+      // Update eligibility check with diagnosis validation results
+      const updatedCheck = await storage.updateEligibilityCheckWithDiagnosisValidation(currentCheck.id, {
+        primaryDiagnosis,
+        secondaryDiagnoses: secondaryDiagnoses || [],
+        diagnosisValidationResult,
+        diagnosisValidationScore: diagnosisValidationResult.validationScore,
+        diagnosisValidationStatus: diagnosisValidationResult.isValid ? 'passed' : 'failed',
+        clinicalNecessityResult,
+        clinicalNecessityScore: clinicalNecessityResult.necessityScore,
+        clinicalNecessityLevel: clinicalNecessityResult.necessityLevel,
+        woundTypeMappingResult,
+        mappedWoundType: woundTypeMappingResult.woundType,
+        woundMappingConfidence: woundTypeMappingResult.confidence,
+        diagnosisComplexityResult: complexityResult,
+        complexityScore: complexityResult.complexityScore,
+        complexityLevel: complexityResult.complexityLevel,
+        diagnosisRecommendationsResult: recommendationsResult,
+        recommendationsCount: recommendationsResult.recommendations.length,
+        criticalRecommendationsCount: recommendationsResult.recommendations.filter(r => r.priority === 'critical').length,
+        overallDiagnosisScore: overallValidationScore,
+        diagnosisValidationTimestamp: new Date(),
+        diagnosisValidationVersion: '1.0.0',
+        validationAuditTrail: {
+          validatedBy: userId,
+          validatedAt: new Date(),
+          validationSteps: ['codeValidation', 'clinicalNecessity', 'woundMapping', 'complexity', 'recommendations']
+        }
+      });
+
+      // Log audit event
+      await storage.createAuditLog({
+        tenantId: patient.tenantId,
+        userId,
+        action: 'VALIDATE_DIAGNOSIS',
+        entity: 'Encounter',
+        entityId: encounterId,
+        ipAddress: req.ip,
+        userAgent: req.get('User-Agent'),
+        previousHash: '',
+      });
+
+      // Track activity
+      await trackActivity(
+        patient.tenantId,
+        userId,
+        'Validated diagnosis',
+        'Encounter',
+        encounterId,
+        `Diagnosis validation for ${primaryDiagnosis}`
+      );
+
+      console.log(`[DIAGNOSIS_VALIDATION] Validation complete for encounter ${encounterId}, overall score: ${overallValidationScore}`);
+
+      res.json({
+        success: true,
+        eligibilityCheck: updatedCheck,
+        validationResults: {
+          diagnosisValidation: diagnosisValidationResult,
+          clinicalNecessity: clinicalNecessityResult,
+          woundTypeMapping: woundTypeMappingResult,
+          complexityAnalysis: complexityResult,
+          recommendations: recommendationsResult,
+          overallScore: overallValidationScore
+        }
+      });
+
+    } catch (error) {
+      console.error("Error validating diagnosis:", error);
+      res.status(500).json({ message: "Failed to validate diagnosis" });
+    }
+  });
+
+  // Get diagnosis validation results for an encounter
+  app.get('/api/encounters/:encounterId/diagnosis-validation', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const { encounterId } = req.params;
+      
+      const encounter = await storage.getEncounter(encounterId);
+      if (!encounter) {
+        return res.status(404).json({ message: "Encounter not found" });
+      }
+
+      const patient = await storage.getPatient(encounter.patientId);
+      if (!patient) {
+        return res.status(404).json({ message: "Patient not found" });
+      }
+
+      // Verify access
+      const userTenantRole = await storage.getUserTenantRole(userId, patient.tenantId);
+      if (!userTenantRole) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+
+      const validationResults = await storage.getEligibilityChecksWithDiagnosisValidation(encounterId);
+      res.json(validationResults);
+
+    } catch (error) {
+      console.error("Error fetching diagnosis validation results:", error);
+      res.status(500).json({ message: "Failed to fetch diagnosis validation results" });
+    }
+  });
+
+  // Get diagnosis validation metrics for current tenant
+  app.get('/api/diagnosis-validation-metrics', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const { startDate, endDate } = req.query;
+
+      // Get user's tenants
+      const tenants = await storage.getTenantsByUser(userId);
+      if (tenants.length === 0) {
+        return res.status(403).json({ message: "No tenant access" });
+      }
+
+      const currentTenant = tenants[0];
+      
+      let dateRange;
+      if (startDate && endDate) {
+        dateRange = {
+          start: new Date(startDate as string),
+          end: new Date(endDate as string)
+        };
+      }
+
+      const metrics = await storage.getDiagnosisValidationMetrics(currentTenant.id, dateRange);
+      res.json(metrics);
+
+    } catch (error) {
+      console.error("Error fetching diagnosis validation metrics:", error);
+      res.status(500).json({ message: "Failed to fetch diagnosis validation metrics" });
+    }
+  });
+
+  // Get failed diagnosis validations for review
+  app.get('/api/failed-diagnosis-validations', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+
+      // Get user's tenants
+      const tenants = await storage.getTenantsByUser(userId);
+      if (tenants.length === 0) {
+        return res.status(403).json({ message: "No tenant access" });
+      }
+
+      const currentTenant = tenants[0];
+      const failedValidations = await storage.getFailedDiagnosisValidations(currentTenant.id);
+
+      res.json(failedValidations);
+
+    } catch (error) {
+      console.error("Error fetching failed diagnosis validations:", error);
+      res.status(500).json({ message: "Failed to fetch failed diagnosis validations" });
+    }
+  });
+
+  // Get diagnosis validations with critical recommendations
+  app.get('/api/critical-diagnosis-recommendations', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+
+      // Get user's tenants
+      const tenants = await storage.getTenantsByUser(userId);
+      if (tenants.length === 0) {
+        return res.status(403).json({ message: "No tenant access" });
+      }
+
+      const currentTenant = tenants[0];
+      const criticalRecommendations = await storage.getDiagnosisValidationsWithCriticalRecommendations(currentTenant.id);
+
+      res.json(criticalRecommendations);
+
+    } catch (error) {
+      console.error("Error fetching critical diagnosis recommendations:", error);
+      res.status(500).json({ message: "Failed to fetch critical diagnosis recommendations" });
+    }
+  });
+
+  // Get recent diagnosis validations for current tenant
+  app.get('/api/recent-diagnosis-validations', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const limit = parseInt(req.query.limit as string) || 20;
+
+      // Get user's tenants
+      const tenants = await storage.getTenantsByUser(userId);
+      if (tenants.length === 0) {
+        return res.status(403).json({ message: "No tenant access" });
+      }
+
+      const currentTenant = tenants[0];
+      const recentValidations = await storage.getDiagnosisValidationsByTenant(currentTenant.id, limit);
+
+      res.json(recentValidations);
+
+    } catch (error) {
+      console.error("Error fetching recent diagnosis validations:", error);
+      res.status(500).json({ message: "Failed to fetch recent diagnosis validations" });
     }
   });
 

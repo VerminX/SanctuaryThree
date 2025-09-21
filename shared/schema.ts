@@ -160,6 +160,46 @@ export const eligibilityChecks = pgTable("eligibility_checks", {
   llmModel: varchar("llm_model", { length: 50 }).notNull(),
   selectedPolicyId: uuid("selected_policy_id").references(() => policySources.id, { onDelete: "set null" }), // Reference to the selected LCD policy
   selectionAudit: jsonb("selection_audit"), // Audit trail from selectBestPolicy explaining why this policy was chosen
+  
+  // ===============================================================================
+  // PHASE 5.1: DIAGNOSIS VALIDATION RESULTS STORAGE
+  // ===============================================================================
+  
+  // Primary diagnosis codes being validated
+  primaryDiagnosis: varchar("primary_diagnosis", { length: 10 }), // ICD-10 primary diagnosis code
+  secondaryDiagnoses: jsonb("secondary_diagnoses"), // Array of secondary ICD-10 codes
+  
+  // Diagnosis validation results from validateDiagnosisCodes()
+  diagnosisValidationResult: jsonb("diagnosis_validation_result"), // Complete DiagnosisValidationResult object
+  diagnosisValidationScore: integer("diagnosis_validation_score"), // 0-100 score for quick filtering
+  diagnosisValidationStatus: varchar("diagnosis_validation_status", { length: 20 }).default("pending"), // passed, failed, warning, pending
+  
+  // Clinical necessity assessment results from assessClinicalNecessity()
+  clinicalNecessityResult: jsonb("clinical_necessity_result"), // Complete ClinicalNecessityResult object
+  clinicalNecessityScore: integer("clinical_necessity_score"), // 0-100 score for Medicare LCD compliance
+  clinicalNecessityLevel: varchar("clinical_necessity_level", { length: 20 }), // minimal, moderate, substantial, critical
+  
+  // ICD-10 to wound type mapping results from mapICD10ToWoundType()
+  woundTypeMappingResult: jsonb("wound_type_mapping_result"), // Complete ICD10WoundMappingResult object
+  mappedWoundType: varchar("mapped_wound_type", { length: 50 }), // Primary wound type identified
+  woundMappingConfidence: integer("wound_mapping_confidence"), // 0-100 confidence score
+  
+  // Diagnosis complexity analysis results from analyzeDiagnosisComplexity()
+  diagnosisComplexityResult: jsonb("diagnosis_complexity_result"), // Complete DiagnosisComplexityResult object
+  complexityScore: integer("complexity_score"), // 0-100 complexity score
+  complexityLevel: varchar("complexity_level", { length: 20 }), // simple, moderate, complex, highly_complex
+  
+  // Diagnosis recommendations from generateDiagnosisRecommendations()
+  diagnosisRecommendationsResult: jsonb("diagnosis_recommendations_result"), // Complete DiagnosisRecommendationsResult object
+  recommendationsCount: integer("recommendations_count"), // Number of recommendations generated
+  criticalRecommendationsCount: integer("critical_recommendations_count"), // Number of critical priority recommendations
+  overallDiagnosisScore: integer("overall_diagnosis_score"), // 0-100 combined score from all validations
+  
+  // Audit and tracking fields for diagnosis validation
+  diagnosisValidationTimestamp: timestamp("diagnosis_validation_timestamp"), // When diagnosis validation was performed
+  diagnosisValidationVersion: varchar("diagnosis_validation_version", { length: 20 }).default("5.1"), // Version of validation logic used
+  validationAuditTrail: jsonb("validation_audit_trail"), // Combined audit trails from all validation functions
+  
   createdAt: timestamp("created_at").defaultNow(),
 });
 
