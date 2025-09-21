@@ -55,6 +55,66 @@ Preferred communication style: Simple, everyday language.
 - **Template System**: Configurable templates for different payer types and MAC regions
 - **Citation Management**: Automatic citation linking to source policies and effective dates
 
+## Development and Testing
+
+### Test Data
+
+The application includes test patient accounts for LCD policy selection testing and MAC region validation:
+
+#### Test Patient Accounts
+- **Patient 1**:
+  - Patient ID: `9a2ca2f8-2133-45e0-a44b-3ed94ea96491`
+  - Condition: DFU (Diabetic Foot Ulcer) episode
+  - MAC Region: "Noridian Healthcare Solutions (MAC J-E)"
+
+- **Patient 2 - Michael Hudson**:
+  - Patient ID: `52a391af-b38e-4b94-ac06-b3e229d56f8d`
+  - MRN: `MH001`
+  - Condition: DFU (Diabetic Foot Ulcer) episode
+  - MAC Region: "Noridian Healthcare Solutions (MAC J-E)"
+
+Both test accounts are configured with proper MAC region assignments to ensure accurate LCD policy selection during eligibility analysis.
+
+### MAC Region Bug Fix (September 2025)
+
+A critical bug was identified and resolved related to MAC region data handling:
+
+#### Issues Resolved
+- **Fallback Masking**: Removed `|| 'default'` fallbacks that were masking missing MAC region data, preventing proper error detection
+- **Validation Enhancement**: Added proper validation with 422 error responses when MAC regions are missing from patient records
+- **TypeScript Safety**: Fixed TypeScript errors related to null/undefined MAC region handling to prevent runtime issues
+
+#### Technical Changes
+- Eliminated default value assignments that were hiding data quality issues
+- Implemented explicit validation checks in eligibility analysis endpoints
+- Enhanced error messaging to clearly indicate when MAC region data is required but missing
+- Added type guards and null checks to prevent undefined MAC region processing
+
+### Testing Guidance
+
+#### Using Test Accounts
+1. **LCD Policy Selection Testing**: Use either test patient account to verify that MAC region-specific policies are correctly identified and applied
+2. **Error Validation Testing**: Temporarily remove MAC region data to test 422 error responses and validation messaging
+3. **Policy Matching Testing**: Both accounts use Noridian Healthcare Solutions (MAC J-E) region for consistent testing of J-E jurisdiction policies
+
+#### Expected Results
+- **Proper MAC Region Set**: Eligibility analysis should correctly identify and apply MAC J-E specific LCD policies
+- **Missing MAC Region**: System should return 422 error with clear messaging about required MAC region data
+- **Policy Database Queries**: Should filter to relevant jurisdiction-specific policies when MAC region is properly set
+
+#### Available MAC Regions in Policy Database
+The system supports all Medicare Administrative Contractor regions:
+- **MAC J-E**: Noridian Healthcare Solutions (test accounts use this region)
+- **MAC J-F**: Noridian Healthcare Solutions  
+- **MAC J-H**: Novitas Solutions
+- **MAC J-J**: Palmetto GBA
+- **MAC J-K**: WPS Government Health Administrators
+- **MAC J-L**: CGS Administrators
+- **MAC J-M**: First Coast Service Options
+- **MAC J-N**: National Government Services
+
+Each MAC region has specific LCD policies that apply to their geographic jurisdiction, making proper MAC region assignment critical for accurate eligibility analysis.
+
 ## External Dependencies
 
 ### CMS Integration (Updated September 2025)
