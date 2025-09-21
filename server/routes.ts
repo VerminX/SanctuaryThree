@@ -969,6 +969,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(403).json({ message: "Access denied" });
       }
 
+      // Validate MAC region is present before proceeding with eligibility analysis
+      if (!patient.macRegion?.trim()) {
+        return res.status(422).json({ 
+          message: "MAC region is required for eligibility analysis. Please update the patient's profile to include their MAC region before running the analysis.",
+          error: "MISSING_MAC_REGION",
+          patientId: patient.id
+        });
+      }
+
       // Extract patient characteristics for better policy selection
       const patientCharacteristics = {
         isDiabetic: (encounter as any).diabeticStatus === 'diabetic' || 
@@ -979,7 +988,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // Build RAG context with enhanced policy selection using patient characteristics
       const ragContext = await buildRAGContext(
-        patient.macRegion || 'default',
+        patient.macRegion,
         (encounter.woundDetails as any)?.type || 'DFU',
         (encounter.woundDetails as any)?.location,
         patientCharacteristics
@@ -1042,7 +1051,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           secondaryPayerType: patient.secondaryPayerType || undefined,
           secondaryPlanName: patient.secondaryPlanName || undefined,
           secondaryInsuranceId: patient.secondaryInsuranceId || undefined,
-          macRegion: patient.macRegion || 'default',
+          macRegion: patient.macRegion!, // Safe to use ! here due to validation above
         },
         policyContext: ragContext.content,
       });
@@ -1108,6 +1117,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(403).json({ message: "Access denied" });
       }
 
+      // Validate MAC region is present before proceeding with eligibility analysis
+      if (!patient.macRegion?.trim()) {
+        return res.status(422).json({ 
+          message: "MAC region is required for eligibility analysis. Please update the patient's profile to include their MAC region before running the analysis.",
+          error: "MISSING_MAC_REGION",
+          patientId: patient.id
+        });
+      }
+
       // Get encounters first to validate episode before expensive analysis
       const encounters = await storage.getEncountersByEpisode(episodeId);
       if (encounters.length === 0) {
@@ -1128,7 +1146,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // Build RAG context with enhanced policy selection using patient characteristics
       const ragContext = await buildRAGContext(
-        patient.macRegion || 'default',
+        patient.macRegion,
         episode.woundType || 'DFU',
         episode.woundLocation || (latestEncounter.woundDetails as any)?.location,
         patientCharacteristics
@@ -1149,7 +1167,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         patient.id,
         {
           payerType: patient.payerType,
-          macRegion: patient.macRegion || 'default',
+          macRegion: patient.macRegion!, // Safe to use ! here due to validation above
         },
         ragContext.content
       );
