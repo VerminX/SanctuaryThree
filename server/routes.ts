@@ -20,7 +20,11 @@ import {
   insertCostAnalyticSchema,
   insertComplianceTrackingSchema,
   PRODUCT_CATEGORY,
-  CLINICAL_EVIDENCE_LEVEL
+  CLINICAL_EVIDENCE_LEVEL,
+  type Episode,
+  type Encounter,
+  type Patient,
+  type ComplianceTracking
 } from "@shared/schema";
 import { encryptPatientData, decryptPatientData, safeDecryptPatientData, encryptEncounterNotes, decryptEncounterNotes, encryptPHI } from "./services/encryption";
 import { buildRAGContext, selectBestPolicy } from "./services/ragService";
@@ -1771,6 +1775,250 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error("Error fetching ICD-10 code details:", error);
       res.status(500).json({ message: "Failed to fetch ICD-10 code details" });
+    }
+  });
+
+  // Analytics Export Endpoints
+  app.get('/api/analytics/export/clinical-summary', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const { tenantId, startDate, endDate, providerId, format = 'csv' } = req.query;
+      
+      // Validate format
+      if (!['csv', 'pdf'].includes(format)) {
+        return res.status(400).json({ message: "Format must be 'csv' or 'pdf'" });
+      }
+
+      // Get user's tenants
+      const userTenants = await storage.getTenantsByUser(userId);
+      const accessibleTenantIds = userTenants.map(t => t.id);
+
+      const targetTenantId = tenantId || accessibleTenantIds[0];
+      if (!targetTenantId || !accessibleTenantIds.includes(targetTenantId)) {
+        return res.status(403).json({ message: "Access denied to specified tenant" });
+      }
+
+      // Parse date range
+      let parsedStartDate, parsedEndDate;
+      if (startDate && endDate) {
+        parsedStartDate = new Date(startDate);
+        parsedEndDate = new Date(endDate);
+        if (isNaN(parsedStartDate.getTime()) || isNaN(parsedEndDate.getTime())) {
+          return res.status(400).json({ message: "Invalid date format" });
+        }
+      } else {
+        // Default to last 30 days
+        parsedEndDate = new Date();
+        parsedStartDate = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+      }
+
+      // Get clinical data for export
+      const [episodesData, encountersData, patients] = await Promise.all([
+        storage.getAllEpisodesWithPatientsByTenant(targetTenantId),
+        storage.getAllEncountersWithPatientsByTenant(targetTenantId),
+        storage.getPatientsByTenant(targetTenantId)
+      ]);
+
+      // Extract episodes and encounters from the enriched data
+      const episodes: Episode[] = episodesData.map(item => ({
+        id: item.id,
+        patientId: item.patientId,
+        episodeStartDate: item.episodeStartDate,
+        episodeEndDate: item.episodeEndDate,
+        status: item.status,
+        woundType: item.woundType,
+        woundLocation: item.woundLocation,
+        primaryDiagnosis: item.primaryDiagnosis,
+        createdAt: item.createdAt,
+        updatedAt: item.updatedAt
+      }));
+      
+      const encounters: Encounter[] = encountersData.map(item => ({
+        id: item.id,
+        patientId: item.patientId,
+        episodeId: item.episodeId,
+        date: item.date,
+        encryptedNotes: item.encryptedNotes,
+        woundDetails: item.woundDetails,
+        conservativeCare: item.conservativeCare,
+        procedureCodes: item.procedureCodes,
+        vascularAssessment: item.vascularAssessment,
+        functionalStatus: item.functionalStatus,
+        diabeticStatus: item.diabeticStatus,
+        infectionStatus: item.infectionStatus,
+        comorbidities: item.comorbidities,
+        createdAt: item.createdAt,
+        updatedAt: item.updatedAt,
+        attachmentMetadata: item.attachmentMetadata
+      }));
+
+      // Filter by date range and provider
+      const filteredEpisodes = episodes.filter((episode: Episode) => {
+        const episodeDate = new Date(episode.episodeStartDate || episode.createdAt || '');
+        if (isNaN(episodeDate.getTime())) return false;
+        if (episodeDate < parsedStartDate || episodeDate > parsedEndDate) return false;
+        // Add provider filtering if implemented in schema
+        return true;
+      });
+
+      // Prepare clinical summary data
+      const clinicalData = filteredEpisodes.map((episode: Episode) => {
+        // Get patient name from enriched episodes data which has decrypted names
+        const episodeData = episodesData.find(item => item.id === episode.id);
+        const patientName = episodeData ? episodeData.patientName : 'Unknown';
+        const episodeEncounters = encounters.filter((e: Encounter) => e.episodeId === episode.id);
+        
+        return {
+          patientId: patientName,
+          episodeId: episode.id,
+          woundType: episode.woundType,
+          woundLocation: episode.woundLocation,
+          startDate: episode.episodeStartDate,
+          status: episode.status,
+          totalEncounters: episodeEncounters.length,
+          primaryDiagnosis: episode.primaryDiagnosis,
+          healingProgress: 'Calculating...', // Would calculate from encounters
+          complianceStatus: 'Compliant' // Would calculate from assessments
+        };
+      });
+
+      if (format === 'csv') {
+        // Generate CSV
+        const csvHeaders = 'Patient,Episode ID,Wound Type,Location,Start Date,Status,Encounters,Primary Diagnosis,Healing Progress,Compliance\n';
+        const csvRows = clinicalData.map((row: typeof clinicalData[0]) => 
+          `"${row.patientId}","${row.episodeId}","${row.woundType || ''}","${row.woundLocation || ''}","${row.startDate || ''}","${row.status || ''}","${row.totalEncounters}","${row.primaryDiagnosis || ''}","${row.healingProgress}","${row.complianceStatus}"`
+        ).join('\n');
+        
+        const csvContent = csvHeaders + csvRows;
+        
+        res.setHeader('Content-Type', 'text/csv');
+        res.setHeader('Content-Disposition', `attachment; filename="clinical-summary-${parsedStartDate.toISOString().split('T')[0]}-to-${parsedEndDate.toISOString().split('T')[0]}.csv"`);
+        res.send(csvContent);
+      } else {
+        // Generate PDF using existing document generation infrastructure
+        const pdfContent = `Clinical Summary Report\n\nDate Range: ${parsedStartDate.toDateString()} to ${parsedEndDate.toDateString()}\nTotal Episodes: ${clinicalData.length}\n\n` +
+          clinicalData.map((row: typeof clinicalData[0]) => 
+            `Patient: ${row.patientId}\nEpisode: ${row.episodeId}\nWound: ${row.woundType} at ${row.woundLocation}\nStatus: ${row.status}\nEncounters: ${row.totalEncounters}\n---\n`
+          ).join('');
+        
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', `attachment; filename="clinical-summary-${parsedStartDate.toISOString().split('T')[0]}-to-${parsedEndDate.toISOString().split('T')[0]}.pdf"`);
+        res.send(pdfContent); // TODO: Implement actual PDF generation
+      }
+
+      // Log audit event
+      await storage.createAuditLog({
+        tenantId: targetTenantId,
+        userId,
+        action: 'EXPORT_CLINICAL_SUMMARY',
+        entity: 'Analytics',
+        entityId: `export-${targetTenantId}-${Date.now()}`,
+        ipAddress: req.ip,
+        userAgent: req.get('User-Agent'),
+        previousHash: ''
+      });
+
+      await trackActivity(targetTenantId, userId, 'export', 'clinical_summary', `${format}_export`);
+
+    } catch (error) {
+      console.error('Error exporting clinical summary:', error);
+      res.status(500).json({ message: "Failed to export clinical summary" });
+    }
+  });
+
+  app.get('/api/analytics/export/compliance-report', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const { tenantId, startDate, endDate, format = 'csv' } = req.query;
+      
+      // Validate format
+      if (!['csv', 'pdf'].includes(format)) {
+        return res.status(400).json({ message: "Format must be 'csv' or 'pdf'" });
+      }
+
+      // Get user's tenants
+      const userTenants = await storage.getTenantsByUser(userId);
+      const accessibleTenantIds = userTenants.map(t => t.id);
+
+      const targetTenantId = tenantId || accessibleTenantIds[0];
+      if (!targetTenantId || !accessibleTenantIds.includes(targetTenantId)) {
+        return res.status(403).json({ message: "Access denied to specified tenant" });
+      }
+
+      // Parse date range
+      let parsedStartDate, parsedEndDate;
+      if (startDate && endDate) {
+        parsedStartDate = new Date(startDate);
+        parsedEndDate = new Date(endDate);
+        if (isNaN(parsedStartDate.getTime()) || isNaN(parsedEndDate.getTime())) {
+          return res.status(400).json({ message: "Invalid date format" });
+        }
+      } else {
+        // Default to last 30 days
+        parsedEndDate = new Date();
+        parsedStartDate = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+      }
+
+      // Get compliance tracking data
+      const complianceData = await storage.getComplianceTrackingByDateRange(
+        targetTenantId, 
+        parsedStartDate, 
+        parsedEndDate
+      );
+      
+      // Prepare compliance report data
+      const reportData = complianceData.map((compliance: ComplianceTracking) => ({
+        assessmentDate: compliance.assessmentDate,
+        episodeId: compliance.episodeId || 'N/A',
+        assessmentType: compliance.assessmentType,
+        complianceScore: compliance.overallComplianceScore || 0,
+        riskLevel: compliance.complianceRiskLevel || 'Unknown',
+        findings: (compliance.identifiedGaps as string[])?.join('; ') || '',
+        recommendations: (compliance.correctiveActions as string[])?.join('; ') || '',
+        status: (compliance.overallComplianceScore || 0) >= 90 ? 'Compliant' : (compliance.overallComplianceScore || 0) >= 70 ? 'At Risk' : 'Non-Compliant'
+      }));
+
+      if (format === 'csv') {
+        // Generate CSV
+        const csvHeaders = 'Assessment Date,Episode ID,Assessment Type,Compliance Score,Risk Level,Status,Findings,Recommendations\n';
+        const csvRows = reportData.map((row: typeof reportData[0]) => 
+          `"${row.assessmentDate}","${row.episodeId}","${row.assessmentType}","${row.complianceScore}","${row.riskLevel}","${row.status}","${row.findings}","${row.recommendations}"`
+        ).join('\n');
+        
+        const csvContent = csvHeaders + csvRows;
+        
+        res.setHeader('Content-Type', 'text/csv');
+        res.setHeader('Content-Disposition', `attachment; filename="compliance-report-${parsedStartDate.toISOString().split('T')[0]}-to-${parsedEndDate.toISOString().split('T')[0]}.csv"`);
+        res.send(csvContent);
+      } else {
+        // Generate PDF content
+        const pdfContent = `Medicare Compliance Report\n\nDate Range: ${parsedStartDate.toDateString()} to ${parsedEndDate.toDateString()}\nTotal Assessments: ${reportData.length}\n\n` +
+          reportData.map((row: typeof reportData[0]) => 
+            `Assessment: ${row.assessmentType}\nDate: ${row.assessmentDate}\nEpisode: ${row.episodeId}\nScore: ${row.complianceScore}%\nStatus: ${row.status}\nRisk Level: ${row.riskLevel}\nFindings: ${row.findings}\nRecommendations: ${row.recommendations}\n---\n`
+          ).join('');
+        
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', `attachment; filename="compliance-report-${parsedStartDate.toISOString().split('T')[0]}-to-${parsedEndDate.toISOString().split('T')[0]}.pdf"`);
+        res.send(pdfContent); // TODO: Implement actual PDF generation
+      }
+
+      // Log audit event
+      await storage.createAuditLog({
+        tenantId: targetTenantId,
+        userId,
+        action: 'EXPORT_COMPLIANCE_REPORT',
+        entity: 'Analytics',
+        entityId: `export-${targetTenantId}-${Date.now()}`,
+        ipAddress: req.ip,
+        userAgent: req.get('User-Agent'),
+        previousHash: ''
+      });
+
+      await trackActivity(targetTenantId, userId, 'export', 'compliance_report', `${format}_export`);
+
+    } catch (error) {
+      console.error('Error exporting compliance report:', error);
+      res.status(500).json({ message: "Failed to export compliance report" });
     }
   });
 

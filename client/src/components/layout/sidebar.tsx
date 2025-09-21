@@ -14,13 +14,15 @@ import {
   Moon,
   TestTube2,
   Upload,
-  Calendar
+  Calendar,
+  TrendingUp
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
 const navigationItems = [
   { href: "/", label: "Dashboard", icon: BarChart3 },
+  { href: "/analytics", label: "Analytics Dashboard", icon: TrendingUp },
   { href: "/patients", label: "Patients", icon: Users },
   { href: "/episodes", label: "Episodes", icon: Calendar },
   { href: "/encounters", label: "Encounters", icon: ClipboardList },

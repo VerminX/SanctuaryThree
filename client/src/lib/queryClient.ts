@@ -41,6 +41,41 @@ export const getQueryFn: <T>(options: {
     return await res.json();
   };
 
+// Parameterized query function that accepts [url, params] format
+export const getParameterizedQueryFn: <T>(options: {
+  on401: UnauthorizedBehavior;
+}) => QueryFunction<T> =
+  ({ on401: unauthorizedBehavior }) =>
+  async ({ queryKey }) => {
+    const [url, params] = queryKey as [string, Record<string, any> | undefined];
+    
+    // Build URL with search parameters
+    const urlObj = new URL(url, window.location.origin);
+    if (params) {
+      Object.entries(params).forEach(([key, value]) => {
+        if (value !== undefined && value !== null && value !== '') {
+          // Handle date objects
+          if (value instanceof Date) {
+            urlObj.searchParams.set(key, value.toISOString());
+          } else {
+            urlObj.searchParams.set(key, String(value));
+          }
+        }
+      });
+    }
+    
+    const res = await fetch(urlObj.toString(), {
+      credentials: "include",
+    });
+
+    if (unauthorizedBehavior === "returnNull" && res.status === 401) {
+      return null;
+    }
+
+    await throwIfResNotOk(res);
+    return await res.json();
+  };
+
 export const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
