@@ -751,6 +751,330 @@ export const insertWoundMeasurementHistorySchema = createInsertSchema(woundMeasu
     ]).optional()
   });
 
+// ================================================================================
+// CONSERVATIVE CARE AND WOUND DETAILS JSONB SCHEMAS
+// ================================================================================
+
+// Wound measurement schema for tracking healing progress
+export const woundMeasurementSchema = z.object({
+  length: z.number().min(0).optional(),
+  width: z.number().min(0).optional(), 
+  depth: z.number().min(0).optional(),
+  area: z.number().min(0).optional(),
+  volume: z.number().min(0).optional(),
+  unit: z.enum(['cm', 'mm', 'inches']).default('cm'),
+  measurementDate: z.string().datetime(),
+  measurementMethod: z.enum([
+    'ruler', 'digital_caliper', 'wound_imaging', 
+    'planimetry', 'structured_light', 'mobile_app', 'acetate_tracing'
+  ]).optional(),
+  recordedBy: z.string(),
+  notes: z.string().optional()
+});
+
+// Wound details JSONB schema for encounters
+export const woundDetailsSchema = z.object({
+  // Wound identification
+  type: z.enum(['DFU', 'VLU', 'PU', 'surgical', 'traumatic', 'other']),
+  location: z.string(),
+  primaryDiagnosis: z.string().optional(),
+  
+  // Wound characteristics
+  etiology: z.string().optional(),
+  duration: z.number().min(0).optional(), // Days since wound onset
+  stage: z.string().optional(), // For pressure ulcers
+  
+  // Current measurements
+  currentMeasurement: woundMeasurementSchema.optional(),
+  
+  // Measurement history for tracking healing
+  measurementHistory: z.array(woundMeasurementSchema).default([]),
+  
+  // Baseline measurement (first recorded)
+  baselineMeasurement: woundMeasurementSchema.optional(),
+  
+  // Healing progress calculations
+  healingMetrics: z.object({
+    totalDaysTracked: z.number().min(0).default(0),
+    areaReductionPercentage: z.number().optional(),
+    weeklyHealingRate: z.number().optional(), // cm²/week
+    lastSignificantChange: z.string().datetime().optional(),
+    healingTrajectory: z.enum(['improving', 'stable', 'deteriorating']).optional()
+  }).optional(),
+  
+  // Clinical assessment
+  infection: z.object({
+    present: z.boolean(),
+    type: z.enum(['none', 'mild', 'moderate', 'severe']).default('none'),
+    signs: z.array(z.string()).default([]),
+    treatment: z.string().optional()
+  }).optional(),
+  
+  drainage: z.object({
+    amount: z.enum(['none', 'minimal', 'moderate', 'copious']).default('none'),
+    type: z.string().optional(),
+    color: z.string().optional()
+  }).optional(),
+  
+  pain: z.object({
+    level: z.number().min(0).max(10).optional(),
+    type: z.string().optional(),
+    frequency: z.string().optional()
+  }).optional(),
+  
+  // Wound bed characteristics
+  woundBed: z.object({
+    tissue: z.array(z.string()).default([]),
+    percentages: z.record(z.string(), z.number()).optional(),
+    edges: z.string().optional(),
+    surrounding: z.string().optional()
+  }).optional(),
+  
+  // Diabetic-specific fields
+  diabeticStatus: z.enum(['diabetic', 'nondiabetic', 'prediabetic']).optional(),
+  neuropathy: z.boolean().optional(),
+  circulation: z.enum(['adequate', 'impaired', 'absent']).optional()
+});
+
+// Treatment intervention schema
+export const treatmentInterventionSchema = z.object({
+  type: z.enum([
+    'debridement_sharp', 'debridement_enzymatic', 'debridement_autolytic',
+    'dressing_change', 'offloading_tcc', 'offloading_boot', 'offloading_shoe',
+    'compression_therapy', 'negative_pressure', 'bioengineered_skin',
+    'growth_factors', 'hyperbaric_oxygen', 'infection_management',
+    'education', 'nutrition_counseling', 'other'
+  ]),
+  name: z.string(),
+  date: z.string().datetime(),
+  provider: z.string(),
+  
+  // Treatment details
+  details: z.object({
+    technique: z.string().optional(),
+    products: z.array(z.string()).default([]),
+    duration: z.number().optional(), // Minutes
+    frequency: z.string().optional(),
+    nextScheduled: z.string().datetime().optional()
+  }).optional(),
+  
+  // Effectiveness tracking
+  effectiveness: z.object({
+    immediateResponse: z.enum(['excellent', 'good', 'fair', 'poor', 'adverse']).optional(),
+    patientTolerance: z.enum(['comfortable', 'mild_discomfort', 'moderate_pain', 'severe_pain']).optional(),
+    complications: z.array(z.string()).default([])
+  }).optional(),
+  
+  // Medicare compliance tracking
+  medicare: z.object({
+    compliant: z.boolean(),
+    lcdCriteriaMet: z.array(z.string()).default([]),
+    documentation: z.string().optional(),
+    priorAuth: z.boolean().optional()
+  }).optional(),
+  
+  notes: z.string().optional()
+});
+
+// Conservative care JSONB schema for encounters
+export const conservativeCareSchema = z.object({
+  // Treatment plan overview
+  plan: z.object({
+    startDate: z.string().datetime(),
+    plannedDuration: z.number().optional(), // Days
+    goals: z.array(z.string()).default([]),
+    contraindications: z.array(z.string()).default([])
+  }),
+  
+  // All interventions performed
+  interventions: z.array(treatmentInterventionSchema).default([]),
+  
+  // Standard of care tracking for Medicare LCD compliance
+  standardOfCare: z.object({
+    // Weekly measurement requirement
+    weeklyMeasurements: z.object({
+      required: z.boolean().default(true),
+      completed: z.array(z.string().datetime()).default([]),
+      missed: z.array(z.object({
+        date: z.string().datetime(),
+        reason: z.string()
+      })).default([])
+    }),
+    
+    // Offloading for diabetic foot ulcers
+    offloading: z.object({
+      required: z.boolean(),
+      type: z.enum(['total_contact_cast', 'removable_cast_walker', 'half_shoe', 'felted_foam', 'wheelchair', 'crutches', 'none']).optional(),
+      compliance: z.number().min(0).max(100).optional(), // Percentage
+      lastAssessed: z.string().datetime().optional()
+    }).optional(),
+    
+    // Compression therapy for venous leg ulcers
+    compression: z.object({
+      required: z.boolean(),
+      type: z.enum(['graduated_compression', 'unna_boot', 'multi_layer', 'pneumatic', 'none']).optional(),
+      pressure: z.string().optional(), // mmHg
+      compliance: z.number().min(0).max(100).optional()
+    }).optional(),
+    
+    // Infection control
+    infectionControl: z.object({
+      systemicAntibiotics: z.boolean().default(false),
+      topicalAntimicrobials: z.boolean().default(false),
+      debrided: z.boolean().default(false),
+      cultureResults: z.array(z.object({
+        date: z.string().datetime(),
+        organism: z.string(),
+        sensitivity: z.string().optional()
+      })).default([])
+    }),
+    
+    // Patient education and compliance
+    patientEducation: z.object({
+      provided: z.boolean().default(false),
+      topics: z.array(z.string()).default([]),
+      comprehension: z.enum(['excellent', 'good', 'fair', 'poor']).optional(),
+      lastSession: z.string().datetime().optional()
+    })
+  }),
+  
+  // Medicare LCD 4-week response assessment
+  responseAssessment: z.object({
+    fourWeekDate: z.string().datetime().optional(),
+    areaReduction: z.number().optional(), // Percentage
+    meetsThreshold: z.boolean().optional(), // >= 50% reduction
+    recommendation: z.enum(['continue_conservative', 'escalate_advanced', 'surgical_consult']).optional(),
+    rationale: z.string().optional()
+  }).optional(),
+  
+  // Compliance tracking
+  compliance: z.object({
+    overallScore: z.number().min(0).max(100).optional(),
+    patientAdherence: z.number().min(0).max(100).optional(),
+    appointmentCompliance: z.number().min(0).max(100).optional(),
+    medicationCompliance: z.number().min(0).max(100).optional(),
+    lastAssessment: z.string().datetime().optional()
+  }).optional(),
+  
+  // Treatment effectiveness metrics
+  effectiveness: z.object({
+    totalTreatmentDays: z.number().min(0).default(0),
+    interventionFrequency: z.number().optional(), // Interventions per week
+    healingRate: z.number().optional(), // Area reduction per week
+    painImprovement: z.number().optional(), // Change in pain score
+    functionalImprovement: z.boolean().optional(),
+    qualityOfLifeScore: z.number().min(0).max(100).optional()
+  }).optional()
+});
+
+// Medicare LCD compliance assessment result
+export const medicareLcdComplianceSchema = z.object({
+  // Overall compliance status
+  compliant: z.boolean(),
+  complianceScore: z.number().min(0).max(100),
+  
+  // Specific requirement tracking
+  requirements: z.object({
+    appropriateDiagnosis: z.object({
+      met: z.boolean(),
+      codes: z.array(z.string()).default([])
+    }),
+    conservativeCareDuration: z.object({
+      met: z.boolean(),
+      daysCompleted: z.number().min(0),
+      minimumRequired: z.number().default(30)
+    }),
+    weeklyAssessments: z.object({
+      met: z.boolean(),
+      completed: z.number().min(0),
+      required: z.number().min(0),
+      complianceRate: z.number().min(0).max(100)
+    }),
+    standardOfCareElements: z.object({
+      offloading: z.boolean().optional(),
+      compression: z.boolean().optional(),
+      infectionControl: z.boolean(),
+      patientEducation: z.boolean(),
+      documentation: z.boolean()
+    }),
+    responseAssessment: z.object({
+      performed: z.boolean(),
+      areaReduction: z.number().optional(),
+      meetsThreshold: z.boolean().optional()
+    })
+  }),
+  
+  // LCD policy reference
+  policy: z.object({
+    lcdId: z.string(),
+    title: z.string(),
+    url: z.string(),
+    effectiveDate: z.string().datetime()
+  }).optional(),
+  
+  // Gaps and recommendations
+  gaps: z.array(z.string()).default([]),
+  recommendations: z.array(z.string()).default([]),
+  
+  // Assessment metadata
+  assessmentDate: z.string().datetime(),
+  assessedBy: z.string(),
+  version: z.string().default('1.0')
+});
+
+// Treatment recommendation schema
+export const treatmentRecommendationSchema = z.object({
+  id: z.string(),
+  type: z.enum(['conservative', 'advanced', 'surgical']),
+  priority: z.enum(['critical', 'high', 'moderate', 'low']),
+  
+  // Recommendation details
+  title: z.string(),
+  description: z.string(),
+  rationale: z.string(),
+  
+  // Clinical evidence
+  evidence: z.object({
+    level: z.enum(['A', 'B', 'C', 'D']),
+    citation: z.string(),
+    successRate: z.number().min(0).max(100),
+    studyQuality: z.enum(['high', 'moderate', 'low']).optional()
+  }),
+  
+  // Implementation details
+  implementation: z.object({
+    timeframe: z.string(),
+    frequency: z.string().optional(),
+    duration: z.string().optional(),
+    cost: z.string().optional(),
+    prerequisites: z.array(z.string()).default([])
+  }),
+  
+  // Contraindications and warnings
+  contraindications: z.array(z.string()).default([]),
+  warnings: z.array(z.string()).default([]),
+  
+  // Expected outcomes
+  expectedOutcome: z.object({
+    healingProbability: z.number().min(0).max(100),
+    timeToHealing: z.string().optional(),
+    functionalImprovement: z.boolean().optional(),
+    painReduction: z.boolean().optional()
+  }),
+  
+  // Medicare/insurance coverage
+  coverage: z.object({
+    medicareCompliant: z.boolean(),
+    priorAuthRequired: z.boolean().optional(),
+    coverageLimitations: z.array(z.string()).default([])
+  }),
+  
+  // Recommendation metadata
+  generatedDate: z.string().datetime(),
+  basedOn: z.array(z.string()).default([]), // Encounter IDs used for recommendation
+  confidence: z.number().min(0).max(100)
+});
+
 // Types
 export type UpsertUser = typeof users.$inferInsert;
 export type User = typeof users.$inferSelect;
