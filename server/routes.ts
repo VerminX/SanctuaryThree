@@ -5293,6 +5293,548 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // ================================================================================
+  // COMPREHENSIVE REPORTING ENDPOINTS
+  // ================================================================================
+  
+  // Import report generation service
+  const { reportGenerator } = await import('./services/reportGenerator');
+
+  // Generate comprehensive report with production hardening
+  app.post('/api/reports/generate', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const reportRequest = req.body;
+      
+      // PRODUCTION HARDENING: Concurrency and rate limiting
+      const concurrencyKey = `report_gen_${userId}`;
+      const rateLimitKey = `report_rate_${userId}`;
+      
+      if (!global.concurrencyStore) global.concurrencyStore = new Map();
+      if (!global.rateLimitStore) global.rateLimitStore = new Map();
+      
+      // Check active report generation limit (max 2 concurrent)
+      const activeReports = global.concurrencyStore.get(concurrencyKey) || 0;
+      if (activeReports >= 2) {
+        return res.status(429).json({ message: "Too many concurrent report generations. Please wait." });
+      }
+      
+      // Rate limiting (max 5 reports per hour)
+      const now = Date.now();
+      const rateData = global.rateLimitStore.get(rateLimitKey) || { count: 0, resetTime: now + 3600000 };
+      if (now > rateData.resetTime) {
+        rateData.count = 0;
+        rateData.resetTime = now + 3600000;
+      }
+      if (rateData.count >= 5) {
+        return res.status(429).json({ message: "Rate limit exceeded: Maximum 5 reports per hour" });
+      }
+      
+      // Track active generation
+      global.concurrencyStore.set(concurrencyKey, activeReports + 1);
+      rateData.count++;
+      global.rateLimitStore.set(rateLimitKey, rateData);
+
+      // Validate request
+      const reportRequestSchema = z.object({
+        type: z.enum(['clinical-summary', 'episode-summary', 'provider-performance', 
+                      'medicare-compliance', 'lcd-compliance', 'audit-trail',
+                      'cost-effectiveness', 'healing-outcomes']),
+        format: z.enum(['pdf', 'excel', 'csv']),
+        tenantId: z.string().uuid(),
+        dateRange: z.object({
+          startDate: z.string().transform(s => new Date(s)),
+          endDate: z.string().transform(s => new Date(s))
+        }).optional(),
+        filters: z.object({
+          patientId: z.string().uuid().optional(),
+          episodeId: z.string().uuid().optional(),
+          providerId: z.string().optional(),
+          woundType: z.string().optional(),
+          complianceLevel: z.string().optional()
+        }).optional(),
+        options: z.object({
+          includeCharts: z.boolean().optional(),
+          includeDetails: z.boolean().optional(),
+          includeCitations: z.boolean().optional(),
+          groupBy: z.enum(['patient', 'episode', 'provider', 'month']).optional()
+        }).optional()
+      });
+
+      const validatedRequest = reportRequestSchema.parse(reportRequest);
+
+      // Verify user has access to tenant
+      const userTenantRole = await storage.getUserTenantRole(userId, validatedRequest.tenantId);
+      if (!userTenantRole) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+
+      // Generate report
+      const report = await reportGenerator.generateReport({
+        ...validatedRequest,
+        userId
+      });
+
+      // Track activity
+      await trackActivity(
+        validatedRequest.tenantId,
+        userId,
+        'Generated report',
+        'Report',
+        report.id,
+        `${validatedRequest.type} (${validatedRequest.format})`
+      );
+
+      res.json({
+        success: true,
+        report: {
+          id: report.id,
+          type: report.type,
+          format: report.format,
+          fileSize: report.fileSize,
+          generatedAt: report.generatedAt,
+          expiresAt: report.expiresAt,
+          downloadUrl: `/api/reports/download/${report.id}`, // Secure reportId-based URL
+          metadata: report.metadata
+        }
+      });
+    } catch (error) {
+      console.error("Error generating report:", error);
+      
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ 
+          message: "Invalid request parameters", 
+          errors: error.errors 
+        });
+      }
+      
+      res.status(500).json({ message: "Failed to generate report" });
+    }
+  });
+
+  // SECURE Download generated report by ID with proper tenant authorization
+  app.get('/api/reports/download/:reportId', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const { reportId } = req.params;
+
+      // Validate reportId format (UUID)
+      if (!reportId || !reportId.match(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/)) {
+        return res.status(400).json({ message: "Invalid report ID format" });
+      }
+
+      // Get user's tenants for authorization
+      const userTenants = await storage.getTenantsByUser(userId);
+      if (userTenants.length === 0) {
+        return res.status(403).json({ message: "No accessible tenants found" });
+      }
+      const userTenantIds = userTenants.map(t => t.id);
+
+      // CRITICAL SECURITY: Get report from database and verify tenant access
+      const report = await storage.getGeneratedReport(reportId);
+      if (!report) {
+        return res.status(404).json({ message: "Report not found or expired" });
+      }
+
+      // HIPAA COMPLIANCE: Verify user has access to this specific report's tenant
+      if (!userTenantIds.includes(report.tenantId)) {
+        // Log attempted unauthorized access for security audit
+        await storage.createAuditLog({
+          tenantId: userTenants[0].id, // Log to user's primary tenant
+          userId,
+          action: 'UNAUTHORIZED_REPORT_ACCESS_ATTEMPT',
+          entity: 'Report',
+          entityId: reportId,
+          ipAddress: req.ip || 'unknown',
+          userAgent: req.get('User-Agent') || 'unknown',
+          previousHash: '',
+        });
+        return res.status(403).json({ message: "Access denied: Report belongs to a different tenant" });
+      }
+
+      // Check if report has expired
+      if (report.expiresAt && new Date() > new Date(report.expiresAt)) {
+        await storage.markGeneratedReportAsExpired(reportId);
+        return res.status(410).json({ message: "Report has expired and is no longer available" });
+      }
+
+      // Verify file still exists on disk
+      if (!fs.existsSync(report.filePath)) {
+        return res.status(404).json({ message: "Report file not found on disk" });
+      }
+
+      // Set appropriate headers based on report format
+      let contentType = 'application/octet-stream';
+      let fileExtension = 'bin';
+      
+      switch (report.reportFormat) {
+        case 'pdf':
+          contentType = 'application/pdf';
+          fileExtension = 'pdf';
+          break;
+        case 'excel':
+          contentType = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+          fileExtension = 'xlsx';
+          break;
+        case 'csv':
+          contentType = 'text/csv';
+          fileExtension = 'csv';
+          break;
+      }
+
+      // Generate secure filename without tenant info
+      const secureFileName = `${report.reportType}_${report.id.substring(0, 8)}_${format(new Date(report.createdAt), 'yyyy-MM-dd')}.${fileExtension}`;
+
+      res.setHeader('Content-Type', contentType);
+      res.setHeader('Content-Disposition', `attachment; filename="${secureFileName}"`);
+      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+      res.setHeader('Pragma', 'no-cache');
+      res.setHeader('Expires', '0');
+
+      // Stream file securely
+      res.sendFile(report.filePath);
+
+      // Increment download count and log access (HIPAA audit trail)
+      await Promise.all([
+        storage.incrementReportDownloadCount(reportId),
+        storage.createAuditLog({
+          tenantId: report.tenantId,
+          userId,
+          action: 'DOWNLOAD_REPORT',
+          entity: 'Report',
+          entityId: reportId,
+          ipAddress: req.ip || 'unknown',
+          userAgent: req.get('User-Agent') || 'unknown',
+          previousHash: '',
+        }),
+        trackActivity(
+          report.tenantId,
+          userId,
+          'Downloaded report',
+          'Report',
+          reportId,
+          `${report.reportType} report`
+        )
+      ]);
+
+    } catch (error) {
+      // REDACTED ERROR LOGGING: Don't expose PHI in logs
+      console.error("Error downloading report:", {
+        reportId: req.params.reportId,
+        userId: req.user?.claims?.sub,
+        error: error instanceof Error ? error.message : 'Unknown error'
+      });
+      res.status(500).json({ message: "Failed to download report" });
+    }
+  });
+
+  // Get available report types and templates with production hardening
+  app.get('/api/reports/templates', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      
+      // PRODUCTION HARDENING: Rate limiting check (basic implementation)
+      const userKey = `templates_${userId}`;
+      const now = Date.now();
+      // Simple in-memory rate limiting - in production use Redis
+      if (!global.rateLimitStore) global.rateLimitStore = new Map();
+      const lastAccess = global.rateLimitStore.get(userKey) || 0;
+      if (now - lastAccess < 1000) { // 1 second cooldown
+        return res.status(429).json({ message: "Rate limit exceeded" });
+      }
+      global.rateLimitStore.set(userKey, now);
+      
+      // Get user's tenants to verify access
+      const tenants = await storage.getTenantsByUser(userId);
+      if (tenants.length === 0) {
+        return res.status(403).json({ message: "No accessible tenants found" });
+      }
+
+      const templates = {
+        reportTypes: [
+          {
+            type: 'clinical-summary',
+            name: 'Clinical Summary Report',
+            description: 'Comprehensive patient outcome summaries with healing progression data',
+            formats: ['pdf', 'excel', 'csv'],
+            features: ['Patient outcomes', 'Healing progression', 'Treatment timelines', 'Quality metrics']
+          },
+          {
+            type: 'episode-summary',
+            name: 'Episode Summary Report',
+            description: 'Episode-level clinical summaries with detailed treatment information',
+            formats: ['pdf', 'excel', 'csv'],
+            features: ['Episode details', 'Treatment history', 'Outcome tracking', 'Cost analysis']
+          },
+          {
+            type: 'provider-performance',
+            name: 'Provider Performance Report',
+            description: 'Provider performance summaries with quality metrics and benchmarks',
+            formats: ['pdf', 'excel', 'csv'],
+            features: ['Performance metrics', 'Quality scores', 'Benchmark comparisons', 'Improvement recommendations']
+          },
+          {
+            type: 'medicare-compliance',
+            name: 'Medicare Compliance Report',
+            description: 'Medicare compliance documentation for audit preparation',
+            formats: ['pdf', 'excel', 'csv'],
+            features: ['20% reduction tracking', 'Compliance scoring', 'Gap analysis', 'Risk assessment']
+          },
+          {
+            type: 'lcd-compliance',
+            name: 'LCD Compliance Report',
+            description: 'LCD policy adherence summaries with violation tracking',
+            formats: ['pdf', 'excel', 'csv'],
+            features: ['Policy adherence', 'Violation tracking', 'Coverage analysis', 'Documentation gaps']
+          },
+          {
+            type: 'audit-trail',
+            name: 'Audit Trail Report',
+            description: 'HIPAA-compliant audit trails and activity logs',
+            formats: ['pdf', 'excel', 'csv'],
+            features: ['User activity', 'System access', 'Data changes', 'Security events']
+          },
+          {
+            type: 'cost-effectiveness',
+            name: 'Cost Effectiveness Report',
+            description: 'Cost-effectiveness analysis for Medicare review and optimization',
+            formats: ['pdf', 'excel', 'csv'],
+            features: ['Cost analysis', 'Reimbursement rates', 'ROI metrics', 'Efficiency tracking']
+          },
+          {
+            type: 'healing-outcomes',
+            name: 'Healing Outcomes Report',
+            description: 'Evidence-based treatment outcome reporting for quality improvement',
+            formats: ['pdf', 'excel', 'csv'],
+            features: ['Outcome metrics', 'Treatment effectiveness', 'Evidence tracking', 'Quality measures']
+          }
+        ],
+        exportFormats: [
+          {
+            format: 'pdf',
+            name: 'PDF Document',
+            description: 'Professional reports with charts and visualizations',
+            features: ['Charts and graphs', 'Professional formatting', 'Print-ready', 'Regulatory compliant']
+          },
+          {
+            format: 'excel',
+            name: 'Excel Workbook',
+            description: 'Detailed analytics data with multiple worksheets',
+            features: ['Multiple sheets', 'Data analysis', 'Pivot tables', 'Interactive charts']
+          },
+          {
+            format: 'csv',
+            name: 'CSV Export',
+            description: 'Raw data export for regulatory submissions',
+            features: ['Raw data', 'System integration', 'Database import', 'Regulatory submission']
+          }
+        ]
+      };
+
+      res.json({
+        success: true,
+        templates
+      });
+    } catch (error) {
+      console.error("Error fetching report templates:", error);
+      res.status(500).json({ message: "Failed to fetch report templates" });
+    }
+  });
+
+  // Clinical Summary Export (Enhanced)
+  app.get('/api/analytics/export/clinical-summary', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const { tenantId, startDate, endDate, format = 'csv', providerId } = req.query;
+
+      if (!tenantId) {
+        return res.status(400).json({ message: "tenantId is required" });
+      }
+
+      // Verify user has access to tenant
+      const userTenantRole = await storage.getUserTenantRole(userId, tenantId);
+      if (!userTenantRole) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+
+      // Parse dates
+      const parsedStartDate = startDate ? new Date(startDate) : new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+      const parsedEndDate = endDate ? new Date(endDate) : new Date();
+
+      // Generate clinical summary report
+      const report = await reportGenerator.generateReport({
+        type: 'clinical-summary',
+        format: format as 'pdf' | 'excel' | 'csv',
+        tenantId,
+        userId,
+        dateRange: {
+          startDate: parsedStartDate,
+          endDate: parsedEndDate
+        },
+        filters: {
+          providerId: providerId || undefined
+        },
+        options: {
+          includeCharts: true,
+          includeDetails: true,
+          includeCitations: true
+        }
+      });
+
+      res.json({
+        success: true,
+        report: {
+          id: report.id,
+          fileName: report.fileName,
+          fileSize: report.fileSize,
+          generatedAt: report.generatedAt,
+          downloadUrl: `/api/reports/download/${report.id}`
+        }
+      });
+    } catch (error) {
+      console.error("Error exporting clinical summary:", error);
+      res.status(500).json({ message: "Failed to export clinical summary" });
+    }
+  });
+
+  // Medicare Compliance Export (Enhanced)
+  app.get('/api/analytics/export/compliance-report', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const { tenantId, startDate, endDate, format = 'csv', complianceLevel } = req.query;
+
+      if (!tenantId) {
+        return res.status(400).json({ message: "tenantId is required" });
+      }
+
+      // Verify user has access to tenant
+      const userTenantRole = await storage.getUserTenantRole(userId, tenantId);
+      if (!userTenantRole) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+
+      // Parse dates
+      const parsedStartDate = startDate ? new Date(startDate) : new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+      const parsedEndDate = endDate ? new Date(endDate) : new Date();
+
+      // Generate Medicare compliance report
+      const report = await reportGenerator.generateReport({
+        type: 'medicare-compliance',
+        format: format as 'pdf' | 'excel' | 'csv',
+        tenantId,
+        userId,
+        dateRange: {
+          startDate: parsedStartDate,
+          endDate: parsedEndDate
+        },
+        filters: {
+          complianceLevel: complianceLevel || undefined
+        },
+        options: {
+          includeCharts: true,
+          includeDetails: true,
+          includeCitations: true
+        }
+      });
+
+      res.json({
+        success: true,
+        report: {
+          id: report.id,
+          fileName: report.fileName,
+          fileSize: report.fileSize,
+          generatedAt: report.generatedAt,
+          downloadUrl: `/api/reports/download/${report.id}`
+        }
+      });
+    } catch (error) {
+      console.error("Error exporting compliance report:", error);
+      res.status(500).json({ message: "Failed to export compliance report" });
+    }
+  });
+
+  // Audit Trail Export (Enhanced)
+  app.get('/api/analytics/export/audit-trail', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const { tenantId, startDate, endDate, format = 'csv' } = req.query;
+
+      if (!tenantId) {
+        return res.status(400).json({ message: "tenantId is required" });
+      }
+
+      // Verify user has access to tenant and admin role
+      const userTenantRole = await storage.getUserTenantRole(userId, tenantId);
+      if (!userTenantRole || userTenantRole.role !== 'Admin') {
+        return res.status(403).json({ message: "Admin access required for audit trail export" });
+      }
+
+      // Parse dates
+      const parsedStartDate = startDate ? new Date(startDate) : new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+      const parsedEndDate = endDate ? new Date(endDate) : new Date();
+
+      // Generate audit trail report
+      const report = await reportGenerator.generateReport({
+        type: 'audit-trail',
+        format: format as 'pdf' | 'excel' | 'csv',
+        tenantId,
+        userId,
+        dateRange: {
+          startDate: parsedStartDate,
+          endDate: parsedEndDate
+        },
+        options: {
+          includeDetails: true
+        }
+      });
+
+      res.json({
+        success: true,
+        report: {
+          id: report.id,
+          fileName: report.fileName,
+          fileSize: report.fileSize,
+          generatedAt: report.generatedAt,
+          downloadUrl: `/api/reports/download/${report.id}`
+        }
+      });
+    } catch (error) {
+      console.error("Error exporting audit trail:", error);
+      res.status(500).json({ message: "Failed to export audit trail" });
+    }
+  });
+
+  // Report cleanup scheduler (run periodically)
+  app.post('/api/reports/cleanup', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      
+      // Only allow admin users to trigger cleanup
+      const tenants = await storage.getTenantsByUser(userId);
+      const isAdmin = await Promise.all(
+        tenants.map(async tenant => {
+          const userRole = await storage.getUserTenantRole(userId, tenant.id);
+          return userRole?.role === 'Admin';
+        })
+      ).then(results => results.some(isAdmin => isAdmin));
+
+      if (!isAdmin) {
+        return res.status(403).json({ message: "Admin access required" });
+      }
+
+      // Clean up expired reports
+      await reportGenerator.cleanupExpiredReports();
+
+      res.json({
+        success: true,
+        message: "Report cleanup completed successfully"
+      });
+    } catch (error) {
+      console.error("Error cleaning up reports:", error);
+      res.status(500).json({ message: "Failed to cleanup reports" });
+    }
+  });
+
   const httpServer = createServer(app);
   return httpServer;
 }

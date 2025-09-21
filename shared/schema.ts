@@ -2450,6 +2450,155 @@ export const complianceTracking = pgTable("compliance_tracking", {
   `),
 ]);
 
+// Scheduled Reports - Automated report generation and delivery
+export const scheduledReports = pgTable("scheduled_reports", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: uuid("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
+  createdBy: varchar("created_by").notNull().references(() => users.id, { onDelete: "cascade" }),
+  
+  // Report configuration
+  reportName: varchar("report_name", { length: 255 }).notNull(),
+  reportDescription: text("report_description"),
+  reportType: varchar("report_type", { length: 100 }).notNull(), // clinical-summary, medicare-compliance, audit-trail, etc.
+  exportFormat: varchar("export_format", { length: 20 }).notNull(), // pdf, excel, csv
+  
+  // Scheduling configuration
+  scheduleType: varchar("schedule_type", { length: 20 }).notNull(), // daily, weekly, monthly, quarterly, one-time
+  scheduleFrequency: integer("schedule_frequency").default(1), // Every N periods (e.g., every 2 weeks)
+  scheduleDayOfWeek: integer("schedule_day_of_week"), // 0-6 for weekly schedules (0 = Sunday)
+  scheduleDayOfMonth: integer("schedule_day_of_month"), // 1-31 for monthly schedules
+  scheduleTime: varchar("schedule_time", { length: 5 }).default("09:00"), // HH:MM format
+  timezone: varchar("timezone", { length: 50 }).default("America/New_York"),
+  
+  // Report parameters
+  dateRangeType: varchar("date_range_type", { length: 20 }).notNull(), // last_30_days, last_quarter, custom, etc.
+  customStartDate: timestamp("custom_start_date"),
+  customEndDate: timestamp("custom_end_date"),
+  filters: jsonb("filters"), // JSON object with report-specific filters
+  reportOptions: jsonb("report_options"), // includeCharts, includeDetails, etc.
+  
+  // Delivery configuration
+  deliveryMethod: varchar("delivery_method", { length: 20 }).notNull(), // email, download, both
+  deliveryRecipients: jsonb("delivery_recipients"), // Array of email addresses
+  deliverySubject: varchar("delivery_subject", { length: 255 }),
+  deliveryMessage: text("delivery_message"),
+  
+  // Schedule status and control
+  isActive: boolean("is_active").default(true),
+  lastRunAt: timestamp("last_run_at"),
+  nextRunAt: timestamp("next_run_at"),
+  lastRunStatus: varchar("last_run_status", { length: 20 }), // success, failed, in_progress
+  lastRunError: text("last_run_error"),
+  totalRuns: integer("total_runs").default(0),
+  successfulRuns: integer("successful_runs").default(0),
+  failedRuns: integer("failed_runs").default(0),
+  
+  // Retention and cleanup
+  reportRetentionDays: integer("report_retention_days").default(90),
+  autoCleanup: boolean("auto_cleanup").default(true),
+  
+  // Metadata
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+}, (table) => [
+  // Performance indexes
+  index("idx_scheduled_reports_tenant_active").on(table.tenantId, table.isActive),
+  index("idx_scheduled_reports_next_run").on(table.nextRunAt),
+  index("idx_scheduled_reports_type_schedule").on(table.reportType, table.scheduleType),
+  index("idx_scheduled_reports_created_by").on(table.createdBy),
+  index("idx_scheduled_reports_status").on(table.lastRunStatus, table.isActive),
+  
+  // Data validation constraints
+  check("check_schedule_type_enum", sql`${table.scheduleType} IN ('daily', 'weekly', 'monthly', 'quarterly', 'one-time')`),
+  check("check_export_format_enum", sql`${table.exportFormat} IN ('pdf', 'excel', 'csv')`),
+  check("check_delivery_method_enum", sql`${table.deliveryMethod} IN ('email', 'download', 'both')`),
+  check("check_date_range_type_enum", sql`${table.dateRangeType} IN ('last_7_days', 'last_30_days', 'last_90_days', 'last_quarter', 'last_year', 'current_month', 'current_quarter', 'current_year', 'custom')`),
+  check("check_schedule_day_of_week_valid", sql`${table.scheduleDayOfWeek} IS NULL OR (${table.scheduleDayOfWeek} >= 0 AND ${table.scheduleDayOfWeek} <= 6)`),
+  check("check_schedule_day_of_month_valid", sql`${table.scheduleDayOfMonth} IS NULL OR (${table.scheduleDayOfMonth} >= 1 AND ${table.scheduleDayOfMonth} <= 31)`),
+  check("check_schedule_frequency_positive", sql`${table.scheduleFrequency} >= 1`),
+  check("check_retention_days_positive", sql`${table.reportRetentionDays} > 0`),
+  check("check_run_counts_non_negative", sql`${table.totalRuns} >= 0 AND ${table.successfulRuns} >= 0 AND ${table.failedRuns} >= 0`),
+  check("check_run_counts_consistency", sql`${table.successfulRuns} + ${table.failedRuns} <= ${table.totalRuns}`),
+]);
+
+// Generated Reports - Track generated report files and downloads
+export const generatedReports = pgTable("generated_reports", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  scheduledReportId: uuid("scheduled_report_id").references(() => scheduledReports.id, { onDelete: "cascade" }),
+  tenantId: uuid("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
+  generatedBy: varchar("generated_by").notNull().references(() => users.id, { onDelete: "set null" }),
+  
+  // Report identification
+  reportName: varchar("report_name", { length: 255 }).notNull(),
+  reportType: varchar("report_type", { length: 100 }).notNull(),
+  exportFormat: varchar("export_format", { length: 20 }).notNull(),
+  
+  // File information
+  fileName: varchar("file_name", { length: 500 }).notNull(),
+  filePath: text("file_path").notNull(), // Object storage path
+  fileSize: integer("file_size").notNull(), // Size in bytes
+  downloadUrl: text("download_url"),
+  
+  // Generation details
+  generationStartedAt: timestamp("generation_started_at").notNull(),
+  generationCompletedAt: timestamp("generation_completed_at"),
+  generationDurationMs: integer("generation_duration_ms"),
+  generationStatus: varchar("generation_status", { length: 20 }).notNull(), // generating, completed, failed
+  generationError: text("generation_error"),
+  
+  // Report parameters used
+  dateRangeStart: timestamp("date_range_start"),
+  dateRangeEnd: timestamp("date_range_end"),
+  filtersUsed: jsonb("filters_used"),
+  optionsUsed: jsonb("options_used"),
+  
+  // Report metadata and statistics
+  totalRecords: integer("total_records").default(0),
+  pagesCount: integer("pages_count"),
+  chartsCount: integer("charts_count"),
+  tablesCount: integer("tables_count"),
+  
+  // Access and security
+  isPublic: boolean("is_public").default(false),
+  accessToken: varchar("access_token", { length: 255 }), // For secure downloads
+  downloadCount: integer("download_count").default(0),
+  lastDownloadedAt: timestamp("last_downloaded_at"),
+  
+  // Expiration and cleanup
+  expiresAt: timestamp("expires_at").notNull(),
+  isExpired: boolean("is_expired").default(false),
+  
+  // Delivery tracking
+  deliveryStatus: varchar("delivery_status", { length: 20 }), // pending, sent, failed
+  deliveryAttempts: integer("delivery_attempts").default(0),
+  lastDeliveryAttempt: timestamp("last_delivery_attempt"),
+  deliveryError: text("delivery_error"),
+  
+  createdAt: timestamp("created_at").defaultNow(),
+}, (table) => [
+  // Performance indexes
+  index("idx_generated_reports_tenant_status").on(table.tenantId, table.generationStatus),
+  index("idx_generated_reports_scheduled").on(table.scheduledReportId),
+  index("idx_generated_reports_expires").on(table.expiresAt, table.isExpired),
+  index("idx_generated_reports_type_date").on(table.reportType, table.createdAt),
+  index("idx_generated_reports_generated_by").on(table.generatedBy),
+  index("idx_generated_reports_delivery").on(table.deliveryStatus),
+  
+  // Data validation constraints
+  check("check_generation_status_enum", sql`${table.generationStatus} IN ('generating', 'completed', 'failed')`),
+  check("check_delivery_status_enum", sql`${table.deliveryStatus} IS NULL OR ${table.deliveryStatus} IN ('pending', 'sent', 'failed')`),
+  check("check_file_size_positive", sql`${table.fileSize} > 0`),
+  check("check_counts_non_negative", sql`
+    ${table.totalRecords} >= 0 AND 
+    (${table.pagesCount} IS NULL OR ${table.pagesCount} >= 0) AND
+    (${table.chartsCount} IS NULL OR ${table.chartsCount} >= 0) AND
+    (${table.tablesCount} IS NULL OR ${table.tablesCount} >= 0) AND
+    ${table.downloadCount} >= 0 AND
+    ${table.deliveryAttempts} >= 0
+  `),
+  check("check_generation_duration_non_negative", sql`${table.generationDurationMs} IS NULL OR ${table.generationDurationMs} >= 0`),
+]);
+
 // ================================================================================
 // PHASE 3.2 ZOD SCHEMAS FOR VALIDATION
 // ================================================================================
@@ -3106,6 +3255,61 @@ export type InsertZeroWastageDocumentation = z.infer<typeof insertZeroWastageDoc
 export type ZeroWastageDocumentation = typeof zeroWastageDocumentation.$inferSelect;
 export type InsertProductCostTracking = z.infer<typeof insertProductCostTrackingSchema>;
 export type ProductCostTracking = typeof productCostTracking.$inferSelect;
+
+// ================================================================================
+// SCHEDULED REPORTS TYPES
+// ================================================================================
+
+// Scheduled reports validation schemas
+export const insertScheduledReportSchema = createInsertSchema(scheduledReports)
+  .omit({ id: true, createdAt: true, updatedAt: true })
+  .extend({
+    customStartDate: z.union([z.date(), z.string(), z.null()]).pipe(z.coerce.date().nullable()).optional(),
+    customEndDate: z.union([z.date(), z.string(), z.null()]).pipe(z.coerce.date().nullable()).optional(),
+    nextRunAt: z.union([z.date(), z.string(), z.null()]).pipe(z.coerce.date().nullable()).optional(),
+    lastRunAt: z.union([z.date(), z.string(), z.null()]).pipe(z.coerce.date().nullable()).optional(),
+    scheduleType: z.enum(['daily', 'weekly', 'monthly', 'quarterly', 'one-time']),
+    exportFormat: z.enum(['pdf', 'excel', 'csv']),
+    deliveryMethod: z.enum(['email', 'download', 'both']),
+    dateRangeType: z.enum(['last_7_days', 'last_30_days', 'last_90_days', 'last_quarter', 'last_year', 'current_month', 'current_quarter', 'current_year', 'custom']),
+    scheduleDayOfWeek: z.number().int().min(0).max(6).nullable().optional(),
+    scheduleDayOfMonth: z.number().int().min(1).max(31).nullable().optional(),
+    scheduleFrequency: z.number().int().min(1).default(1),
+    reportRetentionDays: z.number().int().min(1).default(90)
+  });
+
+export const insertGeneratedReportSchema = createInsertSchema(generatedReports)
+  .omit({ id: true, createdAt: true })
+  .extend({
+    generationStartedAt: z.union([z.date(), z.string()]).pipe(z.coerce.date()),
+    generationCompletedAt: z.union([z.date(), z.string(), z.null()]).pipe(z.coerce.date().nullable()).optional(),
+    dateRangeStart: z.union([z.date(), z.string(), z.null()]).pipe(z.coerce.date().nullable()).optional(),
+    dateRangeEnd: z.union([z.date(), z.string(), z.null()]).pipe(z.coerce.date().nullable()).optional(),
+    expiresAt: z.union([z.date(), z.string()]).pipe(z.coerce.date()),
+    lastDownloadedAt: z.union([z.date(), z.string(), z.null()]).pipe(z.coerce.date().nullable()).optional(),
+    lastDeliveryAttempt: z.union([z.date(), z.string(), z.null()]).pipe(z.coerce.date().nullable()).optional(),
+    generationStatus: z.enum(['generating', 'completed', 'failed']),
+    deliveryStatus: z.enum(['pending', 'sent', 'failed']).nullable().optional(),
+    fileSize: z.number().int().min(1),
+    totalRecords: z.number().int().min(0).default(0),
+    downloadCount: z.number().int().min(0).default(0),
+    deliveryAttempts: z.number().int().min(0).default(0),
+    generationDurationMs: z.number().int().min(0).nullable().optional()
+  });
+
+// Scheduled reports types
+export type InsertScheduledReport = z.infer<typeof insertScheduledReportSchema>;
+export type ScheduledReport = typeof scheduledReports.$inferSelect;
+export type InsertGeneratedReport = z.infer<typeof insertGeneratedReportSchema>;
+export type GeneratedReport = typeof generatedReports.$inferSelect;
+
+// Scheduling enum types
+export type ScheduleType = 'daily' | 'weekly' | 'monthly' | 'quarterly' | 'one-time';
+export type DeliveryMethod = 'email' | 'download' | 'both';
+export type DateRangeType = 'last_7_days' | 'last_30_days' | 'last_90_days' | 'last_quarter' | 'last_year' | 'current_month' | 'current_quarter' | 'current_year' | 'custom';
+export type ReportGenerationStatus = 'generating' | 'completed' | 'failed';
+export type ReportDeliveryStatus = 'pending' | 'sent' | 'failed';
+export type ReportRunStatus = 'success' | 'failed' | 'in_progress';
 
 // ================================================================================
 // ANALYTICS DATA MODEL TYPES

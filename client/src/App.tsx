@@ -8,6 +8,7 @@ import NotFound from "@/pages/not-found";
 import Landing from "@/pages/landing";
 import Dashboard from "@/pages/dashboard";
 import Analytics from "@/pages/analytics";
+import Reports from "@/pages/reports";
 import Patients from "@/pages/patients";
 import PatientDetail from "@/components/patients/patient-detail";
 import Episodes from "@/pages/episodes";
@@ -64,6 +65,7 @@ function Router() {
           {/* Protected routes for authenticated users - more specific routes first */}
           <Route path="/" component={Dashboard} />
           <Route path="/analytics" component={Analytics} />
+          <Route path="/reports" component={Reports} />
           <Route path="/tenant-setup" component={TenantSetup} />
           <Route path="/patients/:patientId" component={PatientDetail} />
           <Route path="/patients" component={Patients} />

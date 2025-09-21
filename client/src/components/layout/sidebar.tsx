@@ -15,7 +15,8 @@ import {
   TestTube2,
   Upload,
   Calendar,
-  TrendingUp
+  TrendingUp,
+  FileBarChart
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -23,6 +24,7 @@ import { cn } from "@/lib/utils";
 const navigationItems = [
   { href: "/", label: "Dashboard", icon: BarChart3 },
   { href: "/analytics", label: "Analytics Dashboard", icon: TrendingUp },
+  { href: "/reports", label: "Reports & Exports", icon: FileBarChart },
   { href: "/patients", label: "Patients", icon: Users },
   { href: "/episodes", label: "Episodes", icon: Calendar },
   { href: "/encounters", label: "Encounters", icon: ClipboardList },
