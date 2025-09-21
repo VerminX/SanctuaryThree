@@ -9,7 +9,7 @@ import {
   Target, Activity, Calendar, AlertTriangle, CheckCircle2, XCircle,
   ThermometerSun, Droplets, Scissors, Footprints, BookOpen, Brain
 } from "lucide-react";
-import { Episode, Encounter, woundDetailsSchema, conservativeCareSchema, medicareLcdComplianceSchema, treatmentRecommendationSchema } from "@shared/schema";
+import { Episode, Encounter, medicareLcdComplianceSchema, treatmentRecommendationSchema } from "@shared/schema";
 import { 
   ResponsiveContainer, LineChart, Line, XAxis, YAxis, CartesianGrid, 
   BarChart, Bar, PieChart, Pie, Cell, Area, AreaChart, RadarChart, 
@@ -17,6 +17,15 @@ import {
 } from "recharts";
 import { useMemo, ReactNode } from "react";
 import { z } from "zod";
+import {
+  assessMedicareCompliance,
+  classifyWound,
+  parseWoundDetails,
+  parseConservativeCare,
+  type WoundDetails,
+  type ConservativeCare,
+  type MedicareComplianceResult
+} from "@shared/clinicalCompliance";
 
 // Interface for decrypted patient data
 interface DecryptedPatient {
@@ -30,9 +39,7 @@ interface DecryptedPatient {
   macRegion?: string;
 }
 
-// Type definitions using the new schemas
-type WoundDetails = z.infer<typeof woundDetailsSchema>;
-type ConservativeCare = z.infer<typeof conservativeCareSchema>;
+// Type definitions using the new schemas (WoundDetails and ConservativeCare now imported from centralized module)
 type MedicareLcdCompliance = z.infer<typeof medicareLcdComplianceSchema>;
 type TreatmentRecommendation = z.infer<typeof treatmentRecommendationSchema>;
 
@@ -65,185 +72,63 @@ interface ConservativeCareTabProps {
   isLoading: boolean;
 }
 
-// Helper functions for parsing encounter data
-function parseWoundDetails(woundDetailsJson: any): WoundDetails | null {
-  try {
-    if (!woundDetailsJson) return null;
-    return woundDetailsSchema.parse(woundDetailsJson);
-  } catch (error) {
-    console.warn('Failed to parse wound details:', error);
-    return null;
-  }
+// Helper function to convert encounters to ParsedEncounterData format for backward compatibility
+function convertToParsedEncounters(encounters: Encounter[]): ParsedEncounterData[] {
+  return encounters.map(encounter => ({
+    id: encounter.id,
+    date: encounter.date,
+    woundDetails: parseWoundDetails(encounter.woundDetails),
+    conservativeCare: parseConservativeCare(encounter.conservativeCare),
+    diabeticStatus: encounter.diabeticStatus,
+    infectionStatus: encounter.infectionStatus
+  }));
 }
 
-function parseConservativeCare(conservativeCareJson: any): ConservativeCare | null {
-  try {
-    if (!conservativeCareJson) return null;
-    return conservativeCareSchema.parse(conservativeCareJson);
-  } catch (error) {
-    console.warn('Failed to parse conservative care:', error);
-    return null;
-  }
-}
-
-// Helper function to get ISO week identifier (YYYY-WW format)
-function getISOWeek(date: Date): string {
-  const target = new Date(date.valueOf());
-  const dayNumber = (date.getUTCDay() + 6) % 7;
-  target.setUTCDate(target.getUTCDate() - dayNumber + 3);
-  const firstThursday = target.valueOf();
-  target.setUTCMonth(0, 1);
-  if (target.getUTCDay() !== 4) {
-    target.setUTCMonth(0, 1 + ((4 - target.getUTCDay()) + 7) % 7);
-  }
-  const weekNumber = 1 + Math.ceil((firstThursday - target.valueOf()) / 604800000);
-  return `${target.getUTCFullYear()}-W${weekNumber.toString().padStart(2, '0')}`;
-}
-
-// Helper function to get all expected weeks in episode
-function getExpectedWeeks(startDate: Date, endDate: Date): string[] {
-  const weeks: string[] = [];
-  const current = new Date(startDate);
-  
-  while (current <= endDate) {
-    weeks.push(getISOWeek(current));
-    current.setDate(current.getDate() + 7);
-  }
-  
-  return [...new Set(weeks)]; // Remove duplicates
-}
-
-// Medicare LCD compliance assessment function
-function assessMedicareLcdCompliance(
+// Convert centralized compliance result to MedicareLcdCompliance format
+function convertToMedicareLcdCompliance(
+  complianceResult: MedicareComplianceResult,
   episode: Episode,
-  encounters: ParsedEncounterData[],
-  patient: DecryptedPatient
+  encounters: ParsedEncounterData[]
 ): MedicareLcdCompliance {
-  const episodeStartDate = new Date(episode.episodeStartDate);
-  const currentDate = new Date();
-  const treatmentDays = Math.ceil((currentDate.getTime() - episodeStartDate.getTime()) / (1000 * 60 * 60 * 24));
+  // Use centralized result data instead of recalculating
+  const woundClassification = classifyWound(episode);
+  const isDFU = woundClassification.isDFU;
+  const isVLU = woundClassification.isVLU;
   
-  // Collect all interventions from encounters
-  const allInterventions = encounters
-    .filter(enc => enc.conservativeCare)
-    .flatMap(enc => enc.conservativeCare?.interventions || []);
+  // Map data from centralized result
+  const expectedWeeks = complianceResult.weeklyAssessments.expectedWeeks;
+  const coveredWeeks = expectedWeeks.filter(week => !complianceResult.weeklyAssessments.missingWeeks.includes(week));
+  const missingWeeks = complianceResult.weeklyAssessments.missingWeeks;
   
-  // Implement proper week bucketing for measurements
-  const measurementsByWeek = new Map<string, Date[]>();
-  encounters
-    .filter(enc => enc.woundDetails?.currentMeasurement)
-    .forEach(enc => {
-      const week = getISOWeek(new Date(enc.date));
-      if (!measurementsByWeek.has(week)) {
-        measurementsByWeek.set(week, []);
-      }
-      measurementsByWeek.get(week)!.push(new Date(enc.date));
-    });
+  // Map standard of care elements from centralized result
+  const offloadingProvided = complianceResult.standardOfCare.offloading !== false;
+  const compressionProvided = complianceResult.standardOfCare.compression !== false;
+  const infectionControlProvided = complianceResult.standardOfCare.infectionControl;
+  const educationProvided = complianceResult.standardOfCare.patientEducation;
   
-  // Calculate week coverage and identify missing weeks
-  const expectedWeeks = getExpectedWeeks(episodeStartDate, currentDate);
-  const coveredWeeks = Array.from(measurementsByWeek.keys());
-  const missingWeeks = expectedWeeks.filter(week => !coveredWeeks.includes(week));
+  // Map wound reduction data
+  const areaReduction = complianceResult.woundReduction.percentage;
+  const meetsThreshold = complianceResult.woundReduction.meetsThreshold;
+  const fourWeekResponseDocumented = complianceResult.woundReduction.current > 0;
+  const baselineDocumented = complianceResult.woundReduction.baseline > 0;
   
-  // Require at least one measurement per week (no tolerance for missing weeks)
-  const weeklyAssessmentsMet = missingWeeks.length === 0;
-  
-  // Check standard of care elements based on wound type
-  const isDFU = episode.woundType?.toLowerCase().includes('dfu') || episode.woundType?.toLowerCase().includes('diabetic');
-  const isVLU = episode.woundType?.toLowerCase().includes('vlu') || episode.woundType?.toLowerCase().includes('venous');
-  
-  // Offloading assessment for DFU
-  const offloadingProvided = isDFU ? allInterventions.some(int => 
-    int.type.includes('offloading') || int.name.toLowerCase().includes('offloading')
-  ) : true; // Not required for non-DFU
-  
-  // Compression therapy for VLU
-  const compressionProvided = isVLU ? allInterventions.some(int => 
-    int.type === 'compression_therapy' || int.name.toLowerCase().includes('compression')
-  ) : true; // Not required for non-VLU
-  
-  // Infection control assessment
-  const infectionControlProvided = allInterventions.some(int => 
-    int.type === 'infection_management' || int.type.includes('debridement')
-  );
-  
-  // Patient education assessment
-  const educationProvided = allInterventions.some(int => 
-    int.type === 'education' || int.type === 'nutrition_counseling'
-  );
-  
-  // Calculate 4-week response assessment with proper documentation requirements
-  const fourWeekDate = new Date(episodeStartDate.getTime() + (28 * 24 * 60 * 60 * 1000));
-  const fourWeekWindowStart = new Date(fourWeekDate.getTime() - (7 * 24 * 60 * 60 * 1000)); // Day 21
-  const fourWeekWindowEnd = new Date(fourWeekDate.getTime() + (7 * 24 * 60 * 60 * 1000)); // Day 35
-  
-  let areaReduction: number | undefined;
-  let meetsThreshold: boolean | undefined;
-  let fourWeekResponseDocumented = false;
-  let baselineDocumented = false;
-  let criticalGaps: string[] = [];
-  
-  // Find baseline measurement (within first week of episode)
-  const baselineWindow = new Date(episodeStartDate.getTime() + (7 * 24 * 60 * 60 * 1000));
-  const baselineEncounter = encounters
-    .filter(enc => new Date(enc.date) <= baselineWindow && enc.woundDetails?.currentMeasurement?.area)
-    .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())[0];
-  
-  baselineDocumented = !!baselineEncounter;
-  
-  // Find 4-week measurement (within 7-day window around day 28)
-  const fourWeekEncounter = encounters
-    .filter(enc => {
-      const encDate = new Date(enc.date);
-      return encDate >= fourWeekWindowStart && 
-             encDate <= fourWeekWindowEnd && 
-             enc.woundDetails?.currentMeasurement?.area;
-    })
-    .sort((a, b) => Math.abs(new Date(a.date).getTime() - fourWeekDate.getTime()) - 
-                    Math.abs(new Date(b.date).getTime() - fourWeekDate.getTime()))[0]; // Closest to day 28
-  
-  fourWeekResponseDocumented = !!fourWeekEncounter;
-  
-  // Only compute meetsThreshold when both measurements exist
-  if (baselineDocumented && fourWeekResponseDocumented) {
-    const baselineArea = baselineEncounter.woundDetails!.currentMeasurement!.area!;
-    const fourWeekArea = fourWeekEncounter.woundDetails!.currentMeasurement!.area!;
-    areaReduction = ((baselineArea - fourWeekArea) / baselineArea) * 100;
-    meetsThreshold = areaReduction >= 50; // >= 50% reduction threshold
-  } else {
-    // Add critical gaps when documentation is missing
-    if (!baselineDocumented && treatmentDays >= 7) {
-      criticalGaps.push('Missing baseline wound measurement within first week of episode');
-    }
-    if (!fourWeekResponseDocumented && currentDate > fourWeekWindowEnd) {
-      criticalGaps.push('Missing 4-week response measurement (day 21-35 window)');
-    }
-  }
-  
-  // Separate hard requirements (must-have gates) from informational elements
+  // Map requirements using centralized logic
   const hardRequirements = {
-    conservativeCareDuration: treatmentDays >= 30,
-    weeklyAssessments: weeklyAssessmentsMet,
-    // DFU offloading is critical for diabetic foot ulcers
+    conservativeCareDuration: complianceResult.conservativeCareDays >= 30,
+    weeklyAssessments: complianceResult.weeklyAssessments.statusWithExceptions !== 'non-compliant',
     dfuOffloading: isDFU ? offloadingProvided : true,
-    // VLU compression is critical for venous leg ulcers  
     vluCompression: isVLU ? compressionProvided : true,
-    // Baseline and 4-week documentation when required
-    baselineDocumentation: baselineDocumented || treatmentDays < 7,
-    fourWeekDocumentation: fourWeekResponseDocumented || currentDate <= fourWeekWindowEnd
+    baselineDocumentation: baselineDocumented,
+    fourWeekDocumentation: fourWeekResponseDocumented
   };
   
-  // Informational requirements (contribute to overall score but not gates)
   const informationalRequirements = {
     infectionControl: infectionControlProvided,
     patientEducation: educationProvided,
     generalDocumentation: encounters.length > 0
   };
   
-  // All hard requirements must pass for compliance
   const hardRequirementsMet = Object.values(hardRequirements).every(Boolean);
-  
-  // Calculate informational score for tracking purposes
   const informationalScore = Object.values(informationalRequirements).filter(Boolean).length / 
                             Object.values(informationalRequirements).length * 100;
   
@@ -881,8 +766,9 @@ export default function ConservativeCareTab({ episode, encounters, patient, isLo
       }
     }
 
-    // Assess Medicare LCD compliance
-    const lcdCompliance = patient ? assessMedicareLcdCompliance(episode, parsedEncounters, patient) : null;
+    // Use centralized Medicare compliance assessment
+    const centralizedCompliance = episode ? assessMedicareCompliance(episode, encounters) : null;
+    const lcdCompliance = centralizedCompliance ? convertToMedicareLcdCompliance(centralizedCompliance, episode, parsedEncounters) : null;
     
     // Generate clinical alerts from real data
     const clinicalAlerts = lcdCompliance ? 

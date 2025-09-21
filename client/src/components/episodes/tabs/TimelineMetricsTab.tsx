@@ -6,6 +6,13 @@ import { Activity, Calendar, TrendingUp, Clock, Ruler, Target, Gauge, AlertTrian
 import { Episode, Encounter } from "@shared/schema";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, AreaChart, Area, RadialBarChart, RadialBar, Cell, PieChart, Pie } from "recharts";
 import { useMemo } from "react";
+import {
+  assessWoundReduction,
+  assessMedicareCompliance,
+  parseWoundDetails,
+  type WoundDetails,
+  type MedicareComplianceResult
+} from "@shared/clinicalCompliance";
 
 // Interface for decrypted patient data
 interface DecryptedPatient {
@@ -50,18 +57,7 @@ interface MedicareReductionData {
   isIn28DayWindow: boolean;
 }
 
-// Type guards for runtime safety
-interface WoundDetails {
-  measurements?: {
-    length?: number;
-    width?: number;
-    depth?: number;
-    area?: number;
-    unit?: string;
-  };
-  type?: string;
-}
-
+// Type guards for runtime safety (using centralized WoundDetails type)
 function isValidWoundDetails(woundDetails: any): woundDetails is WoundDetails {
   return woundDetails && typeof woundDetails === 'object';
 }
@@ -100,14 +96,26 @@ export default function TimelineMetricsTab({ episode, encounters, patient, isLoa
     // First, sort encounters by ISO date to ensure proper chronological order
     const sortedEncounters = encounters
       .filter(encounter => {
-        const woundDetails = encounter.woundDetails;
-        return isValidWoundDetails(woundDetails) && woundDetails.measurements;
+        const woundDetails = parseWoundDetails(encounter.woundDetails);
+        return woundDetails && (woundDetails.measurements || woundDetails.currentMeasurement);
       })
       .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
     
     return sortedEncounters.map(encounter => {
-      const woundDetails = encounter.woundDetails as WoundDetails;
-      const measurements = woundDetails.measurements!;
+      const woundDetails = parseWoundDetails(encounter.woundDetails);
+      const measurements = woundDetails?.measurements || woundDetails?.currentMeasurement;
+      
+      if (!measurements) {
+        return {
+          date: new Date(encounter.date).toLocaleDateString(),
+          isoDate: encounter.date,
+          length: null,
+          width: null,
+          depth: null,
+          area: null,
+          calculatedArea: null
+        };
+      }
       
       // Use ?? null instead of || null to preserve 0 values
       const length = safeNumber(measurements.length);
@@ -132,9 +140,15 @@ export default function TimelineMetricsTab({ episode, encounters, patient, isLoa
     });
   }, [encounters]);
 
-  // Calculate Medicare 20% reduction data with proper 28-day evaluation window
+  // Use centralized Medicare compliance assessment for 20% reduction
+  const complianceResult = useMemo((): MedicareComplianceResult | null => {
+    if (!episode || !encounters || encounters.length === 0) return null;
+    return assessMedicareCompliance(episode, encounters);
+  }, [episode, encounters]);
+
+  // Adapt centralized result to existing MedicareReductionData interface for UI compatibility
   const medicareData = useMemo((): MedicareReductionData => {
-    if (measurementData.length < 1 || !episode?.episodeStartDate) {
+    if (!complianceResult || !episode?.episodeStartDate) {
       return {
         baseline: 0,
         current: 0,
@@ -147,67 +161,36 @@ export default function TimelineMetricsTab({ episode, encounters, patient, isLoa
       };
     }
 
-    const episodeStartDate = new Date(episode.episodeStartDate);
-    const today = new Date();
-    const daysSinceBaseline = Math.ceil((today.getTime() - episodeStartDate.getTime()) / (1000 * 60 * 60 * 24));
-    const daysToDeadline = Math.max(0, 28 - daysSinceBaseline);
-    const isIn28DayWindow = daysSinceBaseline <= 28;
+    const woundReduction = complianceResult.woundReduction;
     
-    // Get baseline measurement (first available measurement)
-    const baselineMeasurement = measurementData[0];
-    const baseline = baselineMeasurement.calculatedArea ?? baselineMeasurement.area ?? 0;
-    
-    // For Medicare compliance, evaluate at 28 days or current if past 28 days
-    let evaluationMeasurement;
-    if (isIn28DayWindow && measurementData.length >= 2) {
-      // Find measurement closest to day 28 or use latest if before day 28
-      evaluationMeasurement = measurementData[measurementData.length - 1];
-    } else {
-      // Past 28 days - use measurement at or around day 28, or latest available
-      const day28Date = new Date(episodeStartDate.getTime() + 28 * 24 * 60 * 60 * 1000);
-      evaluationMeasurement = measurementData.find(m => 
-        new Date(m.isoDate).getTime() >= day28Date.getTime()
-      ) || measurementData[measurementData.length - 1];
-    }
-    
-    const current = evaluationMeasurement.calculatedArea ?? evaluationMeasurement.area ?? 0;
-    const reductionPercentage = baseline > 0 ? ((baseline - current) / baseline) * 100 : 0;
-    
-    // Medicare compliance logic based on 28-day window
-    let isCompliant: boolean;
+    // Map compliance status to timeline-specific status
     let status: 'on-track' | 'at-risk' | 'compliant' | 'non-compliant';
-    
-    if (isIn28DayWindow) {
-      // During 28-day window, track progress toward 20%
-      const targetProgress = (daysSinceBaseline / 28) * 20; // Expected progress
-      isCompliant = reductionPercentage >= 20;
-      
-      if (isCompliant) {
-        status = 'compliant';
-      } else if (reductionPercentage >= targetProgress * 0.8) {
+    if (woundReduction.meetsThreshold) {
+      status = 'compliant';
+    } else if (woundReduction.isIn28DayWindow) {
+      const targetProgress = (woundReduction.daysSinceBaseline / 28) * 20;
+      if (woundReduction.percentage >= targetProgress * 0.8) {
         status = 'on-track';
-      } else if (reductionPercentage >= targetProgress * 0.5) {
+      } else if (woundReduction.percentage >= targetProgress * 0.5) {
         status = 'at-risk';
       } else {
         status = 'non-compliant';
       }
     } else {
-      // Past 28 days - final evaluation
-      isCompliant = reductionPercentage >= 20;
-      status = isCompliant ? 'compliant' : 'non-compliant';
+      status = 'non-compliant';
     }
     
     return {
-      baseline,
-      current,
-      reductionPercentage: Math.max(0, reductionPercentage),
-      isCompliant,
+      baseline: woundReduction.baseline,
+      current: woundReduction.current,
+      reductionPercentage: woundReduction.percentage,
+      isCompliant: woundReduction.meetsThreshold,
       status,
-      daysToDeadline,
-      daysSinceBaseline,
-      isIn28DayWindow
+      daysToDeadline: Math.max(0, 28 - woundReduction.daysSinceBaseline),
+      daysSinceBaseline: woundReduction.daysSinceBaseline,
+      isIn28DayWindow: woundReduction.isIn28DayWindow
     };
-  }, [measurementData, episode?.episodeStartDate]);
+  }, [complianceResult, episode?.episodeStartDate]);
 
   // Calculate healing velocity with improved interval-based calculation
   const healingVelocity = useMemo((): HealingVelocityData => {
