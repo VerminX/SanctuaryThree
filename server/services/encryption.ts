@@ -1,5 +1,5 @@
 import crypto from 'crypto';
-import { healthMonitor } from './healthMonitoring.js';
+import { healthMonitor } from './healthMonitoring';
 
 const ALGORITHM = 'aes-256-gcm';
 const KEY_LENGTH = 32;

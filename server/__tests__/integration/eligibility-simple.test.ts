@@ -101,11 +101,6 @@ mockAnalyzeEligibilityWithFullContext.mockResolvedValue({
   }
 });
 
-jest.mock('../../services/openai', () => ({
-  analyzeEligibility: mockAnalyzeEligibility,
-  analyzeEligibilityWithFullContext: mockAnalyzeEligibilityWithFullContext
-}));
-
 // Mock authentication middleware for testing
 const mockIsAuthenticated = (req: any, res: any, next: any) => {
   // Mock authenticated user
@@ -116,6 +111,11 @@ const mockIsAuthenticated = (req: any, res: any, next: any) => {
   };
   next();
 };
+
+jest.mock('../../services/openai', () => ({
+  analyzeEligibility: mockAnalyzeEligibility,
+  analyzeEligibilityWithFullContext: mockAnalyzeEligibilityWithFullContext
+}));
 
 // Mock the auth middleware
 jest.mock('../../replitAuth', () => ({
