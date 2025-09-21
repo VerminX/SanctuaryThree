@@ -12,6 +12,8 @@ import {
   uuid,
   unique,
   uniqueIndex,
+  check,
+  foreignKey,
 } from "drizzle-orm/pg-core";
 import { relations } from "drizzle-orm";
 import { createInsertSchema } from "drizzle-zod";
@@ -285,6 +287,96 @@ export const pdfExtractedData = pgTable("pdf_extracted_data", {
   reviewedAt: timestamp("reviewed_at"),
 });
 
+// Wound Measurement History - Comprehensive temporal tracking for Medicare LCD compliance
+export const woundMeasurementHistory = pgTable("wound_measurement_history", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  
+  // Foreign key references
+  episodeId: uuid("episode_id").notNull().references(() => episodes.id, { onDelete: "cascade" }),
+  encounterId: uuid("encounter_id").references(() => encounters.id, { onDelete: "cascade" }), // Optional encounter linkage
+  
+  // Temporal tracking for Medicare LCD requirements
+  measurementTimestamp: timestamp("measurement_timestamp").notNull(),
+  daysSinceEpisodeStart: integer("days_since_episode_start"), // Calculated field for timeline tracking
+  
+  // Core measurement fields with decimal precision for regulatory accuracy
+  length: decimal("length", { precision: 8, scale: 2 }), // Length in specified units (cm/mm)
+  width: decimal("width", { precision: 8, scale: 2 }), // Width in specified units
+  depth: decimal("depth", { precision: 8, scale: 2 }), // Depth in specified units (optional)
+  calculatedArea: decimal("calculated_area", { precision: 10, scale: 4 }), // Length × Width (cm²)
+  volume: decimal("volume", { precision: 12, scale: 4 }), // Calculated when depth available (cm³)
+  unitOfMeasurement: varchar("unit_of_measurement", { length: 10 }).notNull().default("cm"), // cm, mm, inches
+  
+  // Measurement methodology for audit trail
+  measurementMethod: varchar("measurement_method", { length: 50 }).notNull(), // ruler, digital_caliper, wound_imaging, etc.
+  measurementDevice: varchar("measurement_device", { length: 100 }), // Specific device/tool used
+  
+  // User and validation tracking
+  recordedBy: varchar("recorded_by").notNull().references(() => users.id, { onDelete: "restrict" }), // Clinical staff recording
+  validationStatus: varchar("validation_status", { length: 20 }).notNull().default("pending"), // validated, flagged, needs_review
+  validatedBy: varchar("validated_by").references(() => users.id, { onDelete: "set null" }), // Validator user ID
+  validationTimestamp: timestamp("validation_timestamp"), // When validation occurred
+  
+  // Progression calculation fields for Medicare LCD 20% reduction tracking
+  baselineArea: decimal("baseline_area", { precision: 10, scale: 4 }), // First measurement area for comparison
+  areaReductionPercentage: decimal("area_reduction_percentage", { precision: 5, scale: 2 }), // % reduction from baseline
+  previousMeasurementId: uuid("previous_measurement_id"), // Previous measurement for delta - will add reference after table definition
+  areaDelta: decimal("area_delta", { precision: 10, scale: 4 }), // Change from previous measurement
+  healingVelocity: decimal("healing_velocity", { precision: 8, scale: 4 }), // Area reduction per day (cm²/day)
+  
+  // Data quality and audit fields for regulatory compliance
+  dataQualityScore: integer("data_quality_score").default(100), // 0-100 quality score
+  isOutlier: boolean("is_outlier").default(false), // Statistical outlier detection
+  outlierReason: varchar("outlier_reason", { length: 255 }), // Reason for outlier classification
+  confidenceScore: decimal("confidence_score", { precision: 3, scale: 2 }), // Measurement confidence (0.00-1.00)
+  
+  // Clinical context and notes
+  encryptedNotes: jsonb("encrypted_notes"), // Encrypted clinical notes about measurement context
+  woundCondition: varchar("wound_condition", { length: 100 }), // improving, stable, deteriorating
+  photographicEvidence: boolean("photographic_evidence").default(false), // Whether photos were taken
+  imageMetadata: jsonb("image_metadata"), // Encrypted image reference metadata
+  
+  // Environmental and patient factors affecting measurement
+  patientPosition: varchar("patient_position", { length: 50 }), // supine, prone, sitting, standing
+  measurementTemperature: decimal("measurement_temperature", { precision: 4, scale: 1 }), // Room temperature (°F/°C)
+  edemaPresent: boolean("edema_present").default(false), // Presence of edema affecting measurement
+  drainageAmount: varchar("drainage_amount", { length: 20 }), // none, minimal, moderate, copious
+  
+  // Audit trail timestamps
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+}, (table) => [
+  // Database integrity constraints for regulatory compliance
+  unique("unique_episode_measurement_timestamp").on(table.episodeId, table.measurementTimestamp),
+  foreignKey({
+    columns: [table.previousMeasurementId],
+    foreignColumns: [table.id],
+    name: "fk_previous_measurement_self_ref"
+  }),
+  
+  // CHECK constraints for non-negative measurement values
+  check("check_length_non_negative", sql`${table.length} IS NULL OR ${table.length} >= 0`),
+  check("check_width_non_negative", sql`${table.width} IS NULL OR ${table.width} >= 0`),
+  check("check_depth_non_negative", sql`${table.depth} IS NULL OR ${table.depth} >= 0`),
+  check("check_calculated_area_non_negative", sql`${table.calculatedArea} IS NULL OR ${table.calculatedArea} >= 0`),
+  check("check_volume_non_negative", sql`${table.volume} IS NULL OR ${table.volume} >= 0`),
+  check("check_baseline_area_non_negative", sql`${table.baselineArea} IS NULL OR ${table.baselineArea} >= 0`),
+  
+  // CHECK constraints for score ranges
+  check("check_data_quality_score_range", sql`${table.dataQualityScore} >= 0 AND ${table.dataQualityScore} <= 100`),
+  check("check_confidence_score_range", sql`${table.confidenceScore} IS NULL OR (${table.confidenceScore} >= 0 AND ${table.confidenceScore} <= 1)`),
+  
+  // Performance indexes for temporal queries and progression analysis
+  index("idx_wound_measurements_episode_timestamp").on(table.episodeId, table.measurementTimestamp),
+  index("idx_wound_measurements_encounter_date").on(table.encounterId, table.measurementTimestamp),
+  index("idx_wound_measurements_validation_status").on(table.validationStatus),
+  index("idx_wound_measurements_recorded_by").on(table.recordedBy, table.measurementTimestamp),
+  index("idx_wound_measurements_progression").on(table.episodeId, table.daysSinceEpisodeStart),
+  index("idx_wound_measurements_outliers").on(table.isOutlier, table.validationStatus),
+  // Composite index for Medicare LCD 20% reduction analysis
+  index("idx_wound_measurements_lcd_analysis").on(table.episodeId, table.areaReductionPercentage, table.daysSinceEpisodeStart)
+]);
+
 // Relations
 export const tenantsRelations = relations(tenants, ({ many }) => ({
   tenantUsers: many(tenantUsers),
@@ -295,6 +387,8 @@ export const tenantsRelations = relations(tenants, ({ many }) => ({
 export const usersRelations = relations(users, ({ many }) => ({
   tenantUsers: many(tenantUsers),
   auditLogs: many(auditLogs),
+  recordedMeasurements: many(woundMeasurementHistory, { relationName: "recordedByUser" }),
+  validatedMeasurements: many(woundMeasurementHistory, { relationName: "validatedByUser" }),
 }));
 
 export const tenantUsersRelations = relations(tenantUsers, ({ one }) => ({
@@ -313,6 +407,7 @@ export const encountersRelations = relations(encounters, ({ one, many }) => ({
   patient: one(patients, { fields: [encounters.patientId], references: [patients.id] }),
   episode: one(episodes, { fields: [encounters.episodeId], references: [episodes.id] }),
   eligibilityChecks: many(eligibilityChecks),
+  woundMeasurements: many(woundMeasurementHistory),
 }));
 
 export const episodesRelations = relations(episodes, ({ one, many }) => ({
@@ -320,6 +415,7 @@ export const episodesRelations = relations(episodes, ({ one, many }) => ({
   encounters: many(encounters),
   eligibilityChecks: many(eligibilityChecks),
   documents: many(documents),
+  woundMeasurements: many(woundMeasurementHistory),
 }));
 
 export const policySourcesRelations = relations(policySources, ({ many }) => ({
@@ -381,6 +477,27 @@ export const pdfExtractedDataRelations = relations(pdfExtractedData, ({ one }) =
   episode: one(episodes, { fields: [pdfExtractedData.episodeId], references: [episodes.id] }),
 }));
 
+// Wound Measurement History Relations - Comprehensive tracking for Medicare LCD compliance
+export const woundMeasurementHistoryRelations = relations(woundMeasurementHistory, ({ one }) => ({
+  episode: one(episodes, { fields: [woundMeasurementHistory.episodeId], references: [episodes.id] }),
+  encounter: one(encounters, { fields: [woundMeasurementHistory.encounterId], references: [encounters.id] }),
+  recordedByUser: one(users, { 
+    fields: [woundMeasurementHistory.recordedBy], 
+    references: [users.id],
+    relationName: "recordedByUser"
+  }),
+  validatedByUser: one(users, { 
+    fields: [woundMeasurementHistory.validatedBy], 
+    references: [users.id],
+    relationName: "validatedByUser"
+  }),
+  previousMeasurement: one(woundMeasurementHistory, { 
+    fields: [woundMeasurementHistory.previousMeasurementId], 
+    references: [woundMeasurementHistory.id],
+    relationName: "previousMeasurement"
+  }),
+}));
+
 // Enums for better type safety - declared before use in Zod schemas
 export const POLICY_STATUS = {
   CURRENT: 'current',      // Currently active and effective
@@ -411,6 +528,50 @@ export const PDF_VALIDATION_STATUS = {
   REVIEWED: 'reviewed',   // Under review
   APPROVED: 'approved',   // Approved for use
   REJECTED: 'rejected'    // Rejected, needs correction
+} as const;
+
+// Wound measurement validation status enums for regulatory compliance
+export const WOUND_MEASUREMENT_VALIDATION_STATUS = {
+  VALIDATED: 'validated',         // Measurement validated and approved
+  FLAGGED: 'flagged',            // Measurement flagged for review
+  NEEDS_REVIEW: 'needs_review',  // Requires clinical review
+  OUTLIER: 'outlier',            // Statistical outlier detected
+  PENDING: 'pending',            // Awaiting validation
+  REJECTED: 'rejected'           // Measurement rejected
+} as const;
+
+// Wound measurement methods for accuracy tracking
+export const WOUND_MEASUREMENT_METHODS = {
+  RULER: 'ruler',                    // Traditional ruler measurement
+  DIGITAL_CALIPER: 'digital_caliper', // Digital caliper measurement
+  WOUND_IMAGING: 'wound_imaging',     // Digital imaging/photography
+  PLANIMETRY: 'planimetry',          // Planimetric measurement
+  STRUCTURED_LIGHT: 'structured_light', // 3D structured light scanning
+  MOBILE_APP: 'mobile_app',          // Mobile application measurement
+  ACETATE_TRACING: 'acetate_tracing'  // Acetate tracing method
+} as const;
+
+// Wound condition status for clinical assessment
+export const WOUND_CONDITION = {
+  IMPROVING: 'improving',           // Wound showing signs of improvement
+  STABLE: 'stable',                // Wound condition stable/unchanged
+  DETERIORATING: 'deteriorating'   // Wound condition worsening
+} as const;
+
+// Wound drainage amount categories for clinical documentation
+export const WOUND_DRAINAGE_AMOUNT = {
+  NONE: 'none',         // No drainage present
+  MINIMAL: 'minimal',   // Minimal drainage
+  MODERATE: 'moderate', // Moderate drainage
+  COPIOUS: 'copious'    // Copious/heavy drainage
+} as const;
+
+// Patient position options for measurement context
+export const PATIENT_POSITION = {
+  SUPINE: 'supine',     // Patient lying on back
+  PRONE: 'prone',       // Patient lying face down
+  SITTING: 'sitting',   // Patient in sitting position
+  STANDING: 'standing'  // Patient in standing position
 } as const;
 
 // Zod schemas for validation
@@ -464,6 +625,92 @@ export const insertPdfExtractedDataSchema = createInsertSchema(pdfExtractedData)
     validationScore: z.string().optional()
   });
 
+// Enhanced wound measurement history schema with comprehensive validation for Medicare LCD compliance
+export const insertWoundMeasurementHistorySchema = createInsertSchema(woundMeasurementHistory)
+  .omit({ id: true, createdAt: true, updatedAt: true })
+  .extend({
+    // Timestamp handling for measurement tracking
+    measurementTimestamp: z.union([z.date(), z.string()]).pipe(
+      z.coerce.date()
+    ),
+    validationTimestamp: z.union([z.date(), z.string(), z.null()]).pipe(
+      z.coerce.date().nullable()
+    ).optional(),
+    
+    // Validation status with enum enforcement
+    validationStatus: z.enum([
+      WOUND_MEASUREMENT_VALIDATION_STATUS.VALIDATED,
+      WOUND_MEASUREMENT_VALIDATION_STATUS.FLAGGED,
+      WOUND_MEASUREMENT_VALIDATION_STATUS.NEEDS_REVIEW,
+      WOUND_MEASUREMENT_VALIDATION_STATUS.OUTLIER,
+      WOUND_MEASUREMENT_VALIDATION_STATUS.PENDING,
+      WOUND_MEASUREMENT_VALIDATION_STATUS.REJECTED
+    ]).default(WOUND_MEASUREMENT_VALIDATION_STATUS.PENDING),
+    
+    // Measurement method validation
+    measurementMethod: z.enum([
+      WOUND_MEASUREMENT_METHODS.RULER,
+      WOUND_MEASUREMENT_METHODS.DIGITAL_CALIPER,
+      WOUND_MEASUREMENT_METHODS.WOUND_IMAGING,
+      WOUND_MEASUREMENT_METHODS.PLANIMETRY,
+      WOUND_MEASUREMENT_METHODS.STRUCTURED_LIGHT,
+      WOUND_MEASUREMENT_METHODS.MOBILE_APP,
+      WOUND_MEASUREMENT_METHODS.ACETATE_TRACING
+    ]),
+    
+    // Decimal fields validation (Drizzle decimal type returns string) with non-negative constraints
+    length: z.string().optional().refine((val) => !val || parseFloat(val) >= 0, {
+      message: "Length must be non-negative"
+    }),
+    width: z.string().optional().refine((val) => !val || parseFloat(val) >= 0, {
+      message: "Width must be non-negative"
+    }),
+    depth: z.string().optional().refine((val) => !val || parseFloat(val) >= 0, {
+      message: "Depth must be non-negative"
+    }),
+    calculatedArea: z.string().optional().refine((val) => !val || parseFloat(val) >= 0, {
+      message: "Calculated area must be non-negative"
+    }),
+    volume: z.string().optional().refine((val) => !val || parseFloat(val) >= 0, {
+      message: "Volume must be non-negative"
+    }),
+    baselineArea: z.string().optional().refine((val) => !val || parseFloat(val) >= 0, {
+      message: "Baseline area must be non-negative"
+    }),
+    areaReductionPercentage: z.string().optional(),
+    areaDelta: z.string().optional(),
+    healingVelocity: z.string().optional(),
+    confidenceScore: z.string().optional().refine((val) => !val || (parseFloat(val) >= 0 && parseFloat(val) <= 1), {
+      message: "Confidence score must be between 0.00 and 1.00"
+    }),
+    measurementTemperature: z.string().optional(),
+    
+    // Data quality validation with strict range
+    dataQualityScore: z.number().int().min(0).max(100).default(100),
+    
+    // Unit validation with enum
+    unitOfMeasurement: z.enum(["cm", "mm", "inches"]).default("cm"),
+    
+    // Clinical context validation with new enums
+    woundCondition: z.enum([
+      WOUND_CONDITION.IMPROVING,
+      WOUND_CONDITION.STABLE,
+      WOUND_CONDITION.DETERIORATING
+    ]).optional(),
+    patientPosition: z.enum([
+      PATIENT_POSITION.SUPINE,
+      PATIENT_POSITION.PRONE,
+      PATIENT_POSITION.SITTING,
+      PATIENT_POSITION.STANDING
+    ]).optional(),
+    drainageAmount: z.enum([
+      WOUND_DRAINAGE_AMOUNT.NONE,
+      WOUND_DRAINAGE_AMOUNT.MINIMAL,
+      WOUND_DRAINAGE_AMOUNT.MODERATE,
+      WOUND_DRAINAGE_AMOUNT.COPIOUS
+    ]).optional()
+  });
+
 // Types
 export type UpsertUser = typeof users.$inferInsert;
 export type User = typeof users.$inferSelect;
@@ -502,6 +749,15 @@ export type InsertFileUpload = z.infer<typeof insertFileUploadSchema>;
 export type FileUpload = typeof fileUploads.$inferSelect;
 export type InsertPdfExtractedData = z.infer<typeof insertPdfExtractedDataSchema>;
 export type PdfExtractedData = typeof pdfExtractedData.$inferSelect;
+export type InsertWoundMeasurementHistory = z.infer<typeof insertWoundMeasurementHistorySchema>;
+export type WoundMeasurementHistory = typeof woundMeasurementHistory.$inferSelect;
+
+// Enhanced validation and measurement status types for regulatory compliance
+export type WoundMeasurementValidationStatus = keyof typeof WOUND_MEASUREMENT_VALIDATION_STATUS;
+export type WoundMeasurementMethod = keyof typeof WOUND_MEASUREMENT_METHODS;
+export type WoundCondition = keyof typeof WOUND_CONDITION;
+export type WoundDrainageAmount = keyof typeof WOUND_DRAINAGE_AMOUNT;
+export type PatientPosition = keyof typeof PATIENT_POSITION;
 
 // Enhanced types for comprehensive patient history analysis
 export type EpisodeWithFullHistory = Episode & {
