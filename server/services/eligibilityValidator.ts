@@ -14621,4 +14621,1473 @@ export async function runAllDepthProgressionTests(): Promise<void> {
 
 // Uncomment the line below to run tests during development
 // runAllDepthProgressionTests();
+
+/**
+ * PHASE 2.2: COMPREHENSIVE FAILED CARE DOCUMENTATION SYSTEM
+ * 
+ * This module implements comprehensive treatment failure documentation with
+ * timeline validation, patient compliance metrics, and regulatory documentation
+ * generation. It builds directly on Phase 2.1 effectiveness scoring to provide
+ * complete conservative care assessment for CTP authorization.
+ * 
+ * KEY FEATURES:
+ * - Structured treatment failure documentation for all modalities
+ * - Patient compliance metrics with 0-100 scoring
+ * - Timeline validation for Medicare LCD compliance
+ * - Regulatory documentation generation
+ * - Integration with Phase 2.1 effectiveness scoring
+ * - Quality improvement tracking
+ */
+
+/**
+ * ENHANCED INTERFACES FOR FAILED CARE DOCUMENTATION SYSTEM
+ */
+
+// Core treatment failure documentation interface
+export interface TreatmentFailureDocumentation {
+  modalityType: 'offloading' | 'wound_care' | 'debridement' | 'infection_control' | 'glycemic_control';
+  failureClassification: 'clinical_failure' | 'compliance_failure' | 'contraindication_failure' | 'access_failure';
+  
+  // Specific failure details
+  failureReasons: {
+    primary: string;
+    secondary?: string[];
+    clinicalRationale: string;
+    evidenceLevel: 'A' | 'B' | 'C' | 'D';
+  };
+  
+  // Timeline documentation
+  timeline: {
+    treatmentStartDate: Date;
+    failureIdentifiedDate: Date;
+    totalTrialDuration: number; // days
+    minimumTrialMet: boolean;
+    optimalTrialMet: boolean;
+    trialAdequacyScore: number; // 0-100
+  };
+  
+  // Clinical progression during failure
+  clinicalProgression: {
+    initialResponse: 'improving' | 'stable' | 'deteriorating';
+    finalStatus: 'failed' | 'intolerant' | 'contraindicated' | 'inaccessible';
+    objectiveIndicators: string[];
+    subjectiveIndicators: string[];
+    measurableOutcomes?: {
+      woundAreaChange?: number; // percentage change
+      depthProgression?: number; // mm change
+      painScoreChange?: number; // 0-10 scale change
+      infectionMarkers?: string[];
+      glycemicControl?: { baselineHbA1c?: number; finalHbA1c?: number; };
+    };
+  };
+  
+  // Compliance assessment
+  complianceAnalysis: {
+    patientAdherence: number; // 0-100 score
+    providerCompliance: number; // 0-100 score
+    systemCompliance: number; // 0-100 score
+    complianceBarriers: string[];
+    mitigationAttempts: string[];
+    complianceImprovementPotential: 'low' | 'moderate' | 'high';
+  };
+  
+  // Regulatory documentation
+  regulatoryCompliance: {
+    medicareRequirementsMet: boolean;
+    lcdComplianceAudit: string[];
+    documentationCompleteness: number; // 0-100 score
+    auditTrail: string[];
+    ctpJustificationStrength: 'weak' | 'moderate' | 'strong' | 'compelling';
+  };
+  
+  // Quality improvement data
+  qualityMetrics: {
+    failurePreventability: 'preventable' | 'potentially_preventable' | 'non_preventable';
+    systemFactors: string[];
+    providerFactors: string[];
+    patientFactors: string[];
+    improvementOpportunities: string[];
+    benchmarkComparison?: {
+      facilityFailureRate: number;
+      nationalFailureRate: number;
+      performanceQuartile: 1 | 2 | 3 | 4;
+    };
+  };
+  
+  generatedAt: Date;
+  lastUpdated: Date;
+  clinicalReviewRequired: boolean;
+  escalationCriteria: string[];
+}
+
+// Patient compliance metrics interface
+export interface EnhancedComplianceMetrics {
+  overallComplianceScore: number; // 0-100 composite score
+  
+  // Intervention-specific compliance
+  interventionCompliance: {
+    [modalityType: string]: {
+      adherenceScore: number; // 0-100
+      frequencyCompliance: number; // 0-100
+      techniqueCompliance: number; // 0-100
+      durationCompliance: number; // 0-100
+      documentationScore: number; // 0-100
+    };
+  };
+  
+  // Compliance pattern analysis
+  compliancePatterns: {
+    consistencyScore: number; // 0-100
+    improvementTrend: 'improving' | 'stable' | 'declining';
+    seasonalVariations: boolean;
+    riskFactorIdentified: boolean;
+    complianceProfile: 'excellent' | 'good' | 'fair' | 'poor' | 'critical';
+  };
+  
+  // Social determinants impact
+  socialDeterminants: {
+    transportationBarriers: boolean;
+    financialConstraints: boolean;
+    healthLiteracy: 'high' | 'moderate' | 'low';
+    socialSupport: 'excellent' | 'good' | 'fair' | 'poor';
+    cognitiveFunctioning: 'normal' | 'mild_impairment' | 'moderate_impairment' | 'severe_impairment';
+    cumulativeImpactScore: number; // 0-100 (lower = more barriers)
+  };
+  
+  // Patient education effectiveness
+  educationMetrics: {
+    initialKnowledgeScore: number; // 0-100
+    currentKnowledgeScore: number; // 0-100
+    knowledgeImprovement: number; // percentage improvement
+    educationMethodsUsed: string[];
+    effectiveEducationMethods: string[];
+    educationBarriers: string[];
+    recommendedEducationChanges: string[];
+  };
+  
+  // Risk stratification
+  riskAssessment: {
+    nonComplianceRisk: 'low' | 'moderate' | 'high' | 'critical';
+    identifiedRiskFactors: string[];
+    protectiveFactors: string[];
+    mitigationStrategies: string[];
+    monitoringRequired: boolean;
+    escalationCriteria: string[];
+  };
+  
+  assessmentDate: Date;
+  nextReviewDate: Date;
+  auditTrail: string[];
+}
+
+// Failed care timeline interface
+export interface FailedCareTimeline {
+  episodeId: string;
+  timelineAnalysis: {
+    totalConservativeCareDuration: number; // days
+    medicareMinimumMet: boolean; // 4 weeks = 28 days
+    clinicallyAppropriateTrialMet: boolean;
+    sequentialTreatmentOrder: boolean;
+    timelineCompleteness: number; // 0-100 score
+  };
+  
+  // Modality-specific timeline validation
+  modalityTimelines: Array<{
+    modalityType: string;
+    startDate: Date;
+    endDate?: Date;
+    duration: number; // days
+    minimumTrialRequired: number; // days
+    optimalTrialRecommended: number; // days
+    timelineAdequacy: 'insufficient' | 'minimal' | 'adequate' | 'optimal';
+    failureDocumented: boolean;
+    failureDate?: Date;
+    reasonForDiscontinuation: string;
+    nextModalityInitiated?: boolean;
+    nextModalityStartDate?: Date;
+    timelineGaps: Array<{
+      startDate: Date;
+      endDate: Date;
+      gapDuration: number; // days
+      gapReason: string;
+      impactOnOutcomes: 'minimal' | 'moderate' | 'significant';
+    }>;
+  }>;
+  
+  // Critical timeline markers
+  criticalMarkers: Array<{
+    date: Date;
+    eventType: 'treatment_initiation' | 'treatment_failure' | 'treatment_modification' | 'clinical_deterioration' | 'compliance_failure' | 'ctp_consideration';
+    description: string;
+    clinicalImpact: 'none' | 'mild' | 'moderate' | 'severe';
+    documentationQuality: 'poor' | 'fair' | 'good' | 'excellent';
+    regulatoryRelevance: boolean;
+  }>;
+  
+  // Outcome progression
+  progressionMetrics: {
+    initialWoundSeverity: 'mild' | 'moderate' | 'severe' | 'critical';
+    currentWoundSeverity: 'mild' | 'moderate' | 'severe' | 'critical';
+    trajectoryDirection: 'improving' | 'stable' | 'deteriorating';
+    timeToDeterioration?: number; // days from treatment start
+    timeToFailureRecognition?: number; // days from first failure signs
+    decisionTimelines: {
+      averageTimeToTreatmentChange: number; // days
+      averageTimeToFailureDocumentation: number; // days
+      timeToCtpConsideration?: number; // days
+    };
+  };
+  
+  // Regulatory timeline compliance
+  regulatoryCompliance: {
+    medicareTimelineRequirements: 'met' | 'not_met' | 'partially_met';
+    documentationTimeliness: number; // 0-100 score
+    auditReadiness: 'ready' | 'needs_improvement' | 'inadequate';
+    complianceGaps: string[];
+    strengthOfDocumentation: 'weak' | 'adequate' | 'strong' | 'compelling';
+  };
+  
+  analysisDate: Date;
+  validityPeriod: number; // days this analysis remains valid
+}
+
+// Regulatory documentation interface
+export interface RegulatoryDocumentation {
+  documentType: 'failed_conservative_care_letter' | 'ctp_justification' | 'lcd_compliance_summary' | 'audit_response';
+  
+  // Document metadata
+  metadata: {
+    generatedDate: Date;
+    validityPeriod: number; // days
+    documentVersion: string;
+    regulatoryBasis: string[]; // LCD numbers, guidelines
+    clinicalReviewLevel: 'standard' | 'enhanced' | 'expert';
+    confidenceLevel: number; // 0-100
+  };
+  
+  // Executive summary
+  executiveSummary: {
+    patientSummary: string; // De-identified clinical summary
+    conservativeCareOverview: string;
+    failureSummary: string;
+    ctpJustificationRationale: string;
+    strengthOfCase: 'weak' | 'moderate' | 'strong' | 'compelling';
+  };
+  
+  // Detailed clinical narrative
+  clinicalNarrative: {
+    conservativeCareTimeline: string;
+    treatmentFailureDocumentation: string;
+    complianceAssessment: string;
+    clinicalProgression: string;
+    objectiveFindings: string;
+    providerClinicalJudgment: string;
+  };
+  
+  // Regulatory compliance section
+  regulatorySection: {
+    medicareRequirementsAnalysis: string;
+    lcdComplianceAssertion: string;
+    clinicalNecessityJustification: string;
+    alternativeTherapyConsideration: string;
+    costEffectivenessRationale?: string;
+  };
+  
+  // Supporting evidence
+  supportingEvidence: {
+    clinicalMeasurements: Array<{
+      measurementType: string;
+      initialValue: number;
+      finalValue: number;
+      changePercentage: number;
+      clinicalSignificance: string;
+    }>;
+    photographicEvidence: boolean;
+    laboratoryResults: string[];
+    specialistConsultations: string[];
+    patientReportedOutcomes: string[];
+  };
+  
+  // Audit trail and references
+  auditInformation: {
+    dataSourceReferences: string[];
+    calculationMethodologies: string[];
+    clinicalGuidelineReferences: string[];
+    literatureCitations: string[];
+    internalQualityChecks: string[];
+    externalValidations: string[];
+  };
+  
+  // Document output
+  formattedDocument: {
+    letterFormat: string; // Formatted letter text
+    bulletPointSummary: string[];
+    attachmentsList: string[];
+    requiredSignatures: string[];
+    submissionInstructions: string;
+  };
+  
+  // Quality assurance
+  qualityAssurance: {
+    documentCompleteness: number; // 0-100 score
+    clinicalAccuracy: number; // 0-100 score
+    regulatoryAlignment: number; // 0-100 score
+    auditReadiness: number; // 0-100 score
+    overallQualityGrade: 'A' | 'B' | 'C' | 'D' | 'F';
+    reviewRequired: boolean;
+    improvementRecommendations: string[];
+  };
+}
+
+// CTP readiness assessment interface
+export interface CTPReadinessAssessment {
+  overallReadiness: 'ready' | 'nearly_ready' | 'needs_improvement' | 'not_ready';
+  readinessScore: number; // 0-100 composite score
+  
+  // Conservative care completion assessment
+  conservativeCareAssessment: {
+    modalitiesAttempted: string[];
+    modalitiesRequired: string[];
+    modalitiesMissing: string[];
+    completenessScore: number; // 0-100
+    adequacyScore: number; // 0-100 from Phase 2.1 integration
+    failureDocumentationScore: number; // 0-100
+  };
+  
+  // Timeline compliance
+  timelineCompliance: {
+    totalConservativeCareDuration: number; // days
+    medicareMinimumMet: boolean; // 28 days
+    clinicalTrialAdequacy: boolean;
+    timelineGaps: string[];
+    complianceScore: number; // 0-100
+  };
+  
+  // Clinical criteria
+  clinicalCriteria: {
+    woundAppropriatenessForCtp: boolean;
+    woundProgressionDocumented: boolean;
+    infectionControlAchieved: boolean;
+    vascularStatusOptimized: boolean;
+    glycemicControlAddressed: boolean;
+    criteriaMetScore: number; // 0-100
+  };
+  
+  // Regulatory compliance
+  regulatoryCompliance: {
+    lcdRequirementsMet: string[]; // List of met requirements
+    lcdRequirementsNotMet: string[]; // List of unmet requirements
+    documentationAdequacy: number; // 0-100
+    auditReadiness: number; // 0-100
+    complianceGaps: string[];
+  };
+  
+  // Risk assessment
+  riskAssessment: {
+    authorizationDenialRisk: 'low' | 'moderate' | 'high' | 'critical';
+    auditRisk: 'low' | 'moderate' | 'high';
+    clinicalRisk: 'low' | 'moderate' | 'high' | 'critical';
+    riskMitigationStrategies: string[];
+    additionalDocumentationNeeded: string[];
+  };
+  
+  // Readiness improvement recommendations
+  improvementRecommendations: {
+    immediateActions: string[]; // Actions to take before CTP application
+    shortTermActions: string[]; // Actions within 1-2 weeks
+    documentationImprovements: string[];
+    clinicalOptimizations: string[];
+    timelineToReadiness?: number; // days to achieve readiness
+  };
+  
+  // Integration with Phase 2.1 effectiveness scoring
+  effectivenessIntegration: {
+    overallEffectivenessGrade: 'excellent' | 'good' | 'fair' | 'poor' | 'inadequate';
+    modalityEffectivenessScores: { [modality: string]: number };
+    correlationWithFailurePatterns: string[];
+    strengthOfFailureEvidence: 'weak' | 'moderate' | 'strong' | 'compelling';
+  };
+  
+  assessmentDate: Date;
+  nextReviewDate: Date;
+  validityPeriod: number; // days
+  assessorId: string;
+  auditTrail: string[];
+}
+
+/**
+ * TREATMENT FAILURE CRITERIA CONSTANTS
+ * Evidence-based failure thresholds for each conservative care modality
+ */
+export const TREATMENT_FAILURE_CRITERIA = {
+  // Offloading treatment failure criteria
+  OFFLOADING_FAILURE: {
+    clinical_failure: {
+      continued_pressure_ulceration: {
+        threshold: 7, // days of continued ulceration despite offloading
+        evidenceLevel: 'A' as const,
+        criteria: 'No reduction in pressure-related tissue damage after 1 week of adequate offloading'
+      },
+      device_intolerance: {
+        threshold: 3, // days of severe intolerance symptoms
+        evidenceLevel: 'B' as const,
+        criteria: 'Severe pain, skin breakdown, or inability to bear weight with offloading device'
+      },
+      biomechanical_failure: {
+        threshold: 14, // days without pressure redistribution improvement
+        evidenceLevel: 'A' as const,
+        criteria: 'Continued elevated plantar pressures >200kPa despite offloading intervention'
+      }
+    },
+    compliance_failure: {
+      adherence_threshold: 60, // percentage adherence below which failure is declared
+      minimum_trial_days: 14, // minimum days before declaring compliance failure
+      documentation_requirements: ['Daily wear logs', 'Provider assessments', 'Patient self-reports']
+    },
+    contraindication_failure: {
+      vascular_compromise: 'ABI <0.5 or TcPO2 <30mmHg making device unsafe',
+      skin_integrity: 'Active cellulitis or severe dermatitis at device contact points',
+      mobility_limitations: 'Physical inability to ambulate safely with device'
+    },
+    timeline_requirements: {
+      minimum_trial_period: 14, // days
+      optimal_trial_period: 28, // days
+      failure_assessment_interval: 7 // days between assessments
+    }
+  },
+
+  // Wound care treatment failure criteria
+  WOUND_CARE_FAILURE: {
+    clinical_failure: {
+      area_stagnation: {
+        threshold: 21, // days without 10% area reduction
+        evidenceLevel: 'A' as const,
+        criteria: 'Less than 10% wound area reduction after 3 weeks of appropriate wound care'
+      },
+      periwound_deterioration: {
+        threshold: 7, // days of worsening periwound condition
+        evidenceLevel: 'B' as const,
+        criteria: 'Maceration, contact dermatitis, or periwound tissue breakdown'
+      },
+      exudate_management_failure: {
+        threshold: 14, // days of inadequate exudate control
+        evidenceLevel: 'B' as const,
+        criteria: 'Persistent excessive or inadequate exudate management despite dressing changes'
+      },
+      infection_development: {
+        threshold: 3, // days of clinical infection signs
+        evidenceLevel: 'A' as const,
+        criteria: 'Development of clinical infection signs requiring systemic treatment'
+      }
+    },
+    compliance_failure: {
+      frequency_adherence: 70, // percentage of prescribed dressing changes completed
+      technique_competency: 60, // percentage score on technique assessment
+      product_availability: 'Inability to obtain prescribed wound care products for >7 days'
+    },
+    contraindication_failure: {
+      allergic_reactions: 'Documented allergic reaction to wound care components',
+      skin_sensitivity: 'Severe contact dermatitis from wound care products',
+      cost_barriers: 'Financial inability to maintain prescribed wound care regimen'
+    },
+    timeline_requirements: {
+      minimum_trial_period: 21, // days
+      optimal_trial_period: 42, // days
+      reassessment_interval: 7 // days
+    }
+  },
+
+  // Debridement treatment failure criteria
+  DEBRIDEMENT_FAILURE: {
+    clinical_failure: {
+      tissue_response_failure: {
+        threshold: 28, // days without necrotic tissue reduction
+        evidenceLevel: 'A' as const,
+        criteria: 'Persistent necrotic tissue >50% of wound bed after 4 weeks'
+      },
+      biofilm_persistence: {
+        threshold: 21, // days of clinical biofilm indicators
+        evidenceLevel: 'B' as const,
+        criteria: 'Continued signs of biofilm (slough, delayed healing) despite debridement'
+      },
+      pain_intolerance: {
+        threshold: 3, // debridement sessions with excessive pain
+        evidenceLevel: 'C' as const,
+        criteria: 'Patient unable to tolerate debridement despite pain management'
+      }
+    },
+    access_failure: {
+      provider_availability: 'Unable to schedule adequate debridement frequency due to provider limitations',
+      facility_limitations: 'Lack of appropriate debridement equipment or expertise',
+      patient_mobility: 'Patient unable to travel for required debridement sessions'
+    },
+    contraindication_failure: {
+      bleeding_risk: 'Active anticoagulation or bleeding disorder preventing safe debridement',
+      vascular_compromise: 'Severe PAD (ABI <0.4) making debridement unsafe',
+      infection_risk: 'Severe immunocompromise making debridement inadvisable'
+    },
+    timeline_requirements: {
+      minimum_trial_period: 21, // days
+      optimal_trial_period: 42, // days
+      frequency_requirement: 'Weekly debridement sessions minimum'
+    }
+  },
+
+  // Infection control treatment failure criteria
+  INFECTION_CONTROL_FAILURE: {
+    clinical_failure: {
+      antimicrobial_resistance: {
+        threshold: 7, // days without clinical improvement on appropriate therapy
+        evidenceLevel: 'A' as const,
+        criteria: 'Culture-proven resistance or clinical failure of targeted antimicrobial therapy'
+      },
+      systemic_progression: {
+        threshold: 3, // days of worsening systemic signs
+        evidenceLevel: 'A' as const,
+        criteria: 'Development of SIRS, sepsis, or spreading cellulitis despite treatment'
+      },
+      biomarker_persistence: {
+        threshold: 14, // days without biomarker improvement
+        evidenceLevel: 'B' as const,
+        criteria: 'Persistent elevated inflammatory markers (CRP, ESR, WBC) after 2 weeks'
+      }
+    },
+    compliance_failure: {
+      medication_adherence: 80, // percentage adherence threshold
+      duration_completion: 'Failure to complete prescribed antibiotic course',
+      culture_compliance: 'Failure to obtain required culture specimens'
+    },
+    contraindication_failure: {
+      drug_allergies: 'Allergic reactions to available antimicrobial options',
+      organ_dysfunction: 'Renal or hepatic dysfunction preventing safe antimicrobial use',
+      drug_interactions: 'Significant drug interactions precluding antimicrobial therapy'
+    },
+    timeline_requirements: {
+      minimum_trial_period: 14, // days
+      optimal_trial_period: 21, // days
+      culture_requirement: 'Pre-treatment cultures required for targeted therapy'
+    }
+  },
+
+  // Glycemic control treatment failure criteria
+  GLYCEMIC_CONTROL_FAILURE: {
+    clinical_failure: {
+      hba1c_targets: {
+        general_population: { target: 7.0, threshold: 8.5 }, // HbA1c %
+        elderly_population: { target: 7.5, threshold: 9.0 },
+        comorbid_population: { target: 8.0, threshold: 9.5 }
+      },
+      glucose_variability: {
+        threshold: 180, // mg/dL average glucose despite intervention
+        evidenceLevel: 'A' as const,
+        criteria: 'Average glucose >180mg/dL or glucose variability CV >36%'
+      },
+      wound_healing_correlation: {
+        threshold: 28, // days without wound improvement with poor control
+        evidenceLevel: 'B' as const,
+        criteria: 'Wound stagnation correlated with persistently poor glycemic control'
+      }
+    },
+    compliance_failure: {
+      medication_adherence: 75, // percentage adherence to diabetes medications
+      monitoring_compliance: 60, // percentage of recommended glucose monitoring
+      lifestyle_adherence: 50 // percentage adherence to diet/exercise recommendations
+    },
+    contraindication_failure: {
+      hypoglycemia_risk: 'Recurrent severe hypoglycemia precluding tight control',
+      medication_intolerance: 'Intolerance to available diabetes medications',
+      cognitive_impairment: 'Severe cognitive impairment preventing self-management'
+    },
+    timeline_requirements: {
+      minimum_trial_period: 84, // days (12 weeks)
+      optimal_trial_period: 168, // days (24 weeks)
+      assessment_interval: 28 // days between HbA1c assessments
+    }
+  },
+
+  // General failure assessment criteria
+  GENERAL_FAILURE_CRITERIA: {
+    evidence_levels: {
+      A: 'High-quality RCT evidence or clinical guideline recommendation',
+      B: 'Moderate-quality evidence or consensus recommendation',
+      C: 'Low-quality evidence or expert opinion',
+      D: 'Very low-quality evidence or case series'
+    },
+    documentation_requirements: {
+      objective_measures: 'Quantifiable clinical parameters required for failure determination',
+      subjective_assessment: 'Patient-reported outcomes and provider clinical judgment',
+      temporal_tracking: 'Serial assessments over time to establish failure pattern',
+      comparative_analysis: 'Comparison to expected outcomes for intervention'
+    },
+    regulatory_thresholds: {
+      medicare_minimum_trial: 28, // days minimum conservative care per LCD
+      clinical_necessity_standard: 'Medical necessity for advanced therapy clearly documented',
+      audit_defensibility: 'Documentation sufficient for regulatory audit defense'
+    }
+  }
+};
+
+/**
+ * PATIENT COMPLIANCE SCORING PARAMETERS
+ * Standardized metrics for compliance assessment across all modalities
+ */
+export const COMPLIANCE_SCORING_PARAMETERS = {
+  // Scoring thresholds for compliance grades
+  COMPLIANCE_GRADES: {
+    excellent: { min: 90, max: 100, description: 'Excellent adherence, minimal barriers' },
+    good: { min: 80, max: 89, description: 'Good adherence, manageable barriers' },
+    fair: { min: 70, max: 79, description: 'Fair adherence, significant barriers present' },
+    poor: { min: 50, max: 69, description: 'Poor adherence, major barriers' },
+    critical: { min: 0, max: 49, description: 'Critical non-adherence, intervention required' }
+  },
+
+  // Social determinant impact weights
+  SOCIAL_DETERMINANT_WEIGHTS: {
+    transportation_barriers: -15, // points deducted for transportation issues
+    financial_constraints: -20, // points deducted for financial barriers
+    health_literacy_low: -25, // points deducted for low health literacy
+    social_support_poor: -15, // points deducted for poor social support
+    cognitive_impairment_moderate: -20, // points deducted for moderate cognitive impairment
+    cognitive_impairment_severe: -40 // points deducted for severe cognitive impairment
+  },
+
+  // Education effectiveness multipliers
+  EDUCATION_EFFECTIVENESS: {
+    high_improvement: 1.2, // 20% bonus for high knowledge improvement
+    moderate_improvement: 1.1, // 10% bonus for moderate improvement
+    minimal_improvement: 1.0, // no bonus for minimal improvement
+    no_improvement: 0.9 // 10% penalty for no knowledge improvement
+  },
+
+  // Risk stratification criteria
+  RISK_STRATIFICATION: {
+    low_risk: { compliance_min: 85, barrier_count_max: 1 },
+    moderate_risk: { compliance_min: 70, barrier_count_max: 2 },
+    high_risk: { compliance_min: 50, barrier_count_max: 3 },
+    critical_risk: { compliance_min: 0, barrier_count_max: 999 }
+  }
+};
+
+/**
+ * TIMELINE VALIDATION PARAMETERS
+ * Medicare LCD and clinical best practice timeline requirements
+ */
+export const TIMELINE_VALIDATION_PARAMETERS = {
+  // Medicare LCD minimum requirements
+  MEDICARE_REQUIREMENTS: {
+    total_conservative_care_minimum: 28, // days (4 weeks)
+    wound_care_minimum: 14, // days minimum wound care trial
+    offloading_minimum: 14, // days minimum offloading trial
+    infection_control_minimum: 7, // days minimum infection treatment
+    glycemic_control_minimum: 84, // days minimum diabetes management
+    documentation_window: 7 // days maximum gap in documentation
+  },
+
+  // Clinical best practice timelines
+  CLINICAL_BEST_PRACTICE: {
+    offloading_optimal: 28, // days optimal offloading trial
+    wound_care_optimal: 42, // days optimal wound care trial
+    debridement_optimal: 28, // days optimal debridement trial
+    infection_control_optimal: 21, // days optimal infection treatment
+    glycemic_control_optimal: 168, // days optimal diabetes management (24 weeks)
+    reassessment_interval: 7 // days between clinical reassessments
+  },
+
+  // Sequential treatment requirements
+  SEQUENTIAL_TREATMENT: {
+    simultaneous_modalities_allowed: ['wound_care', 'offloading'], // can be done simultaneously
+    prerequisite_modalities: {
+      'debridement': ['infection_control'], // infection control before aggressive debridement
+      'advanced_therapies': ['offloading', 'wound_care', 'infection_control'] // all basic modalities first
+    },
+    washout_periods: {
+      between_antimicrobials: 3, // days between different antibiotic trials
+      between_wound_products: 1, // days between different wound care products
+      between_offloading_methods: 0 // no washout needed for offloading changes
+    }
+  }
+};
+
+/**
+ * CORE FAILED CARE DOCUMENTATION FUNCTIONS
+ */
+
+/**
+ * Document Treatment Failure - Core function for structured failure tracking
+ * Integrates with Phase 2.1 effectiveness scoring to provide comprehensive failure analysis
+ */
+export function documentTreatmentFailure(
+  modalityType: 'offloading' | 'wound_care' | 'debridement' | 'infection_control' | 'glycemic_control',
+  treatmentData: any,
+  patientProfile: any,
+  timelineData: {
+    treatmentStartDate: Date;
+    failureIdentifiedDate: Date;
+    clinicalAssessments: Array<{
+      date: Date;
+      findings: string[];
+      response: 'improving' | 'stable' | 'deteriorating';
+      provider: string;
+    }>;
+  },
+  effectivenessAssessment?: TreatmentModalityAssessment // Integration with Phase 2.1
+): TreatmentFailureDocumentation {
+  
+  const auditTrail: string[] = [];
+  auditTrail.push(`Starting treatment failure documentation for ${modalityType}`);
+  auditTrail.push(`Treatment period: ${timelineData.treatmentStartDate.toISOString()} to ${timelineData.failureIdentifiedDate.toISOString()}`);
+
+  // Calculate treatment duration
+  const totalTrialDuration = Math.ceil(
+    (timelineData.failureIdentifiedDate.getTime() - timelineData.treatmentStartDate.getTime()) / (1000 * 60 * 60 * 24)
+  );
+
+  // Get modality-specific failure criteria
+  const failureCriteria = getModalityFailureCriteria(modalityType);
+  const timelineRequirements = failureCriteria.timeline_requirements;
+
+  // Assess timeline adequacy
+  const minimumTrialMet = totalTrialDuration >= timelineRequirements.minimum_trial_period;
+  const optimalTrialMet = totalTrialDuration >= timelineRequirements.optimal_trial_period;
+  
+  let trialAdequacyScore = 0;
+  if (optimalTrialMet) {
+    trialAdequacyScore = 100;
+  } else if (minimumTrialMet) {
+    trialAdequacyScore = 70 + ((totalTrialDuration - timelineRequirements.minimum_trial_period) / 
+      (timelineRequirements.optimal_trial_period - timelineRequirements.minimum_trial_period)) * 30;
+  } else {
+    trialAdequacyScore = (totalTrialDuration / timelineRequirements.minimum_trial_period) * 70;
+  }
+
+  auditTrail.push(`Trial duration: ${totalTrialDuration} days (minimum: ${minimumTrialMet}, optimal: ${optimalTrialMet})`);
+  auditTrail.push(`Trial adequacy score: ${trialAdequacyScore.toFixed(1)}`);
+
+  // Determine failure classification and reasons
+  const failureAnalysis = analyzeFailureReasons(modalityType, treatmentData, patientProfile, timelineData.clinicalAssessments);
+  
+  // Assess clinical progression during treatment
+  const progressionAnalysis = analyzeClinicalProgression(timelineData.clinicalAssessments, modalityType, treatmentData);
+
+  // Assess compliance during treatment period
+  const complianceAnalysis = analyzeComplianceDuringTreatment(modalityType, treatmentData, patientProfile, totalTrialDuration);
+
+  // Generate regulatory compliance assessment
+  const regulatoryAssessment = assessRegulatoryCompliance(modalityType, failureAnalysis, timelineData, minimumTrialMet, optimalTrialMet);
+
+  // Quality metrics assessment
+  const qualityMetrics = assessFailureQualityMetrics(modalityType, failureAnalysis, complianceAnalysis, effectivenessAssessment);
+
+  // Determine if clinical review is required
+  const clinicalReviewRequired = 
+    !minimumTrialMet || 
+    failureAnalysis.failureClassification === 'contraindication_failure' ||
+    complianceAnalysis.patientAdherence < 50 ||
+    qualityMetrics.failurePreventability === 'preventable';
+
+  // Generate escalation criteria
+  const escalationCriteria: string[] = [];
+  if (!minimumTrialMet) escalationCriteria.push('Insufficient trial duration for regulatory compliance');
+  if (complianceAnalysis.patientAdherence < 30) escalationCriteria.push('Critical patient non-adherence requiring intervention');
+  if (failureAnalysis.failureClassification === 'contraindication_failure') escalationCriteria.push('Safety concerns requiring immediate review');
+  if (progressionAnalysis.finalStatus === 'failed' && progressionAnalysis.objectiveIndicators.length === 0) {
+    escalationCriteria.push('Lack of objective failure documentation');
+  }
+
+  const now = new Date();
+
+  return {
+    modalityType,
+    failureClassification: failureAnalysis.failureClassification,
+    failureReasons: failureAnalysis.failureReasons,
+    timeline: {
+      treatmentStartDate: timelineData.treatmentStartDate,
+      failureIdentifiedDate: timelineData.failureIdentifiedDate,
+      totalTrialDuration,
+      minimumTrialMet,
+      optimalTrialMet,
+      trialAdequacyScore: Math.round(trialAdequacyScore)
+    },
+    clinicalProgression: progressionAnalysis,
+    complianceAnalysis,
+    regulatoryCompliance: regulatoryAssessment,
+    qualityMetrics,
+    generatedAt: now,
+    lastUpdated: now,
+    clinicalReviewRequired,
+    escalationCriteria
+  };
+}
+
+/**
+ * Enhanced Patient Compliance Assessment with integration to Phase 2.1 effectiveness scoring
+ */
+export function assessPatientCompliance(
+  conservativeCareData: any,
+  patientProfile: {
+    age: number;
+    socialSupport: 'excellent' | 'good' | 'fair' | 'poor';
+    financialBarriers: boolean;
+    transportationIssues: boolean;
+    cognitiveFunctioning: 'normal' | 'mild_impairment' | 'moderate_impairment' | 'severe_impairment';
+    healthLiteracy: 'high' | 'moderate' | 'low';
+  },
+  treatmentHistory: Array<{
+    modalityType: string;
+    startDate: Date;
+    endDate?: Date;
+    adherenceData: any;
+    complianceIssues: string[];
+    providerAssessments: any[];
+  }>,
+  educationMetrics?: {
+    initialKnowledgeScore: number;
+    currentKnowledgeScore: number;
+    educationMethodsUsed: string[];
+    educationBarriers: string[];
+  }
+): EnhancedComplianceMetrics {
+  
+  const auditTrail: string[] = [];
+  auditTrail.push('Starting enhanced patient compliance assessment');
+
+  // Calculate intervention-specific compliance scores
+  const interventionCompliance: { [modalityType: string]: any } = {};
+  
+  for (const treatment of treatmentHistory) {
+    const modalityScore = calculateModalityComplianceScore(treatment, patientProfile);
+    interventionCompliance[treatment.modalityType] = modalityScore;
+    auditTrail.push(`${treatment.modalityType} compliance score: ${modalityScore.adherenceScore}`);
+  }
+
+  // Calculate overall compliance score
+  const modalityScores = Object.values(interventionCompliance).map((score: any) => score.adherenceScore);
+  const baseComplianceScore = modalityScores.length > 0 ? 
+    modalityScores.reduce((sum, score) => sum + score, 0) / modalityScores.length : 50;
+
+  // Apply social determinant adjustments
+  let adjustedComplianceScore = baseComplianceScore;
+  const socialDeterminants = {
+    transportationBarriers: patientProfile.transportationIssues,
+    financialConstraints: patientProfile.financialBarriers,
+    healthLiteracy: patientProfile.healthLiteracy,
+    socialSupport: patientProfile.socialSupport,
+    cognitiveFunctioning: patientProfile.cognitiveFunctioning,
+    cumulativeImpactScore: 100 // Start at 100, deduct for barriers
+  };
+
+  // Apply social determinant penalties
+  if (socialDeterminants.transportationBarriers) {
+    adjustedComplianceScore += COMPLIANCE_SCORING_PARAMETERS.SOCIAL_DETERMINANT_WEIGHTS.transportation_barriers;
+    socialDeterminants.cumulativeImpactScore += COMPLIANCE_SCORING_PARAMETERS.SOCIAL_DETERMINANT_WEIGHTS.transportation_barriers;
+  }
+  if (socialDeterminants.financialConstraints) {
+    adjustedComplianceScore += COMPLIANCE_SCORING_PARAMETERS.SOCIAL_DETERMINANT_WEIGHTS.financial_constraints;
+    socialDeterminants.cumulativeImpactScore += COMPLIANCE_SCORING_PARAMETERS.SOCIAL_DETERMINANT_WEIGHTS.financial_constraints;
+  }
+  if (socialDeterminants.healthLiteracy === 'low') {
+    adjustedComplianceScore += COMPLIANCE_SCORING_PARAMETERS.SOCIAL_DETERMINANT_WEIGHTS.health_literacy_low;
+    socialDeterminants.cumulativeImpactScore += COMPLIANCE_SCORING_PARAMETERS.SOCIAL_DETERMINANT_WEIGHTS.health_literacy_low;
+  }
+  if (socialDeterminants.socialSupport === 'poor') {
+    adjustedComplianceScore += COMPLIANCE_SCORING_PARAMETERS.SOCIAL_DETERMINANT_WEIGHTS.social_support_poor;
+    socialDeterminants.cumulativeImpactScore += COMPLIANCE_SCORING_PARAMETERS.SOCIAL_DETERMINANT_WEIGHTS.social_support_poor;
+  }
+  if (socialDeterminants.cognitiveFunctioning === 'moderate_impairment') {
+    adjustedComplianceScore += COMPLIANCE_SCORING_PARAMETERS.SOCIAL_DETERMINANT_WEIGHTS.cognitive_impairment_moderate;
+    socialDeterminants.cumulativeImpactScore += COMPLIANCE_SCORING_PARAMETERS.SOCIAL_DETERMINANT_WEIGHTS.cognitive_impairment_moderate;
+  }
+  if (socialDeterminants.cognitiveFunctioning === 'severe_impairment') {
+    adjustedComplianceScore += COMPLIANCE_SCORING_PARAMETERS.SOCIAL_DETERMINANT_WEIGHTS.cognitive_impairment_severe;
+    socialDeterminants.cumulativeImpactScore += COMPLIANCE_SCORING_PARAMETERS.SOCIAL_DETERMINANT_WEIGHTS.cognitive_impairment_severe;
+  }
+
+  // Ensure score stays within bounds
+  adjustedComplianceScore = Math.max(0, Math.min(100, adjustedComplianceScore));
+  socialDeterminants.cumulativeImpactScore = Math.max(0, Math.min(100, socialDeterminants.cumulativeImpactScore));
+
+  // Analyze compliance patterns
+  const compliancePatterns = analyzeCompliancePatterns(treatmentHistory, adjustedComplianceScore);
+
+  // Calculate education effectiveness
+  const educationMetricsCalculated = calculateEducationEffectiveness(educationMetrics, adjustedComplianceScore);
+
+  // Perform risk stratification
+  const riskAssessment = performComplianceRiskAssessment(
+    adjustedComplianceScore, 
+    socialDeterminants, 
+    compliancePatterns, 
+    treatmentHistory
+  );
+
+  const now = new Date();
+  const nextReviewDate = new Date(now.getTime() + (riskAssessment.nonComplianceRisk === 'critical' ? 7 : 
+    riskAssessment.nonComplianceRisk === 'high' ? 14 : 30) * 24 * 60 * 60 * 1000);
+
+  auditTrail.push(`Final compliance score: ${adjustedComplianceScore.toFixed(1)} (risk: ${riskAssessment.nonComplianceRisk})`);
+
+  return {
+    overallComplianceScore: Math.round(adjustedComplianceScore),
+    interventionCompliance,
+    compliancePatterns,
+    socialDeterminants,
+    educationMetrics: educationMetricsCalculated,
+    riskAssessment,
+    assessmentDate: now,
+    nextReviewDate,
+    auditTrail
+  };
+}
+
+/**
+ * HELPER FUNCTIONS FOR FAILED CARE DOCUMENTATION
+ */
+
+/**
+ * Get modality-specific failure criteria from constants
+ */
+function getModalityFailureCriteria(modalityType: string): any {
+  switch (modalityType) {
+    case 'offloading':
+      return TREATMENT_FAILURE_CRITERIA.OFFLOADING_FAILURE;
+    case 'wound_care':
+      return TREATMENT_FAILURE_CRITERIA.WOUND_CARE_FAILURE;
+    case 'debridement':
+      return TREATMENT_FAILURE_CRITERIA.DEBRIDEMENT_FAILURE;
+    case 'infection_control':
+      return TREATMENT_FAILURE_CRITERIA.INFECTION_CONTROL_FAILURE;
+    case 'glycemic_control':
+      return TREATMENT_FAILURE_CRITERIA.GLYCEMIC_CONTROL_FAILURE;
+    default:
+      return TREATMENT_FAILURE_CRITERIA.GENERAL_FAILURE_CRITERIA;
+  }
+}
+
+/**
+ * Analyze failure reasons based on modality type and clinical data
+ */
+function analyzeFailureReasons(
+  modalityType: string,
+  treatmentData: any,
+  patientProfile: any,
+  clinicalAssessments: any[]
+): { failureClassification: any; failureReasons: any } {
+  
+  const criteria = getModalityFailureCriteria(modalityType);
+  let failureClassification: 'clinical_failure' | 'compliance_failure' | 'contraindication_failure' | 'access_failure' = 'clinical_failure';
+  
+  // Analyze based on modality type
+  let primary = 'Clinical failure to respond to treatment';
+  let secondary: string[] = [];
+  let clinicalRationale = '';
+  let evidenceLevel: 'A' | 'B' | 'C' | 'D' = 'C';
+
+  if (modalityType === 'offloading') {
+    if (treatmentData.deviceIntolerance) {
+      failureClassification = 'contraindication_failure';
+      primary = 'Device intolerance preventing adequate offloading';
+      secondary.push('Pain, skin breakdown, or mobility issues');
+      evidenceLevel = 'B';
+    } else if (treatmentData.complianceRate < criteria.compliance_failure.adherence_threshold) {
+      failureClassification = 'compliance_failure';
+      primary = 'Patient non-adherence to offloading protocol';
+      secondary.push(`Adherence rate: ${treatmentData.complianceRate}%`);
+      evidenceLevel = 'A';
+    } else {
+      primary = 'Continued pressure ulceration despite adequate offloading';
+      secondary.push('Biomechanical failure to redistribute pressure');
+      evidenceLevel = 'A';
+    }
+    clinicalRationale = `Offloading failure per clinical criteria: ${criteria.clinical_failure.continued_pressure_ulceration.criteria}`;
+  
+  } else if (modalityType === 'wound_care') {
+    if (treatmentData.allergicReaction) {
+      failureClassification = 'contraindication_failure';
+      primary = 'Allergic reaction to wound care products';
+      secondary.push('Contact dermatitis, product sensitivity');
+      evidenceLevel = 'B';
+    } else if (treatmentData.frequencyAdherence < criteria.compliance_failure.frequency_adherence) {
+      failureClassification = 'compliance_failure';
+      primary = 'Inadequate dressing change frequency';
+      secondary.push(`Frequency compliance: ${treatmentData.frequencyAdherence}%`);
+      evidenceLevel = 'A';
+    } else {
+      primary = 'Wound stagnation despite appropriate wound care';
+      secondary.push('No significant area reduction after adequate trial');
+      evidenceLevel = 'A';
+    }
+    clinicalRationale = `Wound care failure per clinical criteria: ${criteria.clinical_failure.area_stagnation.criteria}`;
+  
+  } else if (modalityType === 'infection_control') {
+    if (treatmentData.antimicrobialResistance) {
+      primary = 'Antimicrobial resistance documented by culture';
+      secondary.push('Treatment failure despite appropriate therapy');
+      evidenceLevel = 'A';
+    } else if (treatmentData.drugAllergy) {
+      failureClassification = 'contraindication_failure';
+      primary = 'Drug allergy preventing adequate antimicrobial therapy';
+      secondary.push('Limited treatment options due to allergies');
+      evidenceLevel = 'B';
+    }
+    clinicalRationale = `Infection control failure per clinical criteria: ${criteria.clinical_failure.antimicrobial_resistance.criteria}`;
+  
+  } else if (modalityType === 'glycemic_control') {
+    if (treatmentData.medicationIntolerance) {
+      failureClassification = 'contraindication_failure';
+      primary = 'Medication intolerance preventing adequate glycemic control';
+      secondary.push('Side effects limiting treatment options');
+      evidenceLevel = 'B';
+    } else if (treatmentData.adherence < criteria.compliance_failure.medication_adherence) {
+      failureClassification = 'compliance_failure';
+      primary = 'Poor medication and lifestyle adherence';
+      secondary.push(`Medication adherence: ${treatmentData.adherence}%`);
+      evidenceLevel = 'A';
+    } else {
+      primary = 'Persistent hyperglycemia despite intensive management';
+      secondary.push(`HbA1c: ${treatmentData.hba1c}% above target`);
+      evidenceLevel = 'A';
+    }
+    clinicalRationale = `Glycemic control failure per clinical criteria: Target HbA1c not achieved despite adequate trial`;
+  }
+
+  return {
+    failureClassification,
+    failureReasons: {
+      primary,
+      secondary,
+      clinicalRationale,
+      evidenceLevel
+    }
+  };
+}
+
+/**
+ * Analyze clinical progression during treatment period
+ */
+function analyzeClinicalProgression(
+  clinicalAssessments: any[],
+  modalityType: string,
+  treatmentData: any
+): any {
+  
+  const sortedAssessments = clinicalAssessments.sort((a, b) => a.date.getTime() - b.date.getTime());
+  const initialAssessment = sortedAssessments[0];
+  const finalAssessment = sortedAssessments[sortedAssessments.length - 1];
+  
+  const initialResponse = initialAssessment?.response || 'stable';
+  let finalStatus: 'failed' | 'intolerant' | 'contraindicated' | 'inaccessible' = 'failed';
+  
+  // Determine final status based on failure classification
+  if (treatmentData.contraindications) {
+    finalStatus = 'contraindicated';
+  } else if (treatmentData.intolerance) {
+    finalStatus = 'intolerant';
+  } else if (treatmentData.accessIssues) {
+    finalStatus = 'inaccessible';
+  }
+
+  // Collect objective indicators
+  const objectiveIndicators: string[] = [];
+  const subjectiveIndicators: string[] = [];
+  
+  if (modalityType === 'wound_care' && treatmentData.areaChange) {
+    objectiveIndicators.push(`Wound area change: ${treatmentData.areaChange}%`);
+  }
+  if (modalityType === 'infection_control' && treatmentData.biomarkers) {
+    objectiveIndicators.push(`Inflammatory markers: ${treatmentData.biomarkers.join(', ')}`);
+  }
+  if (modalityType === 'glycemic_control' && treatmentData.hba1c) {
+    objectiveIndicators.push(`HbA1c: ${treatmentData.hba1c}%`);
+  }
+
+  // Collect subjective indicators
+  if (treatmentData.painScore) {
+    subjectiveIndicators.push(`Pain score: ${treatmentData.painScore}/10`);
+  }
+  if (treatmentData.patientReportedSymptoms) {
+    subjectiveIndicators.push(...treatmentData.patientReportedSymptoms);
+  }
+
+  // Calculate measurable outcomes
+  const measurableOutcomes: any = {};
+  if (treatmentData.areaChange !== undefined) {
+    measurableOutcomes.woundAreaChange = treatmentData.areaChange;
+  }
+  if (treatmentData.depthChange !== undefined) {
+    measurableOutcomes.depthProgression = treatmentData.depthChange;
+  }
+  if (treatmentData.painChange !== undefined) {
+    measurableOutcomes.painScoreChange = treatmentData.painChange;
+  }
+
+  return {
+    initialResponse,
+    finalStatus,
+    objectiveIndicators,
+    subjectiveIndicators,
+    measurableOutcomes
+  };
+}
+
+/**
+ * Analyze compliance during treatment period
+ */
+function analyzeComplianceDuringTreatment(
+  modalityType: string,
+  treatmentData: any,
+  patientProfile: any,
+  totalTrialDuration: number
+): any {
+  
+  // Calculate base compliance scores
+  let patientAdherence = treatmentData.adherenceRate || 70;
+  let providerCompliance = 85; // Assume good provider compliance unless documented otherwise
+  let systemCompliance = 80; // Assume adequate system compliance
+  
+  // Adjust based on documented issues
+  if (treatmentData.missedAppointments > 2) {
+    patientAdherence -= 20;
+  }
+  if (treatmentData.documentationGaps) {
+    providerCompliance -= 15;
+  }
+  if (treatmentData.resourceLimitations) {
+    systemCompliance -= 25;
+  }
+
+  // Identify compliance barriers
+  const complianceBarriers: string[] = [];
+  if (patientProfile.transportationIssues) {
+    complianceBarriers.push('Transportation barriers');
+  }
+  if (patientProfile.financialBarriers) {
+    complianceBarriers.push('Financial constraints');
+  }
+  if (patientProfile.cognitiveFunctioning !== 'normal') {
+    complianceBarriers.push('Cognitive impairment');
+  }
+
+  // Document mitigation attempts
+  const mitigationAttempts: string[] = [];
+  if (treatmentData.educationProvided) {
+    mitigationAttempts.push('Patient education and counseling');
+  }
+  if (treatmentData.socialServiceReferral) {
+    mitigationAttempts.push('Social services referral');
+  }
+  if (treatmentData.simplifiedRegimen) {
+    mitigationAttempts.push('Simplified treatment regimen');
+  }
+
+  // Assess improvement potential
+  const complianceImprovementPotential = 
+    complianceBarriers.length <= 1 ? 'high' : 
+    complianceBarriers.length <= 2 ? 'moderate' : 'low';
+
+  return {
+    patientAdherence: Math.max(0, Math.min(100, patientAdherence)),
+    providerCompliance: Math.max(0, Math.min(100, providerCompliance)),
+    systemCompliance: Math.max(0, Math.min(100, systemCompliance)),
+    complianceBarriers,
+    mitigationAttempts,
+    complianceImprovementPotential
+  };
+}
+
+/**
+ * Assess regulatory compliance for failure documentation
+ */
+function assessRegulatoryCompliance(
+  modalityType: string,
+  failureAnalysis: any,
+  timelineData: any,
+  minimumTrialMet: boolean,
+  optimalTrialMet: boolean
+): any {
+  
+  const medicareRequirementsMet = minimumTrialMet && 
+    failureAnalysis.failureReasons.evidenceLevel !== 'D';
+  
+  const lcdComplianceAudit: string[] = [];
+  if (minimumTrialMet) {
+    lcdComplianceAudit.push('Minimum trial period requirement met');
+  } else {
+    lcdComplianceAudit.push('WARNING: Minimum trial period not met');
+  }
+  
+  if (failureAnalysis.failureReasons.evidenceLevel === 'A' || failureAnalysis.failureReasons.evidenceLevel === 'B') {
+    lcdComplianceAudit.push('Evidence-based failure criteria applied');
+  }
+  
+  if (timelineData.clinicalAssessments.length >= 2) {
+    lcdComplianceAudit.push('Adequate clinical documentation provided');
+  }
+
+  // Calculate documentation completeness
+  let documentationCompleteness = 60; // Base score
+  if (minimumTrialMet) documentationCompleteness += 20;
+  if (optimalTrialMet) documentationCompleteness += 10;
+  if (failureAnalysis.failureReasons.evidenceLevel === 'A') documentationCompleteness += 10;
+  
+  // Determine CTP justification strength
+  const ctpJustificationStrength = 
+    medicareRequirementsMet && optimalTrialMet && failureAnalysis.failureReasons.evidenceLevel === 'A' ? 'compelling' :
+    medicareRequirementsMet && minimumTrialMet ? 'strong' :
+    minimumTrialMet ? 'moderate' : 'weak';
+
+  return {
+    medicareRequirementsMet,
+    lcdComplianceAudit,
+    documentationCompleteness: Math.min(100, documentationCompleteness),
+    auditTrail: lcdComplianceAudit,
+    ctpJustificationStrength
+  };
+}
+
+/**
+ * Assess quality metrics for failure analysis
+ */
+function assessFailureQualityMetrics(
+  modalityType: string,
+  failureAnalysis: any,
+  complianceAnalysis: any,
+  effectivenessAssessment?: TreatmentModalityAssessment
+): any {
+  
+  // Determine failure preventability
+  let failurePreventability: 'preventable' | 'potentially_preventable' | 'non_preventable' = 'non_preventable';
+  
+  if (complianceAnalysis.patientAdherence < 50 && complianceAnalysis.mitigationAttempts.length === 0) {
+    failurePreventability = 'preventable';
+  } else if (complianceAnalysis.patientAdherence < 70 || complianceAnalysis.systemCompliance < 70) {
+    failurePreventability = 'potentially_preventable';
+  }
+
+  // Identify contributing factors
+  const systemFactors: string[] = [];
+  const providerFactors: string[] = [];
+  const patientFactors: string[] = [];
+
+  if (complianceAnalysis.systemCompliance < 80) {
+    systemFactors.push('System compliance issues identified');
+  }
+  if (complianceAnalysis.providerCompliance < 80) {
+    providerFactors.push('Provider compliance issues identified');
+  }
+  if (complianceAnalysis.patientAdherence < 80) {
+    patientFactors.push('Patient adherence issues identified');
+  }
+
+  // Generate improvement opportunities
+  const improvementOpportunities: string[] = [];
+  if (failurePreventability !== 'non_preventable') {
+    improvementOpportunities.push('Enhanced compliance monitoring');
+    improvementOpportunities.push('Improved patient education');
+    improvementOpportunities.push('Barrier assessment and mitigation');
+  }
+
+  return {
+    failurePreventability,
+    systemFactors,
+    providerFactors,
+    patientFactors,
+    improvementOpportunities
+  };
+}
+
+/**
+ * Calculate modality-specific compliance score
+ */
+function calculateModalityComplianceScore(treatment: any, patientProfile: any): any {
+  let adherenceScore = treatment.adherenceData?.rate || 70;
+  let frequencyCompliance = treatment.adherenceData?.frequency || 80;
+  let techniqueCompliance = treatment.adherenceData?.technique || 75;
+  let durationCompliance = 85; // Assume good duration compliance unless documented otherwise
+  let documentationScore = treatment.providerAssessments?.length > 0 ? 90 : 60;
+
+  // Adjust based on patient factors
+  if (patientProfile.cognitiveFunctioning !== 'normal') {
+    adherenceScore *= 0.9;
+    techniqueCompliance *= 0.85;
+  }
+  if (patientProfile.socialSupport === 'poor') {
+    adherenceScore *= 0.9;
+    frequencyCompliance *= 0.9;
+  }
+
+  return {
+    adherenceScore: Math.round(Math.max(0, Math.min(100, adherenceScore))),
+    frequencyCompliance: Math.round(Math.max(0, Math.min(100, frequencyCompliance))),
+    techniqueCompliance: Math.round(Math.max(0, Math.min(100, techniqueCompliance))),
+    durationCompliance: Math.round(Math.max(0, Math.min(100, durationCompliance))),
+    documentationScore: Math.round(Math.max(0, Math.min(100, documentationScore)))
+  };
+}
+
+/**
+ * Analyze compliance patterns over time
+ */
+function analyzeCompliancePatterns(treatmentHistory: any[], currentScore: number): any {
+  const scores = treatmentHistory.map(t => t.adherenceData?.rate || 70);
+  
+  // Calculate consistency score (lower variance = higher consistency)
+  const mean = scores.reduce((sum, score) => sum + score, 0) / scores.length;
+  const variance = scores.reduce((sum, score) => sum + Math.pow(score - mean, 2), 0) / scores.length;
+  const consistencyScore = Math.max(0, 100 - variance);
+
+  // Determine improvement trend
+  let improvementTrend: 'improving' | 'stable' | 'declining' = 'stable';
+  if (scores.length >= 2) {
+    const recent = scores.slice(-3).reduce((sum, score) => sum + score, 0) / Math.min(3, scores.length);
+    const earlier = scores.slice(0, -3).reduce((sum, score) => sum + score, 0) / Math.max(1, scores.length - 3);
+    
+    if (recent > earlier + 10) improvementTrend = 'improving';
+    else if (recent < earlier - 10) improvementTrend = 'declining';
+  }
+
+  // Determine compliance profile
+  const complianceProfile = 
+    currentScore >= 90 ? 'excellent' :
+    currentScore >= 80 ? 'good' :
+    currentScore >= 70 ? 'fair' :
+    currentScore >= 50 ? 'poor' : 'critical';
+
+  return {
+    consistencyScore: Math.round(consistencyScore),
+    improvementTrend,
+    seasonalVariations: false, // Would need time-based analysis
+    riskFactorIdentified: currentScore < 70,
+    complianceProfile
+  };
+}
+
+/**
+ * Calculate education effectiveness metrics
+ */
+function calculateEducationEffectiveness(educationMetrics: any, complianceScore: number): any {
+  if (!educationMetrics) {
+    return {
+      initialKnowledgeScore: 50,
+      currentKnowledgeScore: 60,
+      knowledgeImprovement: 20,
+      educationMethodsUsed: ['Standard counseling'],
+      effectiveEducationMethods: ['Standard counseling'],
+      educationBarriers: ['Limited assessment'],
+      recommendedEducationChanges: ['Implement formal knowledge assessment']
+    };
+  }
+
+  const knowledgeImprovement = 
+    ((educationMetrics.currentKnowledgeScore - educationMetrics.initialKnowledgeScore) / 
+     educationMetrics.initialKnowledgeScore) * 100;
+
+  const effectiveEducationMethods = educationMetrics.educationMethodsUsed.filter((method: string) => 
+    knowledgeImprovement > 20 || complianceScore > 80
+  );
+
+  const recommendedEducationChanges: string[] = [];
+  if (knowledgeImprovement < 10) {
+    recommendedEducationChanges.push('Consider alternative education methods');
+  }
+  if (complianceScore < 70) {
+    recommendedEducationChanges.push('Enhance practical skill training');
+  }
+
+  return {
+    ...educationMetrics,
+    knowledgeImprovement: Math.round(knowledgeImprovement),
+    effectiveEducationMethods,
+    recommendedEducationChanges
+  };
+}
+
+/**
+ * Perform compliance risk assessment
+ */
+function performComplianceRiskAssessment(
+  complianceScore: number,
+  socialDeterminants: any,
+  compliancePatterns: any,
+  treatmentHistory: any[]
+): any {
+  
+  // Count risk factors
+  let riskFactorCount = 0;
+  const identifiedRiskFactors: string[] = [];
+  
+  if (socialDeterminants.transportationBarriers) {
+    riskFactorCount++;
+    identifiedRiskFactors.push('Transportation barriers');
+  }
+  if (socialDeterminants.financialConstraints) {
+    riskFactorCount++;
+    identifiedRiskFactors.push('Financial constraints');
+  }
+  if (socialDeterminants.healthLiteracy === 'low') {
+    riskFactorCount++;
+    identifiedRiskFactors.push('Low health literacy');
+  }
+  if (socialDeterminants.cognitiveFunctioning !== 'normal') {
+    riskFactorCount++;
+    identifiedRiskFactors.push('Cognitive impairment');
+  }
+  if (compliancePatterns.improvementTrend === 'declining') {
+    riskFactorCount++;
+    identifiedRiskFactors.push('Declining compliance trend');
+  }
+
+  // Determine risk level
+  const nonComplianceRisk = 
+    complianceScore >= COMPLIANCE_SCORING_PARAMETERS.RISK_STRATIFICATION.low_risk.compliance_min && 
+    riskFactorCount <= COMPLIANCE_SCORING_PARAMETERS.RISK_STRATIFICATION.low_risk.barrier_count_max ? 'low' :
+    complianceScore >= COMPLIANCE_SCORING_PARAMETERS.RISK_STRATIFICATION.moderate_risk.compliance_min && 
+    riskFactorCount <= COMPLIANCE_SCORING_PARAMETERS.RISK_STRATIFICATION.moderate_risk.barrier_count_max ? 'moderate' :
+    complianceScore >= COMPLIANCE_SCORING_PARAMETERS.RISK_STRATIFICATION.high_risk.compliance_min && 
+    riskFactorCount <= COMPLIANCE_SCORING_PARAMETERS.RISK_STRATIFICATION.high_risk.barrier_count_max ? 'high' : 'critical';
+
+  // Identify protective factors
+  const protectiveFactors: string[] = [];
+  if (socialDeterminants.socialSupport === 'excellent') {
+    protectiveFactors.push('Excellent social support');
+  }
+  if (socialDeterminants.healthLiteracy === 'high') {
+    protectiveFactors.push('High health literacy');
+  }
+  if (compliancePatterns.improvementTrend === 'improving') {
+    protectiveFactors.push('Improving compliance trend');
+  }
+
+  // Generate mitigation strategies
+  const mitigationStrategies: string[] = [];
+  if (socialDeterminants.transportationBarriers) {
+    mitigationStrategies.push('Coordinate transportation services');
+  }
+  if (socialDeterminants.financialConstraints) {
+    mitigationStrategies.push('Explore financial assistance programs');
+  }
+  if (socialDeterminants.healthLiteracy === 'low') {
+    mitigationStrategies.push('Implement simplified education materials');
+  }
+  if (nonComplianceRisk === 'high' || nonComplianceRisk === 'critical') {
+    mitigationStrategies.push('Increase monitoring frequency');
+    mitigationStrategies.push('Consider case management referral');
+  }
+
+  const monitoringRequired = nonComplianceRisk === 'high' || nonComplianceRisk === 'critical';
+  const escalationCriteria = [
+    'Three consecutive missed appointments',
+    'Compliance score below 50%',
+    'Evidence of treatment failure due to non-adherence',
+    'Safety concerns identified'
+  ];
+
+  return {
+    nonComplianceRisk,
+    identifiedRiskFactors,
+    protectiveFactors,
+    mitigationStrategies,
+    monitoringRequired,
+    escalationCriteria
+  };
+}
 }
