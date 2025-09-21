@@ -13,7 +13,10 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { insertEpisodeSchema } from "@shared/schema";
-import { Calendar, Plus, X, UserCheck } from "lucide-react";
+import { Calendar, Plus, X, UserCheck, Stethoscope, AlertTriangle } from "lucide-react";
+import DiagnosisInput from "@/components/ui/diagnosis-input";
+import RecommendationsEngine from "@/components/clinical/recommendations-engine";
+import type { ICD10Code } from "@shared/icd10Database";
 
 const episodeFormSchema = insertEpisodeSchema.extend({
   episodeStartDate: z.string().min(1, "Episode start date is required"),
@@ -36,6 +39,16 @@ export default function EpisodeForm({ onSubmit, onCancel, isLoading, patientId, 
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const [encounterSearchTerm, setEncounterSearchTerm] = useState("");
+
+  // Diagnosis validation and recommendations state
+  const [primaryDiagnosisData, setPrimaryDiagnosisData] = useState<ICD10Code | null>(null);
+  const [diagnosisValidation, setDiagnosisValidation] = useState<{
+    isValid: boolean;
+    errors: string[];
+    warnings: string[];
+  }>({ isValid: true, errors: [], warnings: [] });
+  const [clinicalRecommendations, setClinicalRecommendations] = useState<ICD10Code['clinicalRecommendations'] | null>(null);
+  const [complianceAlerts, setComplianceAlerts] = useState<any[]>([]);
 
   // Get encounters currently in this episode (only for editing)
   const { data: currentEncounters, refetch: refetchCurrentEncounters } = useQuery({
@@ -161,6 +174,44 @@ export default function EpisodeForm({ onSubmit, onCancel, isLoading, patientId, 
       });
     }
   }, [episode, isEditing, form]);
+
+  // Diagnosis management functions
+  const handlePrimaryDiagnosisChange = (code: string, codeData?: ICD10Code) => {
+    form.setValue("primaryDiagnosis", code);
+    setPrimaryDiagnosisData(codeData || null);
+    
+    // Set clinical recommendations for the recommendations engine
+    if (codeData?.clinicalRecommendations) {
+      setClinicalRecommendations(codeData.clinicalRecommendations);
+    }
+  };
+
+  const handleDiagnosisValidation = (isValid: boolean, errors: string[], warnings: string[]) => {
+    setDiagnosisValidation({ isValid, errors, warnings });
+  };
+
+  const handleComplianceAlert = (alert: any) => {
+    setComplianceAlerts(prev => [...prev, alert]);
+  };
+
+  // Get all diagnosis codes for recommendations engine (just primary for episodes)
+  const allDiagnosisCodes = [form.watch("primaryDiagnosis")].filter(Boolean);
+
+  // Generate patient history object for recommendations (simplified for episodes)
+  const patientHistory = {
+    diabetes: false, // Could be enhanced with patient data
+    vascularDisease: false,
+    previousUlcers: true, // Assume true since this is an episode form
+    currentMedications: []
+  };
+
+  // Generate conservative care history (simplified for episodes)
+  const conservativeCareHistory = {
+    offloading: { tried: false, duration: undefined, effective: undefined },
+    compression: { tried: false, duration: undefined, effective: undefined },
+    debridement: { tried: false, duration: undefined, effective: undefined },
+    woundCare: { tried: false, duration: undefined, effective: undefined }
+  };
 
   const handleSubmit = (data: EpisodeFormData) => {
     // Convert date strings back to Date objects for the API
@@ -293,22 +344,71 @@ export default function EpisodeForm({ onSubmit, onCancel, isLoading, patientId, 
                 name="primaryDiagnosis"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>Primary Diagnosis</FormLabel>
+                    <FormLabel className="flex items-center gap-2">
+                      <Stethoscope className="h-4 w-4" />
+                      Primary Diagnosis
+                    </FormLabel>
                     <FormControl>
-                      <Input 
-                        placeholder="e.g., E11.621 - Type 2 diabetes with foot ulcer"
-                        {...field} 
+                      <DiagnosisInput
                         value={field.value || ""}
+                        onChange={handlePrimaryDiagnosisChange}
+                        onValidation={handleDiagnosisValidation}
+                        onComplianceChange={(compliance) => {
+                          // Handle compliance alerts
+                          if (compliance && !compliance.isLCDCovered) {
+                            handleComplianceAlert({
+                              type: 'error',
+                              title: 'Coverage Alert',
+                              description: `Primary diagnosis may not be covered under current Medicare LCDs`,
+                              actionRequired: true
+                            });
+                          }
+                        }}
+                        placeholder="Search primary diagnosis (e.g., E11.621, diabetic foot ulcer)"
+                        showRecommendations={false} // Will show in recommendations engine below
+                        showCompliance={false} // Will show in recommendations engine below
                         data-testid="input-primary-diagnosis"
                       />
                     </FormControl>
                     <FormMessage />
+                    
+                    {/* Validation Messages */}
+                    {!diagnosisValidation.isValid && (
+                      <div className="space-y-2 mt-2" data-testid="diagnosis-validation-alerts">
+                        {diagnosisValidation.errors.map((error, index) => (
+                          <div key={`error-${index}`} className="flex items-start gap-2 p-3 bg-red-50 border border-red-200 rounded-lg">
+                            <AlertTriangle className="h-4 w-4 text-red-500 mt-0.5 flex-shrink-0" />
+                            <div className="text-sm text-red-700">{error}</div>
+                          </div>
+                        ))}
+                        {diagnosisValidation.warnings.map((warning, index) => (
+                          <div key={`warning-${index}`} className="flex items-start gap-2 p-3 bg-yellow-50 border border-yellow-200 rounded-lg">
+                            <AlertTriangle className="h-4 w-4 text-yellow-500 mt-0.5 flex-shrink-0" />
+                            <div className="text-sm text-yellow-700">{warning}</div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </FormItem>
                 )}
               />
             </div>
           </CardContent>
         </Card>
+
+        {/* Clinical Recommendations Engine */}
+        {allDiagnosisCodes.length > 0 && (
+          <RecommendationsEngine
+            diagnosisCodes={allDiagnosisCodes}
+            woundType={form.watch("woundType")}
+            woundLocation={form.watch("woundLocation")}
+            patientHistory={patientHistory}
+            conservativeCareHistory={conservativeCareHistory}
+            onComplianceAlert={handleComplianceAlert}
+            className="mt-4"
+            data-testid="episode-recommendations-engine"
+          />
+        )}
 
         {/* Encounter Management Section - Only show in edit mode */}
         {isEditing && (

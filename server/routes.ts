@@ -25,6 +25,7 @@ import {
   analyzeDiagnosisComplexity, 
   generateDiagnosisRecommendations 
 } from "./services/eligibilityValidator";
+import { ICD10_DATABASE, getCodeByCode, validateICD10Format, searchICD10Codes } from "@shared/icd10Database";
 import { z } from "zod";
 
 // Helper function to track user activity (HIPAA-compliant, no PHI in descriptions)
@@ -1679,6 +1680,146 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // PHASE 5.2: ICD-10 REAL-TIME SEARCH AND VALIDATION API ENDPOINTS
+
+  // Search ICD-10 codes for autocomplete functionality
+  app.get('/api/icd10/search', isAuthenticated, async (req: any, res) => {
+    try {
+      const { query, limit = 10 } = req.query;
+
+      if (!query || typeof query !== 'string') {
+        return res.status(400).json({ message: "Search query is required" });
+      }
+
+      if (query.length < 2) {
+        return res.json([]);
+      }
+
+      // Use the searchICD10Codes function to find matching codes  
+      const results = searchICD10Codes(query).slice(0, parseInt(limit));
+
+      res.json(results);
+
+    } catch (error) {
+      console.error("Error searching ICD-10 codes:", error);
+      res.status(500).json({ message: "Failed to search ICD-10 codes" });
+    }
+  });
+
+  // Validate a specific ICD-10 code
+  app.post('/api/icd10/validate', isAuthenticated, async (req: any, res) => {
+    try {
+      const { code } = req.body;
+
+      if (!code || typeof code !== 'string') {
+        return res.status(400).json({ message: "ICD-10 code is required" });
+      }
+
+      // Validate the code structure and format
+      const validation = validateICD10Format(code);
+      
+      // Try to find the code in the database
+      const codeData = getCodeByCode(code);
+
+      res.json({
+        code,
+        validation,
+        codeData,
+        isValid: validation.isValid && !!codeData
+      });
+
+    } catch (error) {
+      console.error("Error validating ICD-10 code:", error);
+      res.status(500).json({ message: "Failed to validate ICD-10 code" });
+    }
+  });
+
+  // Get detailed information for a specific ICD-10 code
+  app.get('/api/icd10/code/:code', isAuthenticated, async (req: any, res) => {
+    try {
+      const { code } = req.params;
+
+      if (!code) {
+        return res.status(400).json({ message: "ICD-10 code is required" });
+      }
+
+      // Find the code in the database
+      const codeData = getCodeByCode(code);
+
+      if (!codeData) {
+        return res.status(404).json({ message: "ICD-10 code not found in database" });
+      }
+
+      // Also validate the code structure
+      const validation = validateICD10Format(code);
+
+      res.json({
+        code,
+        validation,
+        codeData,
+        isValid: validation.isValid
+      });
+
+    } catch (error) {
+      console.error("Error fetching ICD-10 code details:", error);
+      res.status(500).json({ message: "Failed to fetch ICD-10 code details" });
+    }
+  });
+
+  // Get all available ICD-10 codes (with pagination for large datasets)
+  app.get('/api/icd10/codes', isAuthenticated, async (req: any, res) => {
+    try {
+      const { category, severity, offset = 0, limit = 50 } = req.query;
+
+      let filteredCodes = [...ICD10_DATABASE];
+
+      // Apply category filter
+      if (category && typeof category === 'string') {
+        filteredCodes = filteredCodes.filter(code => 
+          code.category.toLowerCase().includes(category.toLowerCase())
+        );
+      }
+
+      // Apply severity filter
+      if (severity && typeof severity === 'string') {
+        filteredCodes = filteredCodes.filter(code => 
+          code.severity === severity
+        );
+      }
+
+      // Apply pagination
+      const startIndex = parseInt(offset);
+      const pageSize = parseInt(limit);
+      const paginatedCodes = filteredCodes.slice(startIndex, startIndex + pageSize);
+
+      res.json({
+        codes: paginatedCodes,
+        total: filteredCodes.length,
+        offset: startIndex,
+        limit: pageSize,
+        hasMore: startIndex + pageSize < filteredCodes.length
+      });
+
+    } catch (error) {
+      console.error("Error fetching ICD-10 codes:", error);
+      res.status(500).json({ message: "Failed to fetch ICD-10 codes" });
+    }
+  });
+
+  // Get ICD-10 code categories
+  app.get('/api/icd10/categories', isAuthenticated, async (req: any, res) => {
+    try {
+      // Extract unique categories from the ICD-10 database
+      const categories = Array.from(new Set(ICD10_DATABASE.map(code => code.category)));
+
+      res.json(categories.sort());
+
+    } catch (error) {
+      console.error("Error fetching ICD-10 categories:", error);
+      res.status(500).json({ message: "Failed to fetch ICD-10 categories" });
+    }
+  });
+
   // Bulk data endpoints for performance optimization
   app.get('/api/encounters-with-patients/:tenantId', isAuthenticated, async (req: any, res) => {
     try {
@@ -1744,7 +1885,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         hasResponded = true;
         return res.status(500).json({ 
           message: "Database connection error while fetching episodes",
-          error: process.env.NODE_ENV === 'development' ? dbError.message : undefined
+          error: process.env.NODE_ENV === 'development' ? (dbError as Error).message : undefined
         });
       }
 
