@@ -79,7 +79,7 @@ export interface ExtractedEncounterData {
       frequency?: string;
     };
     infectionControl?: string[];
-    vascularAssessment?: {  // Structured vascular findings for comprehensive assessment
+    vascularAssessment?: {  // Basic vascular findings (maintained for compatibility)
       dorsalisPedis?: string;
       posteriorTibial?: string;
       capillaryRefill?: string;
@@ -94,6 +94,252 @@ export interface ExtractedEncounterData {
     };
     duration?: string; // How long conservative care attempted
     overallEffectiveness?: string;
+  };
+  
+  // PHASE 4.1: Comprehensive Vascular Assessment Data
+  vascularStudies?: {
+    // Arterial Duplex Studies
+    arterialDuplex?: {
+      studyDate?: string;
+      vesselAssessments?: Array<{
+        vessel: string; // 'dorsalis_pedis' | 'posterior_tibial' | 'anterior_tibial' | 'peroneal' | 'popliteal' | 'superficial_femoral' | 'common_femoral'
+        peakSystolicVelocity?: number; // cm/s
+        endDiastolicVelocity?: number; // cm/s
+        resistiveIndex?: number;
+        flowPattern?: 'triphasic' | 'biphasic' | 'monophasic' | 'dampened' | 'absent';
+        stenosis?: 'none' | 'mild' | 'moderate' | 'severe' | 'occlusion';
+        stenosisPercentage?: number;
+        location?: string; // anatomical location of stenosis
+      }>;
+      overallInterpretation?: string;
+      technician?: string;
+      radiologist?: string;
+    };
+    
+    // Ankle-Brachial Index (ABI) Measurements
+    abi?: {
+      studyDate?: string;
+      restingABI?: {
+        rightDorsalisPedis?: number;
+        rightPosteriorTibial?: number;
+        leftDorsalisPedis?: number;
+        leftPosteriorTibial?: number;
+        rightABI?: number; // highest ankle pressure / highest brachial pressure
+        leftABI?: number;
+      };
+      postExerciseABI?: {
+        rightABI?: number;
+        leftABI?: number;
+        minutesToRecovery?: number;
+        exerciseProtocol?: string;
+      };
+      interpretation?: {
+        rightLimbCategory?: 'normal' | 'borderline' | 'mild_pad' | 'moderate_pad' | 'severe_pad' | 'non_compressible';
+        leftLimbCategory?: 'normal' | 'borderline' | 'mild_pad' | 'moderate_pad' | 'severe_pad' | 'non_compressible';
+        overallAssessment?: string;
+        clinicalCorrelation?: string;
+      };
+      performedBy?: string;
+    };
+    
+    // Toe-Brachial Index (TBI) for diabetic patients
+    tbi?: {
+      studyDate?: string;
+      measurements?: {
+        rightGreatToe?: number;
+        leftGreatToe?: number;
+        rightTBI?: number;
+        leftTBI?: number;
+      };
+      interpretation?: {
+        rightToePerfusion?: 'adequate' | 'borderline' | 'inadequate';
+        leftToePerfusion?: 'adequate' | 'borderline' | 'inadequate';
+        overallAssessment?: string;
+        diabeticConsiderations?: string;
+      };
+      performedBy?: string;
+    };
+    
+    // Transcutaneous Oxygen Pressure (TcPO2)
+    tcpo2?: {
+      studyDate?: string;
+      measurements?: {
+        rightFoot?: number; // mmHg
+        leftFoot?: number; // mmHg
+        chestReference?: number; // mmHg
+        ambientTemperature?: number; // °C
+        patientPosition?: string;
+      };
+      interpretation?: {
+        rightFootPerfusion?: 'adequate' | 'borderline' | 'poor';
+        leftFootPerfusion?: 'adequate' | 'borderline' | 'poor';
+        healingPotential?: 'good' | 'fair' | 'poor';
+        oxygenTherapyResponse?: string;
+      };
+      performedBy?: string;
+    };
+    
+    // Pulse Volume Recording (PVR)
+    pvr?: {
+      studyDate?: string;
+      waveformAnalysis?: Array<{
+        level: string; // 'thigh' | 'calf' | 'ankle' | 'metatarsal' | 'toe'
+        side: 'right' | 'left';
+        waveformType?: 'triphasic' | 'biphasic' | 'monophasic' | 'dampened' | 'flat';
+        amplitude?: number; // mmHg
+        upstrokeTime?: number; // milliseconds
+        dicroticNotch?: boolean;
+      }>;
+      interpretation?: string;
+      performedBy?: string;
+    };
+    
+    // CT/MRI Angiography
+    angiography?: {
+      studyType?: 'cta' | 'mra' | 'conventional_angiography';
+      studyDate?: string;
+      contrastUsed?: boolean;
+      contrastType?: string;
+      vesselPatency?: Array<{
+        vessel: string;
+        patencyStatus: 'patent' | 'stenotic' | 'occluded';
+        stenosisGrade?: 'mild' | 'moderate' | 'severe';
+        collateralFlow?: 'good' | 'fair' | 'poor' | 'absent';
+        location?: string;
+      }>;
+      runoffVessels?: {
+        anterior_tibial?: 'patent' | 'stenotic' | 'occluded';
+        posterior_tibial?: 'patent' | 'stenotic' | 'occluded';
+        peroneal?: 'patent' | 'stenotic' | 'occluded';
+        dorsalis_pedis?: 'patent' | 'stenotic' | 'occluded';
+        plantar_arch?: 'patent' | 'stenotic' | 'occluded';
+      };
+      overallInterpretation?: string;
+      radiologist?: string;
+      reportDate?: string;
+    };
+  };
+  
+  // Clinical Vascular Assessment (Physical Examination)
+  clinicalVascularAssessment?: {
+    examinationDate?: string;
+    
+    // Palpable Pulse Documentation
+    pulseExamination?: {
+      dorsalisPedis?: {
+        right?: 'palpable' | 'diminished' | 'absent' | 'dopplerable_only';
+        left?: 'palpable' | 'diminished' | 'absent' | 'dopplerable_only';
+      };
+      posteriorTibial?: {
+        right?: 'palpable' | 'diminished' | 'absent' | 'dopplerable_only';
+        left?: 'palpable' | 'diminished' | 'absent' | 'dopplerable_only';
+      };
+      popliteal?: {
+        right?: 'palpable' | 'diminished' | 'absent';
+        left?: 'palpable' | 'diminished' | 'absent';
+      };
+      femoral?: {
+        right?: 'palpable' | 'diminished' | 'absent';
+        left?: 'palpable' | 'diminished' | 'absent';
+      };
+    };
+    
+    // Capillary Refill and Perfusion
+    perfusionAssessment?: {
+      capillaryRefillTime?: {
+        right?: number; // seconds
+        left?: number; // seconds
+      };
+      skinTemperature?: {
+        right?: 'warm' | 'cool' | 'cold';
+        left?: 'warm' | 'cool' | 'cold';
+        temperatureDifference?: boolean;
+      };
+      skinColor?: {
+        right?: 'normal' | 'pale' | 'cyanotic' | 'rubor' | 'mottled';
+        left?: 'normal' | 'pale' | 'cyanotic' | 'rubor' | 'mottled';
+        dependentRubor?: boolean;
+        elevationPallor?: boolean;
+      };
+    };
+    
+    // Venous Insufficiency Assessment
+    venousAssessment?: {
+      edema?: {
+        right?: 'none' | 'trace' | '1+' | '2+' | '3+' | '4+';
+        left?: 'none' | 'trace' | '1+' | '2+' | '3+' | '4+';
+        pittingEdema?: boolean;
+        distribution?: string; // ankle, pretibial, thigh, etc.
+      };
+      varicosities?: {
+        present?: boolean;
+        severity?: 'mild' | 'moderate' | 'severe';
+        distribution?: string;
+        complications?: string[]; // ulceration, bleeding, thrombophlebitis
+      };
+      skinChanges?: {
+        hyperpigmentation?: boolean;
+        lipodermatosclerosis?: boolean;
+        atrophieBlanche?: boolean;
+        eczema?: boolean;
+        location?: string[];
+      };
+      ceapClassification?: {
+        clinical?: string; // C0-C6
+        etiology?: string; // Ec, Ep, Es, En
+        anatomy?: string; // As, Ap, Ad
+        pathophysiology?: string; // Pr, Po
+      };
+    };
+    
+    // Previous Vascular Interventions
+    vascularHistory?: {
+      previousInterventions?: Array<{
+        type: 'bypass' | 'angioplasty' | 'stenting' | 'endarterectomy' | 'amputation';
+        date?: string;
+        location?: string; // anatomical location
+        graftType?: string; // for bypass surgeries
+        patencyStatus?: 'patent' | 'stenotic' | 'occluded' | 'unknown';
+        complications?: string[];
+      }>;
+      currentMedications?: Array<{
+        medication: string;
+        indication: 'antiplatelet' | 'anticoagulation' | 'vasodilation' | 'claudication';
+        dose?: string;
+        compliance?: 'good' | 'fair' | 'poor';
+      }>;
+    };
+    
+    // Claudication and Functional Assessment
+    functionalVascularAssessment?: {
+      claudicationSymptoms?: {
+        present?: boolean;
+        location?: string[]; // calf, thigh, buttock, foot
+        severity?: 'mild' | 'moderate' | 'severe';
+        walkingDistance?: {
+          painFreeWalkingDistance?: number; // meters
+          maxWalkingDistance?: number; // meters
+          walkingSpeed?: 'normal' | 'slow' | 'very_slow';
+        };
+        reliefWithRest?: boolean;
+        reliefTime?: number; // minutes
+      };
+      restPain?: {
+        present?: boolean;
+        severity?: number; // 0-10 scale
+        location?: string[];
+        nightPain?: boolean;
+        reliefWithDependency?: boolean;
+      };
+      functionalLimitations?: {
+        adlLimitations?: string[];
+        mobilityAids?: string[];
+        exerciseTolerance?: 'good' | 'fair' | 'poor' | 'very_poor';
+      };
+    };
+    
+    examinedBy?: string;
+    clinicalImpression?: string;
   };
   
   // Patient education and follow-up
@@ -202,6 +448,27 @@ Instructions:
 - Group conservative care by category with specific details and timeframes
 - Include direct quotes from clinical notes when they provide important context
 
+PHASE 4.1 VASCULAR ASSESSMENT EXTRACTION:
+- Extract ALL vascular study data including ABI, TBI, TcPO2, PVR, angiography results
+- Capture comprehensive clinical vascular examination findings  
+- Document pulse examinations, perfusion assessment, venous insufficiency signs
+- Extract vascular intervention history and claudication symptoms
+- Correlate vascular findings with wound healing potential
+
+VASCULAR STUDY EXTRACTION PRIORITIES:
+1. ABI MEASUREMENTS - Look for ankle-brachial index, ABI values, resting/exercise ABI
+2. TBI MEASUREMENTS - Toe-brachial index, toe pressures (especially for diabetic patients)
+3. TcPO2 MEASUREMENTS - Transcutaneous oxygen pressure, healing potential assessments
+4. PVR ANALYSIS - Pulse volume recording, waveform patterns (triphasic, monophasic)
+5. ANGIOGRAPHY - CT angiography, MR angiography, vessel patency, stenosis grades
+6. ARTERIAL DUPLEX - Flow velocities, stenosis percentages, vessel assessments
+
+CLINICAL VASCULAR EXAMINATION:
+1. PULSE EXAMINATION - Dorsalis pedis, posterior tibial, popliteal, femoral pulses
+2. PERFUSION ASSESSMENT - Capillary refill time, skin temperature, skin color
+3. VENOUS ASSESSMENT - Edema grading, varicosities, skin changes, CEAP classification
+4. FUNCTIONAL ASSESSMENT - Claudication symptoms, walking distance, rest pain
+
 Return JSON in this exact format:
 {
   "patientData": {
@@ -280,6 +547,236 @@ Return JSON in this exact format:
         "duration": "string | null",
         "overallEffectiveness": "string | null"
       },
+      "vascularStudies": {
+        "arterialDuplex": {
+          "studyDate": "YYYY-MM-DD | null",
+          "vesselAssessments": [
+            {
+              "vessel": "string",
+              "peakSystolicVelocity": number | null,
+              "endDiastolicVelocity": number | null,
+              "resistiveIndex": number | null,
+              "flowPattern": "triphasic | biphasic | monophasic | dampened | absent | null",
+              "stenosis": "none | mild | moderate | severe | occlusion | null",
+              "stenosisPercentage": number | null,
+              "location": "string | null"
+            }
+          ] | null,
+          "overallInterpretation": "string | null",
+          "technician": "string | null",
+          "radiologist": "string | null"
+        } | null,
+        "abi": {
+          "studyDate": "YYYY-MM-DD | null",
+          "restingABI": {
+            "rightDorsalisPedis": number | null,
+            "rightPosteriorTibial": number | null,
+            "leftDorsalisPedis": number | null,
+            "leftPosteriorTibial": number | null,
+            "rightABI": number | null,
+            "leftABI": number | null
+          } | null,
+          "postExerciseABI": {
+            "rightABI": number | null,
+            "leftABI": number | null,
+            "minutesToRecovery": number | null,
+            "exerciseProtocol": "string | null"
+          } | null,
+          "interpretation": {
+            "rightLimbCategory": "normal | borderline | mild_pad | moderate_pad | severe_pad | non_compressible | null",
+            "leftLimbCategory": "normal | borderline | mild_pad | moderate_pad | severe_pad | non_compressible | null",
+            "overallAssessment": "string | null",
+            "clinicalCorrelation": "string | null"
+          } | null,
+          "performedBy": "string | null"
+        } | null,
+        "tbi": {
+          "studyDate": "YYYY-MM-DD | null",
+          "measurements": {
+            "rightGreatToe": number | null,
+            "leftGreatToe": number | null,
+            "rightTBI": number | null,
+            "leftTBI": number | null
+          } | null,
+          "interpretation": {
+            "rightToePerfusion": "adequate | borderline | inadequate | null",
+            "leftToePerfusion": "adequate | borderline | inadequate | null",
+            "overallAssessment": "string | null",
+            "diabeticConsiderations": "string | null"
+          } | null,
+          "performedBy": "string | null"
+        } | null,
+        "tcpo2": {
+          "studyDate": "YYYY-MM-DD | null",
+          "measurements": {
+            "rightFoot": number | null,
+            "leftFoot": number | null,
+            "chestReference": number | null,
+            "ambientTemperature": number | null,
+            "patientPosition": "string | null"
+          } | null,
+          "interpretation": {
+            "rightFootPerfusion": "adequate | borderline | poor | null",
+            "leftFootPerfusion": "adequate | borderline | poor | null",
+            "healingPotential": "good | fair | poor | null",
+            "oxygenTherapyResponse": "string | null"
+          } | null,
+          "performedBy": "string | null"
+        } | null,
+        "pvr": {
+          "studyDate": "YYYY-MM-DD | null",
+          "waveformAnalysis": [
+            {
+              "level": "string",
+              "side": "right | left",
+              "waveformType": "triphasic | biphasic | monophasic | dampened | flat | null",
+              "amplitude": number | null,
+              "upstrokeTime": number | null,
+              "dicroticNotch": boolean | null
+            }
+          ] | null,
+          "interpretation": "string | null",
+          "performedBy": "string | null"
+        } | null,
+        "angiography": {
+          "studyType": "cta | mra | conventional_angiography | null",
+          "studyDate": "YYYY-MM-DD | null",
+          "contrastUsed": boolean | null,
+          "contrastType": "string | null",
+          "vesselPatency": [
+            {
+              "vessel": "string",
+              "patencyStatus": "patent | stenotic | occluded",
+              "stenosisGrade": "mild | moderate | severe | null",
+              "collateralFlow": "good | fair | poor | absent | null",
+              "location": "string | null"
+            }
+          ] | null,
+          "runoffVessels": {
+            "anterior_tibial": "patent | stenotic | occluded | null",
+            "posterior_tibial": "patent | stenotic | occluded | null",
+            "peroneal": "patent | stenotic | occluded | null",
+            "dorsalis_pedis": "patent | stenotic | occluded | null",
+            "plantar_arch": "patent | stenotic | occluded | null"
+          } | null,
+          "overallInterpretation": "string | null",
+          "radiologist": "string | null",
+          "reportDate": "YYYY-MM-DD | null"
+        } | null
+      } | null,
+      "clinicalVascularAssessment": {
+        "examinationDate": "YYYY-MM-DD | null",
+        "pulseExamination": {
+          "dorsalisPedis": {
+            "right": "palpable | diminished | absent | dopplerable_only | null",
+            "left": "palpable | diminished | absent | dopplerable_only | null"
+          } | null,
+          "posteriorTibial": {
+            "right": "palpable | diminished | absent | dopplerable_only | null",
+            "left": "palpable | diminished | absent | dopplerable_only | null"
+          } | null,
+          "popliteal": {
+            "right": "palpable | diminished | absent | null",
+            "left": "palpable | diminished | absent | null"
+          } | null,
+          "femoral": {
+            "right": "palpable | diminished | absent | null",
+            "left": "palpable | diminished | absent | null"
+          } | null
+        } | null,
+        "perfusionAssessment": {
+          "capillaryRefillTime": {
+            "right": number | null,
+            "left": number | null
+          } | null,
+          "skinTemperature": {
+            "right": "warm | cool | cold | null",
+            "left": "warm | cool | cold | null",
+            "temperatureDifference": boolean | null
+          } | null,
+          "skinColor": {
+            "right": "normal | pale | cyanotic | rubor | mottled | null",
+            "left": "normal | pale | cyanotic | rubor | mottled | null",
+            "dependentRubor": boolean | null,
+            "elevationPallor": boolean | null
+          } | null
+        } | null,
+        "venousAssessment": {
+          "edema": {
+            "right": "none | trace | 1+ | 2+ | 3+ | 4+ | null",
+            "left": "none | trace | 1+ | 2+ | 3+ | 4+ | null",
+            "pittingEdema": boolean | null,
+            "distribution": "string | null"
+          } | null,
+          "varicosities": {
+            "present": boolean | null,
+            "severity": "mild | moderate | severe | null",
+            "distribution": "string | null",
+            "complications": ["string"] | null
+          } | null,
+          "skinChanges": {
+            "hyperpigmentation": boolean | null,
+            "lipodermatosclerosis": boolean | null,
+            "atrophieBlanche": boolean | null,
+            "eczema": boolean | null,
+            "location": ["string"] | null
+          } | null,
+          "ceapClassification": {
+            "clinical": "string | null",
+            "etiology": "string | null",
+            "anatomy": "string | null",
+            "pathophysiology": "string | null"
+          } | null
+        } | null,
+        "vascularHistory": {
+          "previousInterventions": [
+            {
+              "type": "bypass | angioplasty | stenting | endarterectomy | amputation",
+              "date": "YYYY-MM-DD | null",
+              "location": "string | null",
+              "graftType": "string | null",
+              "patencyStatus": "patent | stenotic | occluded | unknown | null",
+              "complications": ["string"] | null
+            }
+          ] | null,
+          "currentMedications": [
+            {
+              "medication": "string",
+              "indication": "antiplatelet | anticoagulation | vasodilation | claudication",
+              "dose": "string | null",
+              "compliance": "good | fair | poor | null"
+            }
+          ] | null
+        } | null,
+        "functionalVascularAssessment": {
+          "claudicationSymptoms": {
+            "present": boolean | null,
+            "location": ["string"] | null,
+            "severity": "mild | moderate | severe | null",
+            "walkingDistance": {
+              "painFreeWalkingDistance": number | null,
+              "maxWalkingDistance": number | null,
+              "walkingSpeed": "normal | slow | very_slow | null"
+            } | null,
+            "reliefWithRest": boolean | null,
+            "reliefTime": number | null
+          } | null,
+          "restPain": {
+            "present": boolean | null,
+            "severity": number | null,
+            "location": ["string"] | null,
+            "nightPain": boolean | null,
+            "reliefWithDependency": boolean | null
+          } | null,
+          "functionalLimitations": {
+            "adlLimitations": ["string"] | null,
+            "mobilityAids": ["string"] | null,
+            "exerciseTolerance": "good | fair | poor | very_poor | null"
+          } | null
+        } | null,
+        "examinedBy": "string | null",
+        "clinicalImpression": "string | null"
+      } | null,
       "patientEducation": ["string"] | null,
       "followUpInstructions": ["string"] | null,
       "infectionStatus": "string | null",
