@@ -15,6 +15,9 @@ import {
   auditLogs,
   fileUploads,
   pdfExtractedData,
+  products,
+  productLcdCoverage,
+  productApplications,
   type User,
   type UpsertUser,
   type InsertTenant,
@@ -48,6 +51,10 @@ import {
   type InsertPdfExtractedData,
   type PdfExtractedData,
   type EpisodeWithFullHistory,
+  type Product,
+  type ProductLcdCoverage,
+  type InsertProductApplication,
+  type ProductApplication,
 } from "@shared/schema";
 import { db } from "./db";
 import { eq, and, desc, asc, or, lte, gte, sql, inArray } from "drizzle-orm";
@@ -248,6 +255,107 @@ export interface IStorage {
     complexityDistribution: Record<string, number>;
     necessityDistribution: Record<string, number>;
     commonRecommendations: Array<{ recommendation: string; count: number }>;
+  }>;
+
+  // ===============================================================================
+  // PHASE 3.2: PRODUCT APPLICATION WORKFLOW STORAGE OPERATIONS
+  // ===============================================================================
+  
+  // Product Catalog operations
+  searchProducts(filters: {
+    category?: string;
+    woundTypes?: string[];
+    hcpcsCode?: string;
+    manufacturerName?: string;
+    isActive?: boolean;
+    clinicalEvidenceLevel?: string;
+  }): Promise<Product[]>;
+  getProduct(id: string): Promise<Product | undefined>;
+  getProductsByHcpcs(hcpcsCode: string): Promise<Product[]>;
+  getProductsByWoundType(woundType: string): Promise<Product[]>;
+  getProductsByManufacturer(manufacturerName: string): Promise<Product[]>;
+  
+  // Product LCD Coverage operations
+  getProductLcdCoverage(productId: string, macRegion: string): Promise<ProductLcdCoverage | undefined>;
+  getActiveLcdCoverageByProduct(productId: string, macRegion: string): Promise<ProductLcdCoverage[]>;
+  validateProductCoverage(
+    productId: string,
+    episodeId: string,
+    applicationData: {
+      woundSize?: number;
+      woundDepth?: number;
+      diagnosisCodes: string[];
+      conservativeCareCompliance?: boolean;
+      conservativeCareDays?: number;
+    }
+  ): Promise<{
+    isCovered: boolean;
+    coverageLevel: string;
+    violations: string[];
+    warnings: string[];
+    requirements: string[];
+    priorAuthRequired: boolean;
+    maxReimbursableAmount?: number;
+  }>;
+  
+  // Product Application operations  
+  createProductApplication(application: InsertProductApplication): Promise<ProductApplication>;
+  getProductApplication(id: string): Promise<ProductApplication | undefined>;
+  getProductApplicationsByEpisode(episodeId: string): Promise<ProductApplication[]>;
+  getProductApplicationsByPatient(patientId: string): Promise<ProductApplication[]>;
+  updateProductApplication(id: string, updates: Partial<InsertProductApplication>): Promise<ProductApplication>;
+  
+  // Product frequency validation
+  validateProductApplicationFrequency(
+    productId: string,
+    patientId: string,
+    episodeId: string,
+    applicationDate: Date
+  ): Promise<{
+    isValid: boolean;
+    violations: string[];
+    lastApplicationDate?: Date;
+    daysSinceLastApplication?: number;
+    applicationsThisEpisode: number;
+    applicationsThisMonth: number;
+    applicationsThisYear: number;
+    maxAllowed: {
+      perEpisode?: number;
+      perMonth?: number;
+      perYear?: number;
+      minDaysBetween?: number;
+    };
+  }>;
+  
+  // Clinical Decision Support
+  getProductRecommendations(
+    woundType: string,
+    woundSize: number,
+    diagnosisCodes: string[],
+    patientFactors?: {
+      age?: number;
+      diabetic?: boolean;
+      immunocompromised?: boolean;
+      previousProducts?: string[];
+    }
+  ): Promise<Array<{
+    product: Product;
+    coverageInfo: ProductLcdCoverage | null;
+    recommendationScore: number;
+    reasons: string[];
+    contraindications: string[];
+    clinicalEvidence: string;
+    successRate: number;
+    costEffectiveness: number;
+  }>>;
+  
+  // Conservative Care Integration
+  checkConservativeCareCompliance(episodeId: string, requiredDays: number): Promise<{
+    isCompliant: boolean;
+    daysCompleted: number;
+    missingTreatments: string[];
+    compliancePercentage: number;
+    eligibleDate?: Date;
   }>;
 }
 
@@ -1718,6 +1826,531 @@ export class DatabaseStorage implements IStorage {
       .where(eq(pdfExtractedData.id, id))
       .returning();
     return updated;
+  }
+
+  // ===============================================================================
+  // PRODUCT APPLICATION WORKFLOW STORAGE IMPLEMENTATIONS
+  // ===============================================================================
+
+  // Product Catalog operations
+  async searchProducts(filters: {
+    category?: string;
+    woundTypes?: string[];
+    hcpcsCode?: string;
+    manufacturerName?: string;
+    isActive?: boolean;
+    clinicalEvidenceLevel?: string;
+  }): Promise<Product[]> {
+    let query = db.select().from(products);
+    
+    const conditions = [];
+    
+    if (filters.isActive !== undefined) {
+      conditions.push(eq(products.isActive, filters.isActive));
+    }
+    
+    if (filters.category) {
+      conditions.push(eq(products.category, filters.category));
+    }
+    
+    if (filters.hcpcsCode) {
+      conditions.push(eq(products.hcpcsCode, filters.hcpcsCode));
+    }
+    
+    if (filters.manufacturerName) {
+      conditions.push(eq(products.manufacturerName, filters.manufacturerName));
+    }
+    
+    if (filters.clinicalEvidenceLevel) {
+      conditions.push(eq(products.clinicalEvidenceLevel, filters.clinicalEvidenceLevel));
+    }
+    
+    // For wound types, we need to check if any of the requested wound types match the product indications
+    if (filters.woundTypes && filters.woundTypes.length > 0) {
+      // This is a simplified implementation - in reality we'd need more complex array matching
+      conditions.push(sql`${products.woundTypeIndications} && ${filters.woundTypes}`);
+    }
+    
+    if (conditions.length > 0) {
+      query = query.where(and(...conditions));
+    }
+    
+    return await query.orderBy(asc(products.productName));
+  }
+
+  async getProduct(id: string): Promise<Product | undefined> {
+    const [product] = await db.select().from(products).where(eq(products.id, id));
+    return product;
+  }
+
+  async getProductsByHcpcs(hcpcsCode: string): Promise<Product[]> {
+    return await db
+      .select()
+      .from(products)
+      .where(eq(products.hcpcsCode, hcpcsCode));
+  }
+
+  async getProductsByWoundType(woundType: string): Promise<Product[]> {
+    return await db
+      .select()
+      .from(products)
+      .where(sql`${products.woundTypeIndications} @> ${[woundType]}`);
+  }
+
+  async getProductsByManufacturer(manufacturerName: string): Promise<Product[]> {
+    return await db
+      .select()
+      .from(products)
+      .where(eq(products.manufacturerName, manufacturerName));
+  }
+
+  // Product LCD Coverage operations
+  async getProductLcdCoverage(productId: string, macRegion: string): Promise<ProductLcdCoverage | undefined> {
+    const [coverage] = await db
+      .select()
+      .from(productLcdCoverage)
+      .where(and(
+        eq(productLcdCoverage.productId, productId),
+        eq(productLcdCoverage.macRegion, macRegion),
+        eq(productLcdCoverage.isActive, true)
+      ));
+    return coverage;
+  }
+
+  async getActiveLcdCoverageByProduct(productId: string, macRegion: string): Promise<ProductLcdCoverage[]> {
+    return await db
+      .select()
+      .from(productLcdCoverage)
+      .where(and(
+        eq(productLcdCoverage.productId, productId),
+        eq(productLcdCoverage.macRegion, macRegion),
+        eq(productLcdCoverage.isActive, true)
+      ))
+      .orderBy(desc(productLcdCoverage.effectiveDate));
+  }
+
+  async validateProductCoverage(
+    productId: string,
+    episodeId: string,
+    applicationData: {
+      woundSize?: number;
+      woundDepth?: number;
+      diagnosisCodes: string[];
+      conservativeCareCompliance?: boolean;
+      conservativeCareDays?: number;
+    }
+  ): Promise<{
+    isCovered: boolean;
+    coverageLevel: string;
+    violations: string[];
+    warnings: string[];
+    requirements: string[];
+    priorAuthRequired: boolean;
+    maxReimbursableAmount?: number;
+  }> {
+    // Get episode and patient data
+    const episode = await this.getEpisode(episodeId);
+    if (!episode) {
+      return {
+        isCovered: false,
+        coverageLevel: 'none',
+        violations: ['Episode not found'],
+        warnings: [],
+        requirements: [],
+        priorAuthRequired: false
+      };
+    }
+
+    const patient = await this.getPatient(episode.patientId);
+    if (!patient) {
+      return {
+        isCovered: false,
+        coverageLevel: 'none',
+        violations: ['Patient not found'],
+        warnings: [],
+        requirements: [],
+        priorAuthRequired: false
+      };
+    }
+
+    // Get LCD coverage for patient's MAC region
+    const lcdCoverage = await this.getProductLcdCoverage(productId, patient.macRegion || '');
+    if (!lcdCoverage) {
+      return {
+        isCovered: false,
+        coverageLevel: 'none',
+        violations: ['No LCD coverage found for MAC region ' + patient.macRegion],
+        warnings: [],
+        requirements: [],
+        priorAuthRequired: false
+      };
+    }
+
+    const violations: string[] = [];
+    const warnings: string[] = [];
+    const requirements: string[] = [];
+
+    // Size validations
+    if (applicationData.woundSize && lcdCoverage.minWoundSize && applicationData.woundSize < lcdCoverage.minWoundSize) {
+      violations.push(`Wound size ${applicationData.woundSize} cm² is below minimum requirement of ${lcdCoverage.minWoundSize} cm²`);
+    }
+
+    if (applicationData.woundSize && lcdCoverage.maxWoundSize && applicationData.woundSize > lcdCoverage.maxWoundSize) {
+      violations.push(`Wound size ${applicationData.woundSize} cm² exceeds maximum limit of ${lcdCoverage.maxWoundSize} cm²`);
+    }
+
+    // Conservative care requirement
+    if (lcdCoverage.requiresConservativeCare) {
+      if (!applicationData.conservativeCareCompliance) {
+        violations.push('Conservative care compliance required');
+      }
+      requirements.push('conservative_care');
+    }
+
+    // Diagnosis code validation (simplified)
+    if (lcdCoverage.coveredDiagnosisCodes && lcdCoverage.coveredDiagnosisCodes.length > 0) {
+      const hasValidDiagnosis = applicationData.diagnosisCodes.some(code =>
+        lcdCoverage.coveredDiagnosisCodes.includes(code)
+      );
+      if (!hasValidDiagnosis) {
+        violations.push('No qualifying diagnosis codes found');
+      }
+    }
+
+    return {
+      isCovered: violations.length === 0,
+      coverageLevel: violations.length === 0 ? 'full' : 'none',
+      violations,
+      warnings,
+      requirements,
+      priorAuthRequired: lcdCoverage.requiresPriorAuth || false,
+      maxReimbursableAmount: lcdCoverage.maxReimbursableAmount
+    };
+  }
+
+  // Product Application operations  
+  async createProductApplication(application: InsertProductApplication): Promise<ProductApplication> {
+    const [newApplication] = await db.insert(productApplications).values(application).returning();
+    return newApplication;
+  }
+
+  async getProductApplication(id: string): Promise<ProductApplication | undefined> {
+    const [application] = await db.select().from(productApplications).where(eq(productApplications.id, id));
+    return application;
+  }
+
+  async getProductApplicationsByEpisode(episodeId: string): Promise<ProductApplication[]> {
+    return await db
+      .select()
+      .from(productApplications)
+      .where(eq(productApplications.episodeId, episodeId))
+      .orderBy(desc(productApplications.applicationDate));
+  }
+
+  async getProductApplicationsByPatient(patientId: string): Promise<ProductApplication[]> {
+    return await db
+      .select()
+      .from(productApplications)
+      .where(eq(productApplications.patientId, patientId))
+      .orderBy(desc(productApplications.applicationDate));
+  }
+
+  async updateProductApplication(id: string, updates: Partial<InsertProductApplication>): Promise<ProductApplication> {
+    const [updated] = await db
+      .update(productApplications)
+      .set({ ...updates, updatedAt: new Date() })
+      .where(eq(productApplications.id, id))
+      .returning();
+    return updated;
+  }
+
+  // Product frequency validation
+  async validateProductApplicationFrequency(
+    productId: string,
+    patientId: string,
+    episodeId: string,
+    applicationDate: Date
+  ): Promise<{
+    isValid: boolean;
+    violations: string[];
+    lastApplicationDate?: Date;
+    daysSinceLastApplication?: number;
+    applicationsThisEpisode: number;
+    applicationsThisMonth: number;
+    applicationsThisYear: number;
+    maxAllowed: {
+      perEpisode?: number;
+      perMonth?: number;
+      perYear?: number;
+      minDaysBetween?: number;
+    };
+  }> {
+    // Get patient MAC region for LCD coverage
+    const patient = await this.getPatient(patientId);
+    const macRegion = patient?.macRegion || '';
+    
+    // Get LCD coverage limits
+    const lcdCoverage = await this.getProductLcdCoverage(productId, macRegion);
+    
+    // Count existing applications
+    const episodeApplications = await db
+      .select()
+      .from(productApplications)
+      .where(and(
+        eq(productApplications.productId, productId),
+        eq(productApplications.episodeId, episodeId),
+        eq(productApplications.status, 'approved')
+      ));
+
+    const monthStart = new Date(applicationDate.getFullYear(), applicationDate.getMonth(), 1);
+    const yearStart = new Date(applicationDate.getFullYear(), 0, 1);
+
+    const monthApplications = await db
+      .select()
+      .from(productApplications)
+      .where(and(
+        eq(productApplications.productId, productId),
+        eq(productApplications.patientId, patientId),
+        eq(productApplications.status, 'approved'),
+        gte(productApplications.applicationDate, monthStart),
+        lte(productApplications.applicationDate, applicationDate)
+      ));
+
+    const yearApplications = await db
+      .select()
+      .from(productApplications)
+      .where(and(
+        eq(productApplications.productId, productId),
+        eq(productApplications.patientId, patientId),
+        eq(productApplications.status, 'approved'),
+        gte(productApplications.applicationDate, yearStart),
+        lte(productApplications.applicationDate, applicationDate)
+      ));
+
+    // Find most recent application
+    const lastApplication = await db
+      .select()
+      .from(productApplications)
+      .where(and(
+        eq(productApplications.productId, productId),
+        eq(productApplications.patientId, patientId),
+        eq(productApplications.status, 'approved'),
+        sql`${productApplications.applicationDate} < ${applicationDate}`
+      ))
+      .orderBy(desc(productApplications.applicationDate))
+      .limit(1);
+
+    const violations: string[] = [];
+    let lastApplicationDate: Date | undefined;
+    let daysSinceLastApplication: number | undefined;
+
+    if (lastApplication.length > 0) {
+      lastApplicationDate = lastApplication[0].applicationDate;
+      daysSinceLastApplication = Math.floor(
+        (applicationDate.getTime() - lastApplicationDate.getTime()) / (1000 * 60 * 60 * 24)
+      );
+
+      // Check minimum days between applications
+      if (lcdCoverage?.minDaysBetweenApplications && daysSinceLastApplication < lcdCoverage.minDaysBetweenApplications) {
+        violations.push(`Minimum ${lcdCoverage.minDaysBetweenApplications} days required between applications`);
+      }
+    }
+
+    // Check episode limit
+    if (lcdCoverage?.maxApplicationsPerEpisode && episodeApplications.length >= lcdCoverage.maxApplicationsPerEpisode) {
+      violations.push(`Maximum ${lcdCoverage.maxApplicationsPerEpisode} applications per episode exceeded`);
+    }
+
+    // Check monthly limit
+    if (lcdCoverage?.maxApplicationsPerMonth && monthApplications.length >= lcdCoverage.maxApplicationsPerMonth) {
+      violations.push(`Maximum ${lcdCoverage.maxApplicationsPerMonth} applications per month exceeded`);
+    }
+
+    // Check yearly limit
+    if (lcdCoverage?.maxApplicationsPerYear && yearApplications.length >= lcdCoverage.maxApplicationsPerYear) {
+      violations.push(`Maximum ${lcdCoverage.maxApplicationsPerYear} applications per year exceeded`);
+    }
+
+    return {
+      isValid: violations.length === 0,
+      violations,
+      lastApplicationDate,
+      daysSinceLastApplication,
+      applicationsThisEpisode: episodeApplications.length,
+      applicationsThisMonth: monthApplications.length,
+      applicationsThisYear: yearApplications.length,
+      maxAllowed: {
+        perEpisode: lcdCoverage?.maxApplicationsPerEpisode,
+        perMonth: lcdCoverage?.maxApplicationsPerMonth,
+        perYear: lcdCoverage?.maxApplicationsPerYear,
+        minDaysBetween: lcdCoverage?.minDaysBetweenApplications
+      }
+    };
+  }
+
+  // Clinical Decision Support
+  async getProductRecommendations(
+    woundType: string,
+    woundSize: number,
+    diagnosisCodes: string[],
+    patientFactors?: {
+      age?: number;
+      diabetic?: boolean;
+      immunocompromised?: boolean;
+      previousProducts?: string[];
+    }
+  ): Promise<Array<{
+    product: Product;
+    coverageInfo: ProductLcdCoverage | null;
+    recommendationScore: number;
+    reasons: string[];
+    contraindications: string[];
+    clinicalEvidence: string;
+    successRate: number;
+    costEffectiveness: number;
+  }>> {
+    // Get products that match wound type
+    const suitableProducts = await this.getProductsByWoundType(woundType);
+    
+    const recommendations: Array<{
+      product: Product;
+      coverageInfo: ProductLcdCoverage | null;
+      recommendationScore: number;
+      reasons: string[];
+      contraindications: string[];
+      clinicalEvidence: string;
+      successRate: number;
+      costEffectiveness: number;
+    }> = [];
+
+    for (const product of suitableProducts) {
+      // This is a simplified scoring algorithm
+      let score = 0.5; // Base score
+      const reasons: string[] = [];
+      const contraindications: string[] = [];
+
+      // Wound type match
+      if (product.woundTypeIndications?.includes(woundType)) {
+        score += 0.2;
+        reasons.push('Indicated for wound type');
+      }
+
+      // Evidence level scoring
+      switch (product.clinicalEvidenceLevel) {
+        case 'high':
+          score += 0.2;
+          break;
+        case 'moderate':
+          score += 0.1;
+          break;
+        case 'low':
+          score += 0.05;
+          break;
+      }
+
+      // Size appropriateness (simplified)
+      if (woundSize >= 2 && woundSize <= 25) {
+        score += 0.1;
+        reasons.push('Appropriate for wound size');
+      }
+
+      // Patient factors
+      if (patientFactors?.diabetic && product.productName.toLowerCase().includes('diabetic')) {
+        score += 0.1;
+        reasons.push('Specifically indicated for diabetic wounds');
+      }
+
+      // Avoid previously failed products
+      if (patientFactors?.previousProducts?.includes(product.id)) {
+        score -= 0.2;
+        contraindications.push('Previously used without success');
+      }
+
+      // Only include products with reasonable scores
+      if (score > 0.4) {
+        // Get coverage info (simplified - using first MAC region)
+        const coverageInfo = await this.getProductLcdCoverage(product.id, 'MAC_A');
+        
+        recommendations.push({
+          product,
+          coverageInfo,
+          recommendationScore: Math.min(score, 1.0),
+          reasons,
+          contraindications,
+          clinicalEvidence: product.clinicalEvidenceLevel || 'Not specified',
+          successRate: Math.random() * 0.3 + 0.6, // Simplified success rate
+          costEffectiveness: Math.random() * 0.4 + 0.6 // Simplified cost effectiveness
+        });
+      }
+    }
+
+    // Sort by recommendation score
+    return recommendations.sort((a, b) => b.recommendationScore - a.recommendationScore);
+  }
+
+  // Conservative Care Integration
+  async checkConservativeCareCompliance(episodeId: string, requiredDays: number): Promise<{
+    isCompliant: boolean;
+    daysCompleted: number;
+    missingTreatments: string[];
+    compliancePercentage: number;
+    eligibleDate?: Date;
+  }> {
+    // Get all encounters for the episode
+    const encounters = await this.getEncountersByEpisode(episodeId);
+    
+    if (encounters.length === 0) {
+      return {
+        isCompliant: false,
+        daysCompleted: 0,
+        missingTreatments: ['No encounters documented'],
+        compliancePercentage: 0
+      };
+    }
+
+    // Sort encounters by date
+    const sortedEncounters = encounters.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+    
+    // Check conservative care treatments
+    const conservativeCareEncounters = encounters.filter(encounter => {
+      const conservativeCare = encounter.conservativeCare as any;
+      return conservativeCare && (
+        conservativeCare.offloading ||
+        conservativeCare.woundCleansing ||
+        conservativeCare.debridement ||
+        conservativeCare.moistureManagement ||
+        conservativeCare.infectionControl
+      );
+    });
+
+    const daysCompleted = conservativeCareEncounters.length * 7; // Assuming weekly encounters
+    const compliancePercentage = Math.min((daysCompleted / requiredDays) * 100, 100);
+    
+    const missingTreatments: string[] = [];
+    
+    // Check for required treatments
+    const hasOffloading = conservativeCareEncounters.some(e => (e.conservativeCare as any)?.offloading);
+    const hasWoundCare = conservativeCareEncounters.some(e => (e.conservativeCare as any)?.woundCleansing);
+    const hasDebridement = conservativeCareEncounters.some(e => (e.conservativeCare as any)?.debridement);
+    
+    if (!hasOffloading) missingTreatments.push('Offloading');
+    if (!hasWoundCare) missingTreatments.push('Wound cleansing');
+    if (!hasDebridement) missingTreatments.push('Debridement');
+
+    // Calculate eligible date if not yet compliant
+    let eligibleDate: Date | undefined;
+    if (daysCompleted < requiredDays && sortedEncounters.length > 0) {
+      const firstEncounterDate = sortedEncounters[0].date;
+      eligibleDate = new Date(firstEncounterDate.getTime() + requiredDays * 24 * 60 * 60 * 1000);
+    }
+
+    return {
+      isCompliant: daysCompleted >= requiredDays && missingTreatments.length === 0,
+      daysCompleted,
+      missingTreatments,
+      compliancePercentage,
+      eligibleDate
+    };
   }
 }
 

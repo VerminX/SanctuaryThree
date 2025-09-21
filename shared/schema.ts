@@ -1127,13 +1127,151 @@ export type PatientPosition = keyof typeof PATIENT_POSITION;
 // PHASE 3.2 PRODUCT DOCUMENTATION SYSTEM TABLES
 // ================================================================================
 
+// Product Catalog - Core registry of wound care products with LCD coverage criteria
+export const products = pgTable("products", {
+  id: varchar("id", { length: 100 }).primaryKey(), // Product ID for PRODUCT_LCD_REGISTRY
+  
+  // Product identification
+  productName: varchar("product_name", { length: 255 }).notNull(),
+  manufacturerName: varchar("manufacturer_name", { length: 255 }).notNull(),
+  productCategory: varchar("product_category", { length: 50 }).notNull(), // skin_substitute, cellular_tissue, biomaterial
+  productType: varchar("product_type", { length: 100 }).notNull(), // collagen_matrix, acellular_dermal, etc.
+  
+  // HCPCS/CPT coding for billing
+  primaryHcpcsCode: varchar("primary_hcpcs_code", { length: 10 }).notNull(), // Primary HCPCS code
+  alternativeHcpcsCodes: jsonb("alternative_hcpcs_codes"), // Array of alternative codes
+  cptProcedureCodes: jsonb("cpt_procedure_codes"), // Associated CPT procedure codes
+  
+  // FDA and regulatory information
+  fdaClearanceNumber: varchar("fda_clearance_number", { length: 50 }),
+  fdaDeviceClass: varchar("fda_device_class", { length: 20 }), // Class I, II, III
+  regulatoryStatus: varchar("regulatory_status", { length: 50 }).default("approved"), // approved, pending, recalled
+  
+  // Product specifications
+  standardSize: decimal("standard_size", { precision: 8, scale: 2 }), // cm² per unit
+  availableSizes: jsonb("available_sizes"), // Array of {size, unit, hcpcsCode}
+  shelfLifeDays: integer("shelf_life_days"), // Days until expiration
+  storageRequirements: jsonb("storage_requirements"), // {temperature, humidity, sterile}
+  
+  // Wound type indications and contraindications
+  indicatedWoundTypes: jsonb("indicated_wound_types"), // Array of wound types [DFU, VLU, PU, etc.]
+  contraindications: jsonb("contraindications"), // Array of contraindication conditions
+  warningsAndPrecautions: jsonb("warnings_and_precautions"), // Safety information
+  
+  // Cost and reimbursement information
+  averageWholesaleCost: decimal("average_wholesale_cost", { precision: 10, scale: 2 }),
+  medicareReimbursementRate: decimal("medicare_reimbursement_rate", { precision: 10, scale: 2 }),
+  costPerSquareCm: decimal("cost_per_square_cm", { precision: 10, scale: 4 }),
+  
+  // Clinical evidence and outcomes
+  clinicalEvidenceLevel: varchar("clinical_evidence_level", { length: 20 }), // high, moderate, low
+  averageHealingTime: integer("average_healing_time"), // Days to healing
+  successRatePercentage: decimal("success_rate_percentage", { precision: 5, scale: 2 }), // Success rate %
+  adverseEventRate: decimal("adverse_event_rate", { precision: 5, scale: 2 }), // Adverse event rate %
+  
+  // Product status and availability
+  isActive: boolean("is_active").default(true),
+  isAvailable: boolean("is_available").default(true),
+  discontinuedDate: timestamp("discontinued_date"),
+  replacementProductId: varchar("replacement_product_id", { length: 100 }),
+  
+  // Quality ratings and certifications
+  qualityRating: integer("quality_rating"), // 1-100 quality score
+  certifications: jsonb("certifications"), // Array of certifications
+  manufacturerReputation: integer("manufacturer_reputation"), // 1-100 reputation score
+  
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+}, (table) => [
+  index("idx_products_category_type").on(table.productCategory, table.productType),
+  index("idx_products_hcpcs").on(table.primaryHcpcsCode),
+  index("idx_products_manufacturer").on(table.manufacturerName),
+  index("idx_products_active_available").on(table.isActive, table.isAvailable),
+  index("idx_products_wound_types").using("gin", table.indicatedWoundTypes),
+  index("idx_products_cost").on(table.averageWholesaleCost),
+  check("check_quality_rating_range", sql`${table.qualityRating} IS NULL OR (${table.qualityRating} >= 1 AND ${table.qualityRating} <= 100)`),
+  check("check_success_rate_range", sql`${table.successRatePercentage} IS NULL OR (${table.successRatePercentage} >= 0 AND ${table.successRatePercentage} <= 100)`),
+]);
+
+// Product LCD Coverage - LCD policy coverage criteria for each product by MAC region
+export const productLcdCoverage = pgTable("product_lcd_coverage", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  
+  // Product and policy linkage
+  productId: varchar("product_id", { length: 100 }).notNull().references(() => products.id, { onDelete: "cascade" }),
+  policySourceId: uuid("policy_source_id").notNull().references(() => policySources.id, { onDelete: "cascade" }),
+  macRegion: varchar("mac_region", { length: 50 }).notNull(),
+  lcdId: varchar("lcd_id", { length: 50 }).notNull(),
+  
+  // Coverage determination
+  isCovered: boolean("is_covered").notNull(),
+  coverageLevel: varchar("coverage_level", { length: 50 }), // full, partial, conditional, denied
+  priorAuthRequired: boolean("prior_auth_required").default(false),
+  
+  // Frequency and quantity limitations
+  maxApplicationsPerEpisode: integer("max_applications_per_episode"),
+  maxApplicationsPerMonth: integer("max_applications_per_month"),
+  maxApplicationsPerYear: integer("max_applications_per_year"),
+  minDaysBetweenApplications: integer("min_days_between_applications"),
+  maxUnitsPerApplication: integer("max_units_per_application"),
+  maxSizePerApplication: decimal("max_size_per_application", { precision: 8, scale: 2 }), // cm²
+  
+  // Wound size and measurement requirements
+  minWoundSize: decimal("min_wound_size", { precision: 8, scale: 2 }), // cm²
+  maxWoundSize: decimal("max_wound_size", { precision: 8, scale: 2 }), // cm²
+  minWoundDepth: decimal("min_wound_depth", { precision: 6, scale: 2 }), // cm
+  requiresWoundMeasurement: boolean("requires_wound_measurement").default(true),
+  
+  // Conservative care requirements
+  requiredConservativeDays: integer("required_conservative_days").default(30),
+  requiredConservativeTreatments: jsonb("required_conservative_treatments"), // Array of required treatments
+  allowedConservativeExceptions: jsonb("allowed_conservative_exceptions"), // Exception conditions
+  
+  // Diagnosis code requirements
+  requiredPrimaryDiagnoses: jsonb("required_primary_diagnoses"), // Array of required ICD-10 codes
+  excludedDiagnoses: jsonb("excluded_diagnoses"), // Array of excluded diagnoses
+  requiredSecondaryConditions: jsonb("required_secondary_conditions"),
+  
+  // Clinical documentation requirements
+  requiredDocumentation: jsonb("required_documentation"), // Array of required documentation
+  requiredPhotographicEvidence: boolean("required_photographic_evidence").default(false),
+  requiredProviderSpecialty: jsonb("required_provider_specialty"), // Array of required provider types
+  
+  // Cost and reimbursement rules
+  maxReimbursableAmount: decimal("max_reimbursable_amount", { precision: 10, scale: 2 }),
+  reimbursementPercentage: decimal("reimbursement_percentage", { precision: 5, scale: 2 }), // % of cost covered
+  patientResponsibilityPercentage: decimal("patient_responsibility_percentage", { precision: 5, scale: 2 }),
+  
+  // Policy effective dates
+  effectiveDate: timestamp("effective_date").notNull(),
+  expirationDate: timestamp("expiration_date"),
+  lastReviewDate: timestamp("last_review_date"),
+  nextReviewDate: timestamp("next_review_date"),
+  
+  // Coverage notes and special conditions
+  coverageNotes: text("coverage_notes"),
+  specialConditions: jsonb("special_conditions"), // Array of special coverage conditions
+  appealProcess: text("appeal_process"),
+  
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+}, (table) => [
+  uniqueIndex("unique_product_policy_mac").on(table.productId, table.policySourceId, table.macRegion),
+  index("idx_product_lcd_mac_covered").on(table.macRegion, table.isCovered),
+  index("idx_product_lcd_policy").on(table.policySourceId),
+  index("idx_product_lcd_effective_dates").on(table.effectiveDate, table.expirationDate),
+  index("idx_product_lcd_product_mac").on(table.productId, table.macRegion),
+  check("check_reimbursement_percentage_valid", sql`${table.reimbursementPercentage} IS NULL OR (${table.reimbursementPercentage} >= 0 AND ${table.reimbursementPercentage} <= 100)`),
+  check("check_max_applications_positive", sql`${table.maxApplicationsPerEpisode} IS NULL OR ${table.maxApplicationsPerEpisode} > 0`),
+]);
+
 // Product Inventory - Track all product lots and inventory management
 export const productInventory = pgTable("product_inventory", {
   id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
   tenantId: uuid("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
   
   // Product identification from Phase 3.1 PRODUCT_LCD_REGISTRY
-  productId: varchar("product_id", { length: 100 }).notNull(), // Links to PRODUCT_LCD_REGISTRY key
+  productId: varchar("product_id", { length: 100 }).notNull().references(() => products.id, { onDelete: "restrict" }), // Links to PRODUCT_LCD_REGISTRY key
   productName: varchar("product_name", { length: 255 }).notNull(),
   manufacturerName: varchar("manufacturer_name", { length: 255 }).notNull(),
   
@@ -1653,8 +1791,20 @@ export const productCostTracking = pgTable("product_cost_tracking", {
 // PHASE 3.2 PRODUCT TRACKING RELATIONS
 // ================================================================================
 
+export const productsRelations = relations(products, ({ many }) => ({
+  inventory: many(productInventory),
+  lcdCoverage: many(productLcdCoverage),
+  applications: many(productApplications),
+}));
+
+export const productLcdCoverageRelations = relations(productLcdCoverage, ({ one }) => ({
+  product: one(products, { fields: [productLcdCoverage.productId], references: [products.id] }),
+  policySource: one(policySources, { fields: [productLcdCoverage.policySourceId], references: [policySources.id] }),
+}));
+
 export const productInventoryRelations = relations(productInventory, ({ one, many }) => ({
   tenant: one(tenants, { fields: [productInventory.tenantId], references: [tenants.id] }),
+  product: one(products, { fields: [productInventory.productId], references: [products.id] }),
   receivedByUser: one(users, { fields: [productInventory.receivedBy], references: [users.id] }),
   applications: many(productApplications),
   auditTrailEntries: many(productAuditTrail),
@@ -2020,8 +2170,147 @@ export const insertProductCostTrackingSchema = createInsertSchema(productCostTra
   });
 
 // ================================================================================
+// PHASE 3.2 PRODUCT TRACKING ENUMS
+// ================================================================================
+
+// Product category enums
+export const PRODUCT_CATEGORY = {
+  SKIN_SUBSTITUTE: 'skin_substitute',
+  CELLULAR_TISSUE: 'cellular_tissue', 
+  BIOMATERIAL: 'biomaterial',
+  WOUND_DRESSING: 'wound_dressing'
+} as const;
+
+// Clinical evidence levels
+export const CLINICAL_EVIDENCE_LEVEL = {
+  HIGH: 'high',
+  MODERATE: 'moderate',
+  LOW: 'low',
+  INSUFFICIENT: 'insufficient'
+} as const;
+
+// Coverage levels for LCD policies
+export const COVERAGE_LEVEL = {
+  FULL: 'full',
+  PARTIAL: 'partial',
+  CONDITIONAL: 'conditional',
+  DENIED: 'denied'
+} as const;
+
+// ================================================================================
+// PHASE 3.2 ZOD SCHEMAS FOR NEW PRODUCT CATALOG TABLES
+// ================================================================================
+
+export const insertProductSchema = createInsertSchema(products)
+  .omit({ createdAt: true, updatedAt: true })
+  .extend({
+    productCategory: z.enum([
+      PRODUCT_CATEGORY.SKIN_SUBSTITUTE,
+      PRODUCT_CATEGORY.CELLULAR_TISSUE,
+      PRODUCT_CATEGORY.BIOMATERIAL,
+      PRODUCT_CATEGORY.WOUND_DRESSING
+    ]),
+    clinicalEvidenceLevel: z.enum([
+      CLINICAL_EVIDENCE_LEVEL.HIGH,
+      CLINICAL_EVIDENCE_LEVEL.MODERATE,
+      CLINICAL_EVIDENCE_LEVEL.LOW,
+      CLINICAL_EVIDENCE_LEVEL.INSUFFICIENT
+    ]).optional(),
+    discontinuedDate: z.union([z.date(), z.string(), z.null()]).pipe(z.coerce.date().nullable()).optional(),
+    // Decimal field validation
+    standardSize: z.string().optional().refine((val) => !val || parseFloat(val) > 0, {
+      message: "Standard size must be positive"
+    }),
+    averageWholesaleCost: z.string().optional().refine((val) => !val || parseFloat(val) >= 0, {
+      message: "Cost must be non-negative"
+    }),
+    medicareReimbursementRate: z.string().optional().refine((val) => !val || parseFloat(val) >= 0, {
+      message: "Reimbursement rate must be non-negative"
+    }),
+    costPerSquareCm: z.string().optional().refine((val) => !val || parseFloat(val) >= 0, {
+      message: "Cost per square cm must be non-negative"
+    }),
+    successRatePercentage: z.string().optional().refine((val) => {
+      if (!val) return true;
+      const num = parseFloat(val);
+      return num >= 0 && num <= 100;
+    }, {
+      message: "Success rate must be between 0 and 100"
+    }),
+    adverseEventRate: z.string().optional().refine((val) => {
+      if (!val) return true;
+      const num = parseFloat(val);
+      return num >= 0 && num <= 100;
+    }, {
+      message: "Adverse event rate must be between 0 and 100"
+    }),
+    qualityRating: z.number().int().min(1).max(100).optional(),
+    manufacturerReputation: z.number().int().min(1).max(100).optional(),
+    shelfLifeDays: z.number().int().min(1).optional(),
+    averageHealingTime: z.number().int().min(1).optional()
+  });
+
+export const insertProductLcdCoverageSchema = createInsertSchema(productLcdCoverage)
+  .omit({ id: true, createdAt: true, updatedAt: true })
+  .extend({
+    effectiveDate: z.union([z.date(), z.string()]).pipe(z.coerce.date()),
+    expirationDate: z.union([z.date(), z.string(), z.null()]).pipe(z.coerce.date().nullable()).optional(),
+    lastReviewDate: z.union([z.date(), z.string(), z.null()]).pipe(z.coerce.date().nullable()).optional(),
+    nextReviewDate: z.union([z.date(), z.string(), z.null()]).pipe(z.coerce.date().nullable()).optional(),
+    coverageLevel: z.enum([
+      COVERAGE_LEVEL.FULL,
+      COVERAGE_LEVEL.PARTIAL,
+      COVERAGE_LEVEL.CONDITIONAL,
+      COVERAGE_LEVEL.DENIED
+    ]).optional(),
+    // Quantity validation
+    maxApplicationsPerEpisode: z.number().int().min(1).optional(),
+    maxApplicationsPerMonth: z.number().int().min(1).optional(),
+    maxApplicationsPerYear: z.number().int().min(1).optional(),
+    minDaysBetweenApplications: z.number().int().min(0).optional(),
+    maxUnitsPerApplication: z.number().int().min(1).optional(),
+    requiredConservativeDays: z.number().int().min(0).default(30),
+    // Decimal field validation
+    maxSizePerApplication: z.string().optional().refine((val) => !val || parseFloat(val) > 0, {
+      message: "Max size per application must be positive"
+    }),
+    minWoundSize: z.string().optional().refine((val) => !val || parseFloat(val) > 0, {
+      message: "Min wound size must be positive"
+    }),
+    maxWoundSize: z.string().optional().refine((val) => !val || parseFloat(val) > 0, {
+      message: "Max wound size must be positive"
+    }),
+    minWoundDepth: z.string().optional().refine((val) => !val || parseFloat(val) > 0, {
+      message: "Min wound depth must be positive"
+    }),
+    maxReimbursableAmount: z.string().optional().refine((val) => !val || parseFloat(val) >= 0, {
+      message: "Max reimbursable amount must be non-negative"
+    }),
+    reimbursementPercentage: z.string().optional().refine((val) => {
+      if (!val) return true;
+      const num = parseFloat(val);
+      return num >= 0 && num <= 100;
+    }, {
+      message: "Reimbursement percentage must be between 0 and 100"
+    }),
+    patientResponsibilityPercentage: z.string().optional().refine((val) => {
+      if (!val) return true;
+      const num = parseFloat(val);
+      return num >= 0 && num <= 100;
+    }, {
+      message: "Patient responsibility percentage must be between 0 and 100"
+    })
+  });
+
+// ================================================================================
 // PHASE 3.2 PRODUCT TRACKING TYPES
 // ================================================================================
+
+// Product catalog types
+export type InsertProduct = z.infer<typeof insertProductSchema>;
+export type Product = typeof products.$inferSelect;
+export type InsertProductLcdCoverage = z.infer<typeof insertProductLcdCoverageSchema>;
+export type ProductLcdCoverage = typeof productLcdCoverage.$inferSelect;
 
 export type InsertProductInventory = z.infer<typeof insertProductInventorySchema>;
 export type ProductInventory = typeof productInventory.$inferSelect;

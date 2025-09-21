@@ -12,7 +12,10 @@ import {
   insertEligibilityCheckSchema,
   insertDocumentSchema,
   insertDocumentVersionSchema,
-  insertDocumentSignatureSchema
+  insertDocumentSignatureSchema,
+  insertProductApplicationSchema,
+  PRODUCT_CATEGORY,
+  CLINICAL_EVIDENCE_LEVEL
 } from "@shared/schema";
 import { encryptPatientData, decryptPatientData, safeDecryptPatientData, encryptEncounterNotes, decryptEncounterNotes, encryptPHI } from "./services/encryption";
 import { buildRAGContext, selectBestPolicy } from "./services/ragService";
@@ -2200,6 +2203,334 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error("Error exporting document:", error);
       res.status(500).json({ message: "Failed to export document" });
+    }
+  });
+
+  // ===============================================================================
+  // PRODUCT APPLICATION WORKFLOW API ROUTES
+  // ===============================================================================
+  
+  // Product Search and Catalog
+  app.get('/api/products/search', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const { 
+        category,
+        woundTypes,
+        hcpcsCode,
+        manufacturerName,
+        clinicalEvidenceLevel,
+        tenantId 
+      } = req.query;
+      
+      // Verify user has access to tenant
+      if (tenantId) {
+        const userTenantRole = await storage.getUserTenantRole(userId, tenantId as string);
+        if (!userTenantRole) {
+          return res.status(403).json({ message: "Access denied" });
+        }
+      }
+
+      const filters: any = {
+        isActive: true
+      };
+      
+      if (category) filters.category = category;
+      if (hcpcsCode) filters.hcpcsCode = hcpcsCode;
+      if (manufacturerName) filters.manufacturerName = manufacturerName;
+      if (clinicalEvidenceLevel) filters.clinicalEvidenceLevel = clinicalEvidenceLevel;
+      if (woundTypes) {
+        filters.woundTypes = Array.isArray(woundTypes) ? woundTypes : [woundTypes];
+      }
+
+      const products = await storage.searchProducts(filters);
+
+      res.json({
+        success: true,
+        products,
+        total: products.length
+      });
+    } catch (error) {
+      console.error("Error searching products:", error);
+      res.status(500).json({ message: "Failed to search products" });
+    }
+  });
+
+  // Get Product Details with LCD Coverage
+  app.get('/api/products/:productId', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const { productId } = req.params;
+      const { macRegion } = req.query;
+      
+      const product = await storage.getProduct(productId);
+      if (!product) {
+        return res.status(404).json({ message: "Product not found" });
+      }
+
+      let lcdCoverage = null;
+      if (macRegion) {
+        lcdCoverage = await storage.getActiveLcdCoverageByProduct(productId, macRegion as string);
+      }
+
+      res.json({
+        success: true,
+        product,
+        lcdCoverage
+      });
+    } catch (error) {
+      console.error("Error fetching product:", error);
+      res.status(500).json({ message: "Failed to fetch product" });
+    }
+  });
+
+  // Product LCD Coverage Validation
+  app.post('/api/products/:productId/validate-coverage', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const { productId } = req.params;
+      
+      const validationSchema = z.object({
+        episodeId: z.string().uuid(),
+        woundSize: z.number().optional(),
+        woundDepth: z.number().optional(),
+        diagnosisCodes: z.array(z.string()),
+        conservativeCareCompliance: z.boolean().optional(),
+        conservativeCareDays: z.number().optional(),
+      });
+      
+      const applicationData = validationSchema.parse(req.body);
+      
+      // Get episode and validate access
+      const episode = await storage.getEpisode(applicationData.episodeId);
+      if (!episode) {
+        return res.status(404).json({ message: "Episode not found" });
+      }
+
+      const patient = await storage.getPatient(episode.patientId);
+      if (!patient) {
+        return res.status(404).json({ message: "Patient not found" });
+      }
+
+      // Verify user has access to tenant
+      const userTenantRole = await storage.getUserTenantRole(userId, patient.tenantId);
+      if (!userTenantRole) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+
+      // Validate product coverage
+      const validation = await storage.validateProductCoverage(
+        productId,
+        applicationData.episodeId,
+        applicationData
+      );
+
+      // Check conservative care compliance if required
+      let conservativeCareCheck = null;
+      if (validation.requirements.includes('conservative_care')) {
+        conservativeCareCheck = await storage.checkConservativeCareCompliance(
+          applicationData.episodeId,
+          30 // Default 30-day requirement
+        );
+      }
+
+      res.json({
+        success: true,
+        validation,
+        conservativeCareCheck
+      });
+    } catch (error) {
+      console.error("Error validating product coverage:", error);
+      res.status(500).json({ message: "Failed to validate product coverage" });
+    }
+  });
+
+  // Product Application Frequency Validation
+  app.post('/api/products/:productId/validate-frequency', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const { productId } = req.params;
+      
+      const validationSchema = z.object({
+        patientId: z.string().uuid(),
+        episodeId: z.string().uuid(),
+        applicationDate: z.string().pipe(z.coerce.date())
+      });
+      
+      const { patientId, episodeId, applicationDate } = validationSchema.parse(req.body);
+      
+      // Get patient and validate access
+      const patient = await storage.getPatient(patientId);
+      if (!patient) {
+        return res.status(404).json({ message: "Patient not found" });
+      }
+
+      // Verify user has access to tenant
+      const userTenantRole = await storage.getUserTenantRole(userId, patient.tenantId);
+      if (!userTenantRole) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+
+      // Validate frequency
+      const frequencyValidation = await storage.validateProductApplicationFrequency(
+        productId,
+        patientId,
+        episodeId,
+        applicationDate
+      );
+
+      res.json({
+        success: true,
+        frequencyValidation
+      });
+    } catch (error) {
+      console.error("Error validating application frequency:", error);
+      res.status(500).json({ message: "Failed to validate application frequency" });
+    }
+  });
+
+  // Clinical Decision Support - Product Recommendations
+  app.post('/api/products/recommendations', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      
+      const recommendationSchema = z.object({
+        woundType: z.string(),
+        woundSize: z.number(),
+        diagnosisCodes: z.array(z.string()),
+        patientFactors: z.object({
+          age: z.number().optional(),
+          diabetic: z.boolean().optional(),
+          immunocompromised: z.boolean().optional(),
+          previousProducts: z.array(z.string()).optional(),
+        }).optional(),
+        tenantId: z.string().uuid()
+      });
+      
+      const requestData = recommendationSchema.parse(req.body);
+      
+      // Verify user has access to tenant
+      const userTenantRole = await storage.getUserTenantRole(userId, requestData.tenantId);
+      if (!userTenantRole) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+
+      // Get product recommendations
+      const recommendations = await storage.getProductRecommendations(
+        requestData.woundType,
+        requestData.woundSize,
+        requestData.diagnosisCodes,
+        requestData.patientFactors
+      );
+
+      res.json({
+        success: true,
+        recommendations
+      });
+    } catch (error) {
+      console.error("Error getting product recommendations:", error);
+      res.status(500).json({ message: "Failed to get product recommendations" });
+    }
+  });
+
+  // Submit Product Application
+  app.post('/api/products/applications', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const applicationData = insertProductApplicationSchema.parse(req.body);
+      
+      // Get episode and validate access
+      const episode = await storage.getEpisode(applicationData.episodeId);
+      if (!episode) {
+        return res.status(404).json({ message: "Episode not found" });
+      }
+
+      const patient = await storage.getPatient(episode.patientId);
+      if (!patient) {
+        return res.status(404).json({ message: "Patient not found" });
+      }
+
+      // Verify user has access to tenant
+      const userTenantRole = await storage.getUserTenantRole(userId, patient.tenantId);
+      if (!userTenantRole) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+
+      // Set the applicant user ID
+      const applicationWithUser = {
+        ...applicationData,
+        applicantUserId: userId,
+        tenantId: patient.tenantId,
+        patientId: patient.id
+      };
+
+      // Create the application
+      const application = await storage.createProductApplication(applicationWithUser);
+
+      // Log audit event
+      await storage.createAuditLog({
+        tenantId: patient.tenantId,
+        userId,
+        action: 'CREATE_PRODUCT_APPLICATION',
+        entity: 'ProductApplication',
+        entityId: application.id,
+        ipAddress: req.ip,
+        userAgent: req.get('User-Agent'),
+        previousHash: '',
+      });
+
+      // Track recent activity
+      await trackActivity(
+        patient.tenantId,
+        userId,
+        'Submitted product application',
+        'ProductApplication',
+        application.id,
+        'Product Application'
+      );
+
+      res.json({
+        success: true,
+        application
+      });
+    } catch (error) {
+      console.error("Error creating product application:", error);
+      res.status(500).json({ message: "Failed to create product application" });
+    }
+  });
+
+  // Get Product Applications by Episode
+  app.get('/api/episodes/:episodeId/product-applications', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const { episodeId } = req.params;
+      
+      // Get episode and validate access
+      const episode = await storage.getEpisode(episodeId);
+      if (!episode) {
+        return res.status(404).json({ message: "Episode not found" });
+      }
+
+      const patient = await storage.getPatient(episode.patientId);
+      if (!patient) {
+        return res.status(404).json({ message: "Patient not found" });
+      }
+
+      // Verify user has access to tenant
+      const userTenantRole = await storage.getUserTenantRole(userId, patient.tenantId);
+      if (!userTenantRole) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+
+      const applications = await storage.getProductApplicationsByEpisode(episodeId);
+
+      res.json({
+        success: true,
+        applications
+      });
+    } catch (error) {
+      console.error("Error fetching product applications:", error);
+      res.status(500).json({ message: "Failed to fetch product applications" });
     }
   });
 
