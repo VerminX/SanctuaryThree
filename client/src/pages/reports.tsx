@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { DateRange } from "react-day-picker";
-import { format, subDays, startOfMonth, endOfMonth } from "date-fns";
+import { format as formatDate, subDays, startOfMonth, endOfMonth } from "date-fns";
 import { 
   FileText,
   Download,
@@ -160,30 +160,45 @@ export default function ReportsPage() {
   const [generateDialogOpen, setGenerateDialogOpen] = useState(false);
   const [generatedReports, setGeneratedReports] = useState<GeneratedReport[]>([]);
 
+  // Safe array helper function
+  const safeArray = <T>(array: T[] | undefined | null): T[] => {
+    return Array.isArray(array) ? array : [];
+  };
+
   // Fetch report templates
-  const { data: templates, isLoading: templatesLoading, error: templatesError } = useQuery<ReportTemplates>({
+  const { data: templatesResponse, isLoading: templatesLoading, error: templatesError } = useQuery({
     queryKey: ['/api/reports/templates'],
     enabled: !!currentTenant?.id,
     staleTime: 10 * 60 * 1000, // 10 minutes
     retry: 2
   });
 
+  // Extract templates from API response structure
+  const templates: ReportTemplates | undefined = templatesResponse?.success ? templatesResponse.templates : undefined;
+
   // Generate report mutation
   const generateReportMutation = useMutation({
     mutationFn: async (request: ReportGenerationRequest) => {
-      const response = await apiRequest('/api/reports/generate', {
+      const response = await fetch('/api/reports/generate', {
         method: 'POST',
         body: JSON.stringify(request),
         headers: {
           'Content-Type': 'application/json'
-        }
+        },
+        credentials: 'include'
       });
       
-      if (!response.success) {
-        throw new Error(response.message || 'Failed to generate report');
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(errorText || 'Failed to generate report');
       }
       
-      return response.report;
+      const data = await response.json();
+      if (!data.success) {
+        throw new Error(data.message || 'Failed to generate report');
+      }
+      
+      return data.report;
     },
     onSuccess: (report: GeneratedReport) => {
       toast({
@@ -272,8 +287,8 @@ export default function ReportsPage() {
       format: selectedFormat,
       tenantId: currentTenant.id,
       dateRange: dateRange ? {
-        startDate: format(dateRange.from!, 'yyyy-MM-dd'),
-        endDate: format(dateRange.to!, 'yyyy-MM-dd')
+        startDate: formatDate(dateRange.from!, 'yyyy-MM-dd'),
+        endDate: formatDate(dateRange.to!, 'yyyy-MM-dd')
       } : undefined,
       filters: Object.keys(filters).length > 0 ? filters : undefined,
       options
@@ -296,8 +311,8 @@ export default function ReportsPage() {
     const params = {
       format,
       tenantId: currentTenant.id,
-      startDate: format(dateRange.from!, 'yyyy-MM-dd'),
-      endDate: format(dateRange.to!, 'yyyy-MM-dd')
+      startDate: formatDate(dateRange.from!, 'yyyy-MM-dd'),
+      endDate: formatDate(dateRange.to!, 'yyyy-MM-dd')
     };
 
     if (type === 'clinical') {
@@ -492,7 +507,7 @@ export default function ReportsPage() {
                 <Calendar className="h-4 w-4" />
                 <AlertDescription>
                   Quick exports use the selected date range: {dateRange && dateRange.from && dateRange.to ? 
-                    `${format(dateRange.from, 'MMM dd, yyyy')} - ${format(dateRange.to, 'MMM dd, yyyy')}` : 
+                    `${formatDate(dateRange.from, 'MMM dd, yyyy')} - ${formatDate(dateRange.to, 'MMM dd, yyyy')}` : 
                     'Please select a date range'
                   }
                 </AlertDescription>
@@ -519,7 +534,7 @@ export default function ReportsPage() {
             </div>
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-              {templates?.reportTypes.map((reportType) => (
+              {safeArray(templates?.reportTypes).map((reportType) => (
                 <Card
                   key={reportType.type}
                   className="hover:shadow-md transition-shadow cursor-pointer"
@@ -538,7 +553,7 @@ export default function ReportsPage() {
                     <div className="space-y-2">
                       <Label className="text-xs font-medium">Features</Label>
                       <div className="flex flex-wrap gap-1">
-                        {reportType.features.slice(0, 3).map((feature, index) => (
+                        {safeArray(reportType.features).slice(0, 3).map((feature, index) => (
                           <Badge key={index} variant="secondary" className="text-xs">
                             {feature}
                           </Badge>
@@ -554,7 +569,7 @@ export default function ReportsPage() {
                     <div className="space-y-2">
                       <Label className="text-xs font-medium">Available Formats</Label>
                       <div className="flex space-x-1">
-                        {reportType.formats.map((format) => (
+                        {safeArray(reportType.formats).map((format) => (
                           <Badge key={format} variant="outline" className="text-xs">
                             {getFormatIcon(format)}
                             <span className="ml-1">{format.toUpperCase()}</span>
@@ -606,7 +621,7 @@ export default function ReportsPage() {
                 </div>
               ) : (
                 <div className="space-y-4">
-                  {generatedReports.map((report) => (
+                  {safeArray(generatedReports).map((report) => (
                     <div
                       key={report.id}
                       className="flex items-center justify-between p-4 border rounded-lg"
@@ -621,7 +636,7 @@ export default function ReportsPage() {
                           <div className="flex items-center space-x-4 text-sm text-gray-600 dark:text-gray-300">
                             <span>{formatFileSize(report.fileSize)}</span>
                             <span>•</span>
-                            <span>{format(new Date(report.generatedAt), 'MMM dd, yyyy HH:mm')}</span>
+                            <span>{formatDate(new Date(report.generatedAt), 'MMM dd, yyyy HH:mm')}</span>
                             <span>•</span>
                             <span>{report.metadata.totalRecords} records</span>
                           </div>
@@ -674,7 +689,7 @@ export default function ReportsPage() {
                   <SelectValue placeholder="Select a report type" />
                 </SelectTrigger>
                 <SelectContent>
-                  {templates?.reportTypes.map((type) => (
+                  {safeArray(templates?.reportTypes).map((type) => (
                     <SelectItem key={type.type} value={type.type}>
                       <div className="flex items-center space-x-2">
                         {getReportIcon(type.type)}
@@ -694,7 +709,7 @@ export default function ReportsPage() {
                   <SelectValue placeholder="Select export format" />
                 </SelectTrigger>
                 <SelectContent>
-                  {templates?.exportFormats.map((format) => (
+                  {safeArray(templates?.exportFormats).map((format) => (
                     <SelectItem key={format.format} value={format.format}>
                       <div className="flex items-center space-x-2">
                         {getFormatIcon(format.format)}

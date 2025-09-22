@@ -18,7 +18,7 @@ import {
 } from '@shared/schema';
 import { decryptPatientData, decryptEncounterNotes } from './encryption';
 import { assessMedicareCompliance } from '@shared/clinicalCompliance';
-import { format, subDays, startOfMonth, endOfMonth } from 'date-fns';
+import { format as formatDate, subDays, startOfMonth, endOfMonth } from 'date-fns';
 
 // Report type definitions
 export type ReportType = 
@@ -98,7 +98,7 @@ class ReportGenerationService {
   }
 
   private generateFileName(type: ReportType, format: ExportFormat, tenantId: string): string {
-    const timestamp = format(new Date(), 'yyyy-MM-dd-HHmmss');
+    const timestamp = formatDate(new Date(), 'yyyy-MM-dd-HHmmss');
     const sanitizedTenantId = tenantId.substring(0, 8);
     return `${type}-${sanitizedTenantId}-${timestamp}.${format === 'excel' ? 'xlsx' : format}`;
   }
@@ -161,7 +161,7 @@ class ReportGenerationService {
         deliveryStatus: 'available',
         metadata: {
           totalRecords: reportData.totalRecords || 0,
-          dateRange: dateRange ? `${format(dateRange.startDate, 'yyyy-MM-dd')} to ${format(dateRange.endDate, 'yyyy-MM-dd')}` : undefined,
+          dateRange: dateRange ? `${formatDate(dateRange.startDate, 'yyyy-MM-dd')} to ${formatDate(dateRange.endDate, 'yyyy-MM-dd')}` : undefined,
           filters: filters,
           generatedBy: userId,
           options: options
@@ -192,7 +192,7 @@ class ReportGenerationService {
         expiresAt: expirationTime,
         metadata: {
           totalRecords: reportData.totalRecords || 0,
-          dateRange: dateRange ? `${format(dateRange.startDate, 'yyyy-MM-dd')} to ${format(dateRange.endDate, 'yyyy-MM-dd')}` : undefined,
+          dateRange: dateRange ? `${formatDate(dateRange.startDate, 'yyyy-MM-dd')} to ${formatDate(dateRange.endDate, 'yyyy-MM-dd')}` : undefined,
           filters: filters,
           generatedBy: userId
         }
@@ -372,7 +372,7 @@ class ReportGenerationService {
         },
         displayHeaderFooter: true,
         headerTemplate: `<div style="font-size: 10px; padding: 10px;">${type.toUpperCase()} REPORT</div>`,
-        footerTemplate: `<div style="font-size: 10px; padding: 10px;">Generated on ${format(new Date(), 'yyyy-MM-dd HH:mm')} | Page <span class="pageNumber"></span> of <span class="totalPages"></span></div>`,
+        footerTemplate: `<div style="font-size: 10px; padding: 10px;">Generated on ${formatDate(new Date(), 'yyyy-MM-dd HH:mm')} | Page <span class="pageNumber"></span> of <span class="totalPages"></span></div>`,
         printBackground: true
       });
 
@@ -644,7 +644,7 @@ class ReportGenerationService {
         <body>
           <div class="header">
             <div class="title">${type.replace('-', ' ').toUpperCase()} REPORT</div>
-            <div class="subtitle">Generated on ${format(new Date(), 'MMMM dd, yyyy \'at\' HH:mm')}</div>
+            <div class="subtitle">Generated on ${formatDate(new Date(), 'MMMM dd, yyyy \'at\' HH:mm')}</div>
           </div>
           ${content}
           <div class="footer">
@@ -699,7 +699,7 @@ class ReportGenerationService {
               <tr>
                 <td>${item.patientName} (${item.mrn})</td>
                 <td>${item.woundType || 'Not specified'}</td>
-                <td>${item.startDate ? format(new Date(item.startDate), 'MM/dd/yyyy') : 'N/A'}</td>
+                <td>${item.startDate ? formatDate(new Date(item.startDate), 'MM/dd/yyyy') : 'N/A'}</td>
                 <td>${item.healingProgress?.percentage || 0}%</td>
                 <td class="${item.complianceStatus?.status === 'Compliant' ? 'compliance-green' : 'compliance-yellow'}">
                   ${item.complianceStatus?.status || 'Unknown'}

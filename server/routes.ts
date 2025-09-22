@@ -39,6 +39,7 @@ import {
 } from "./services/eligibilityValidator";
 import { ICD10_DATABASE, getCodeByCode, validateICD10Format, searchICD10Codes } from "@shared/icd10Database";
 import { z } from "zod";
+import { format as formatDate } from "date-fns";
 
 // Helper function to track user activity (HIPAA-compliant, no PHI in descriptions)
 async function trackActivity(
@@ -5616,7 +5617,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       // Generate secure filename without tenant info
-      const secureFileName = `${report.reportType}_${report.id.substring(0, 8)}_${format(new Date(report.createdAt), 'yyyy-MM-dd')}.${fileExtension}`;
+      const secureFileName = `${report.reportType}_${report.id.substring(0, 8)}_${formatDate(new Date(report.createdAt), 'yyyy-MM-dd')}.${fileExtension}`;
 
       res.setHeader('Content-Type', contentType);
       res.setHeader('Content-Disposition', `attachment; filename="${secureFileName}"`);
