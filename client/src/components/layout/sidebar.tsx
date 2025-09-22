@@ -11,35 +11,45 @@ import {
   Shield, 
   Settings,
   ChevronDown,
+  ChevronRight,
   Moon,
   TestTube2,
   Upload,
   Calendar,
   TrendingUp,
-  FileBarChart
+  FileBarChart,
+  MoreHorizontal
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { cn } from "@/lib/utils";
+import { useState } from "react";
 
-const navigationItems = [
+// Main navigation items in requested order
+const mainNavigationItems = [
   { href: "/", label: "Dashboard", icon: BarChart3 },
-  { href: "/analytics", label: "Analytics Dashboard", icon: TrendingUp },
-  { href: "/reports", label: "Reports & Exports", icon: FileBarChart },
+  { href: "/upload", label: "PDF Upload", icon: Upload },
   { href: "/patients", label: "Patients", icon: Users },
   { href: "/episodes", label: "Episodes", icon: Calendar },
   { href: "/encounters", label: "Encounters", icon: ClipboardList },
-  { href: "/upload", label: "PDF Upload", icon: Upload },
   { href: "/eligibility", label: "Eligibility Analysis", icon: SearchCheck },
   { href: "/documents", label: "Document Generation", icon: FileText },
+];
+
+// "Other" dropdown items
+const otherNavigationItems = [
   { href: "/policies", label: "Policy Database", icon: Book },
   { href: "/audit", label: "Audit Logs", icon: Shield },
   { href: "/validation", label: "System Validation", icon: TestTube2 },
   { href: "/settings", label: "Settings", icon: Settings },
+  { href: "/analytics", label: "Analytics Dashboard", icon: TrendingUp },
+  { href: "/reports", label: "Reports & Exports", icon: FileBarChart },
 ];
 
 export default function Sidebar() {
   const [location] = useLocation();
   const { user } = useAuth();
+  const [isOtherOpen, setIsOtherOpen] = useState(false);
 
   // Get user's display name and role
   const displayName = user?.firstName && user?.lastName 
@@ -96,7 +106,8 @@ export default function Sidebar() {
 
       {/* Navigation Menu */}
       <nav className="flex-1 p-4 space-y-2" data-testid="navigation">
-        {navigationItems.map((item) => {
+        {/* Main Navigation Items */}
+        {mainNavigationItems.map((item) => {
           const isActive = location === item.href || 
             (item.href !== "/" && location.startsWith(item.href));
           const Icon = item.icon;
@@ -119,6 +130,50 @@ export default function Sidebar() {
             </Link>
           );
         })}
+
+        {/* Other Section Dropdown */}
+        <Collapsible open={isOtherOpen} onOpenChange={setIsOtherOpen}>
+          <CollapsibleTrigger asChild>
+            <Button
+              variant="ghost"
+              className="w-full justify-start space-x-3 p-3 h-auto text-muted-foreground hover:text-foreground hover:bg-muted"
+              data-testid="nav-dropdown-other"
+            >
+              <MoreHorizontal className="w-5 h-5" />
+              <span className="font-medium flex-1 text-left">Other</span>
+              {isOtherOpen ? (
+                <ChevronDown className="w-4 h-4" />
+              ) : (
+                <ChevronRight className="w-4 h-4" />
+              )}
+            </Button>
+          </CollapsibleTrigger>
+          <CollapsibleContent className="space-y-1 mt-1">
+            {otherNavigationItems.map((item) => {
+              const isActive = location === item.href || 
+                (item.href !== "/" && location.startsWith(item.href));
+              const Icon = item.icon;
+              
+              return (
+                <Link key={item.href} href={item.href}>
+                  <Button
+                    variant="ghost"
+                    className={cn(
+                      "w-full justify-start space-x-3 p-2 pl-8 h-auto text-sm",
+                      isActive
+                        ? "bg-primary text-primary-foreground hover:bg-primary/90"
+                        : "text-muted-foreground hover:text-foreground hover:bg-muted"
+                    )}
+                    data-testid={`nav-link-${item.label.toLowerCase().replace(/\s+/g, '-')}`}
+                  >
+                    <Icon className="w-4 h-4" />
+                    <span className="font-medium">{item.label}</span>
+                  </Button>
+                </Link>
+              );
+            })}
+          </CollapsibleContent>
+        </Collapsible>
       </nav>
 
       {/* Footer Section */}

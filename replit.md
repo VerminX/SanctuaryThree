@@ -117,6 +117,40 @@ Each MAC region has specific LCD policies that apply to their geographic jurisdi
 
 ## Recent Changes
 
+### Navigation Pane Restructuring (September 22, 2025)
+
+Redesigned the sidebar navigation to improve user workflow and organization:
+
+#### Navigation Structure Updates
+- **Main Navigation Items**: Reordered to follow clinical workflow:
+  1. Dashboard
+  2. PDF Upload
+  3. Patients 
+  4. Episodes
+  5. Encounters
+  6. Eligibility Analysis
+  7. Document Generation
+
+- **"Other" Dropdown Section**: Consolidated secondary features into collapsible dropdown:
+  - Policy Database
+  - Audit Logs
+  - System Validation
+  - Settings
+  - Analytics Dashboard
+  - Reports & Exports
+
+#### Technical Implementation
+- **Collapsible Component**: Used Radix UI Collapsible for smooth dropdown functionality
+- **Persistent Navigation**: Sidebar remains consistent across all application pages
+- **Visual Indicators**: ChevronRight/ChevronDown icons show dropdown state
+- **Indented Styling**: Dropdown items use smaller icons (16px) and left padding for hierarchy
+- **Active State Management**: Maintains active navigation state across main and dropdown items
+
+#### User Experience Improvements
+- **Workflow Optimization**: Main navigation follows typical clinic workflow from patient intake to documentation
+- **Reduced Clutter**: Secondary administrative functions organized under "Other" dropdown
+- **Consistent Access**: Navigation structure preserved across all pages for reliable user experience
+
 ### Episode Detail Workspace Implementation (September 21, 2025)
 
 Successfully implemented the comprehensive Episode Detail Workspace as the foundation for the clinical workflow system:
