@@ -1028,12 +1028,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
                          ((encounter as any).comorbidities?.includes('venous disease'))
       };
 
-      // Build RAG context with enhanced policy selection using patient characteristics
+      // Extract ICD-10 codes from encounter for enhanced policy matching
+      const icd10Codes: string[] = [];
+      if (encounter.primaryDiagnosis) {
+        icd10Codes.push(encounter.primaryDiagnosis);
+      }
+      if (encounter.secondaryDiagnoses && Array.isArray(encounter.secondaryDiagnoses)) {
+        icd10Codes.push(...encounter.secondaryDiagnoses);
+      }
+
+      // Build RAG context with enhanced policy selection using patient characteristics and ICD-10 codes
       const ragContext = await buildRAGContext(
         patient.macRegion,
         (encounter.woundDetails as any)?.type || 'DFU',
         (encounter.woundDetails as any)?.location,
-        patientCharacteristics
+        patientCharacteristics,
+        icd10Codes  // Pass ICD-10 codes for better matching
       );
 
       // Log policy selection result for audit purposes
@@ -1186,12 +1196,36 @@ export async function registerRoutes(app: Express): Promise<Server> {
                          encounters.some(enc => (enc.woundDetails as any)?.venousDisease === true)
       };
 
-      // Build RAG context with enhanced policy selection using patient characteristics
+      // Collect ICD-10 codes from episode and all encounters for comprehensive matching
+      const icd10Codes: string[] = [];
+      
+      // Add episode-level diagnoses
+      if (episode.primaryDiagnosis) {
+        icd10Codes.push(episode.primaryDiagnosis);
+      }
+      if (episode.secondaryDiagnoses && Array.isArray(episode.secondaryDiagnoses)) {
+        icd10Codes.push(...episode.secondaryDiagnoses);
+      }
+      
+      // Add encounter-level diagnoses (deduplicated)
+      const uniqueCodes = new Set(icd10Codes);
+      encounters.forEach(enc => {
+        if (enc.primaryDiagnosis) {
+          uniqueCodes.add(enc.primaryDiagnosis);
+        }
+        if (enc.secondaryDiagnoses && Array.isArray(enc.secondaryDiagnoses)) {
+          enc.secondaryDiagnoses.forEach(code => uniqueCodes.add(code));
+        }
+      });
+      const allIcd10Codes = Array.from(uniqueCodes);
+
+      // Build RAG context with enhanced policy selection using patient characteristics and ICD-10 codes
       const ragContext = await buildRAGContext(
         patient.macRegion,
         episode.woundType || 'DFU',
         episode.woundLocation || (latestEncounter.woundDetails as any)?.location,
-        patientCharacteristics
+        patientCharacteristics,
+        allIcd10Codes  // Pass all relevant ICD-10 codes for comprehensive matching
       );
 
       // Log policy selection result for audit purposes
@@ -3490,7 +3524,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post('/api/validation/rag/test-retrieval', isAuthenticated, async (req: any, res) => {
     try {
       const userId = req.user.claims.sub;
-      const { macRegion, woundType } = req.body;
+      const { macRegion, woundType, woundLocation, icd10Codes, patientCharacteristics } = req.body;
 
       if (!macRegion || !woundType) {
         return res.status(400).json({ 
@@ -3500,8 +3534,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const { buildRAGContext } = await import('./services/ragService');
       
-      console.log(`Testing RAG retrieval: MAC=${macRegion}, Wound=${woundType} by user: ${userId}`);
-      const context = await buildRAGContext(macRegion, woundType);
+      console.log(`Testing RAG retrieval: MAC=${macRegion}, Wound=${woundType}, ICD-10=${icd10Codes?.join(', ') || 'none'} by user: ${userId}`);
+      const context = await buildRAGContext(
+        macRegion, 
+        woundType,
+        woundLocation,
+        patientCharacteristics,
+        icd10Codes
+      );
       
       res.json({
         success: context.citations.length > 0,

@@ -13,13 +13,71 @@ const SCORING_WEIGHTS = {
     MAX_DAYS: 365 // Normalize recency over 1 year
   },
   APPLICABILITY: {
+    ICD10_EXACT_MATCH: 100,       // Exact ICD-10 code match
+    ICD10_PARTIAL_MATCH: 70,      // ICD-10 prefix match
     WOUND_TYPE_TITLE: 60,
     WOUND_TYPE_CONTENT: 40,
+    SYNONYM_MATCH: 35,            // Alternative wound type names
     LOCATION_HINT: 15,
-    PATIENT_CHARACTERISTICS: 25
+    PATIENT_CHARACTERISTICS: 25,
+    LCD_SPECIFIC_TERMS: 30        // Skin substitute, CTP, etc.
   },
   SUPERSEDED_PENALTY: -100
 } as const;
+
+// Comprehensive wound type synonym mapping
+const WOUND_TYPE_SYNONYMS: Record<string, string[]> = {
+  'diabetic_foot_ulcer': [
+    'diabetic foot ulcer', 'dfu', 'diabetic wound', 'diabetic foot',
+    'neuropathic ulcer', 'wagner', 'diabetic ulceration', 'diabetic lower extremity',
+    'diabetic limb', 'diabetes-related ulcer', 'diabetic foot wound'
+  ],
+  'venous_leg_ulcer': [
+    'venous leg ulcer', 'vlu', 'venous stasis ulcer', 'venous insufficiency',
+    'venous wound', 'stasis ulcer', 'venous ulceration', 'chronic venous ulcer',
+    'varicose ulcer', 'venous hypertension ulcer'
+  ],
+  'pressure_ulcer': [
+    'pressure ulcer', 'pu', 'pressure injury', 'decubitus ulcer', 'bedsore',
+    'pressure sore', 'stage 3 pressure', 'stage 4 pressure', 'unstageable pressure'
+  ],
+  'arterial_ulcer': [
+    'arterial ulcer', 'ischemic ulcer', 'arterial insufficiency ulcer',
+    'peripheral arterial disease ulcer', 'pad ulcer', 'arterial wound'
+  ],
+  'chronic_ulcer': [
+    'chronic ulcer', 'non-healing wound', 'chronic wound', 'complex wound',
+    'recalcitrant wound', 'refractory wound'
+  ],
+  'leg_ulcer': [
+    'leg ulcer', 'lower extremity ulcer', 'lower limb ulcer', 'extremity wound'
+  ],
+  'full-thickness ulceration': [
+    'full thickness wound', 'full thickness ulcer', 'deep wound', 'stage 3',
+    'stage 4', 'complex ulceration'
+  ]
+};
+
+// LCD-specific terms that indicate wound care policies
+const LCD_SPECIFIC_TERMS = [
+  'skin substitute', 'ctp', 'cellular tissue product', 'cellular and tissue',
+  'acellular', 'biologic', 'graft', 'matrix', 'collagen', 'amniotic',
+  'wound management', 'wound care', 'wound healing', 'advanced wound',
+  'debridement', 'hyperbaric oxygen', 'hbot', 'negative pressure'
+];
+
+// ICD-10 to wound type mapping
+const ICD10_WOUND_MAPPINGS: Record<string, string> = {
+  'E10.6': 'diabetic_foot_ulcer',  // Type 1 diabetes with foot complications
+  'E11.6': 'diabetic_foot_ulcer',  // Type 2 diabetes with foot complications
+  'E13.6': 'diabetic_foot_ulcer',  // Other diabetes with foot complications
+  'L89': 'pressure_ulcer',         // Pressure ulcers
+  'L97': 'leg_ulcer',              // Non-pressure lower limb ulcers
+  'I83.0': 'venous_leg_ulcer',     // Varicose veins with ulcer
+  'I83.2': 'venous_leg_ulcer',     // Varicose veins with ulcer and inflammation
+  'I87.0': 'venous_leg_ulcer',     // Post-thrombotic syndrome with ulcer
+  'I70.2': 'arterial_ulcer'        // Atherosclerosis of arteries with ulceration
+};
 
 interface RAGContext {
   content: string;
@@ -44,6 +102,7 @@ interface SelectBestPolicyParams {
   macRegion: string;
   woundType: string;
   woundLocation?: string;
+  icd10Codes?: string[];  // Primary and secondary ICD-10 codes
   patientCharacteristics?: {
     isDiabetic?: boolean;
     hasVenousDisease?: boolean;
@@ -68,24 +127,103 @@ interface SelectBestPolicyResult {
 }
 
 /**
+ * Get all relevant search terms for a wound type including synonyms
+ */
+function getWoundTypeSearchTerms(woundType: string): string[] {
+  const terms: Set<string> = new Set();
+  
+  // Add the wound type itself
+  terms.add(woundType.toLowerCase());
+  
+  // Add synonyms if available
+  const normalizedType = woundType.toLowerCase().replace(/[\s-_]/g, '_');
+  if (WOUND_TYPE_SYNONYMS[normalizedType]) {
+    WOUND_TYPE_SYNONYMS[normalizedType].forEach(synonym => terms.add(synonym.toLowerCase()));
+  }
+  
+  // Check if any synonym group contains this wound type
+  Object.entries(WOUND_TYPE_SYNONYMS).forEach(([key, synonyms]) => {
+    if (synonyms.some(syn => syn.toLowerCase() === woundType.toLowerCase())) {
+      synonyms.forEach(synonym => terms.add(synonym.toLowerCase()));
+    }
+  });
+  
+  return Array.from(terms);
+}
+
+/**
+ * Map ICD-10 codes to wound types
+ */
+function mapICD10ToWoundTypes(icd10Codes?: string[]): string[] {
+  if (!icd10Codes || icd10Codes.length === 0) return [];
+  
+  const woundTypes: Set<string> = new Set();
+  
+  icd10Codes.forEach(code => {
+    // Try exact match
+    if (ICD10_WOUND_MAPPINGS[code]) {
+      woundTypes.add(ICD10_WOUND_MAPPINGS[code]);
+    }
+    
+    // Try prefix matches (3 and 4 characters)
+    const prefix3 = code.substring(0, 3);
+    const prefix4 = code.substring(0, 4);
+    
+    Object.entries(ICD10_WOUND_MAPPINGS).forEach(([mapCode, woundType]) => {
+      if (mapCode === prefix3 || mapCode === prefix4 || 
+          code.startsWith(mapCode) || mapCode.startsWith(code.substring(0, 4))) {
+        woundTypes.add(woundType);
+      }
+    });
+  });
+  
+  return Array.from(woundTypes);
+}
+
+/**
  * Checks if a policy is relevant for wound care scenarios using comprehensive keyword matching
  */
-function isWoundCareRelevant(policy: PolicySource, woundType: string, woundLocation?: string): boolean {
-  const woundCareKeywords = [
-    'skin substitute', 'ctp', 'cellular tissue product', 'wound', 
-    'ulcer', 'diabetic foot', 'diabetic', 'venous', 'debridement',
-    'cellular', 'tissue', 'graft', 'matrix', 'collagen',
-    woundType.toLowerCase()
-  ];
+function isWoundCareRelevant(
+  policy: PolicySource, 
+  woundType: string, 
+  woundLocation?: string,
+  icd10Codes?: string[]
+): boolean {
+  const woundCareKeywords: Set<string> = new Set();
   
+  // Add LCD-specific terms
+  LCD_SPECIFIC_TERMS.forEach(term => woundCareKeywords.add(term.toLowerCase()));
+  
+  // Add wound type and its synonyms
+  const woundTypeTerms = getWoundTypeSearchTerms(woundType);
+  woundTypeTerms.forEach(term => woundCareKeywords.add(term));
+  
+  // Add wound types derived from ICD-10 codes
+  const icd10WoundTypes = mapICD10ToWoundTypes(icd10Codes);
+  icd10WoundTypes.forEach(type => {
+    getWoundTypeSearchTerms(type).forEach(term => woundCareKeywords.add(term));
+  });
+  
+  // Add basic wound care terms
+  ['wound', 'ulcer', 'skin', 'healing'].forEach(term => woundCareKeywords.add(term));
+  
+  // Add location if provided
   if (woundLocation) {
-    woundCareKeywords.push(woundLocation.toLowerCase());
+    woundCareKeywords.add(woundLocation.toLowerCase());
+    // Add common location synonyms
+    if (woundLocation.toLowerCase().includes('foot')) {
+      ['lower extremity', 'plantar', 'heel', 'toe'].forEach(term => woundCareKeywords.add(term));
+    }
+    if (woundLocation.toLowerCase().includes('leg')) {
+      ['lower extremity', 'shin', 'calf', 'ankle'].forEach(term => woundCareKeywords.add(term));
+    }
   }
 
   const titleLower = policy.title.toLowerCase();
   const contentLower = policy.content.toLowerCase();
   
-  return woundCareKeywords.some(keyword => 
+  // Check if any keyword matches
+  return Array.from(woundCareKeywords).some(keyword => 
     titleLower.includes(keyword) || contentLower.includes(keyword)
   );
 }
@@ -102,7 +240,7 @@ function filterSupersededPolicies(policies: PolicySource[]): PolicySource[] {
  * Replaces the top-5 approach with sophisticated scoring and fallback logic.
  */
 export async function selectBestPolicy(params: SelectBestPolicyParams): Promise<SelectBestPolicyResult> {
-  const { macRegion, woundType, woundLocation, patientCharacteristics } = params;
+  const { macRegion, woundType, woundLocation, icd10Codes, patientCharacteristics } = params;
   const currentDate = new Date();
   const filtersApplied: string[] = [];
   const scoredPolicies: PolicyScore[] = [];
@@ -127,7 +265,7 @@ export async function selectBestPolicy(params: SelectBestPolicyParams): Promise<
     // 2. Filter for wound care relevance and exclude superseded policies
     filtersApplied.push('wound_care_relevance', 'superseded_exclusion');
     const relevantPolicies = filterSupersededPolicies(
-      allPolicies.filter(policy => isWoundCareRelevant(policy, woundType, woundLocation))
+      allPolicies.filter(policy => isWoundCareRelevant(policy, woundType, woundLocation, icd10Codes))
     );
 
     // 3. Score each policy using weighted scoring system
@@ -159,14 +297,50 @@ export async function selectBestPolicy(params: SelectBestPolicyParams): Promise<
       // Applicability scoring
       components.applicability = 0;
       
-      // Wound type match in title
-      if (policy.title.toLowerCase().includes(woundType.toLowerCase())) {
-        components.applicability += SCORING_WEIGHTS.APPLICABILITY.WOUND_TYPE_TITLE;
+      // ICD-10 code matching (highest priority)
+      if (icd10Codes && icd10Codes.length > 0) {
+        for (const code of icd10Codes) {
+          // Exact ICD-10 match in policy
+          if (policy.title.includes(code) || policy.content.includes(code)) {
+            components.applicability += SCORING_WEIGHTS.APPLICABILITY.ICD10_EXACT_MATCH;
+            break;
+          }
+          // Partial ICD-10 match (first 3-4 characters)
+          const prefix = code.substring(0, 4);
+          if (policy.title.includes(prefix) || policy.content.includes(prefix)) {
+            components.applicability += SCORING_WEIGHTS.APPLICABILITY.ICD10_PARTIAL_MATCH;
+            break;
+          }
+        }
       }
       
-      // Wound type match in content
-      if (policy.content.toLowerCase().includes(woundType.toLowerCase())) {
-        components.applicability += SCORING_WEIGHTS.APPLICABILITY.WOUND_TYPE_CONTENT;
+      // Wound type and synonym matching
+      const woundTypeTerms = getWoundTypeSearchTerms(woundType);
+      let foundInTitle = false;
+      let foundInContent = false;
+      
+      for (const term of woundTypeTerms) {
+        if (!foundInTitle && policy.title.toLowerCase().includes(term)) {
+          components.applicability += term === woundType.toLowerCase() 
+            ? SCORING_WEIGHTS.APPLICABILITY.WOUND_TYPE_TITLE
+            : SCORING_WEIGHTS.APPLICABILITY.SYNONYM_MATCH;
+          foundInTitle = true;
+        }
+        if (!foundInContent && policy.content.toLowerCase().includes(term)) {
+          components.applicability += term === woundType.toLowerCase()
+            ? SCORING_WEIGHTS.APPLICABILITY.WOUND_TYPE_CONTENT  
+            : SCORING_WEIGHTS.APPLICABILITY.SYNONYM_MATCH * 0.7; // Slightly lower for content synonyms
+          foundInContent = true;
+        }
+        if (foundInTitle && foundInContent) break;
+      }
+      
+      // LCD-specific terms bonus
+      const hasLCDTerms = LCD_SPECIFIC_TERMS.some(term => 
+        policy.title.toLowerCase().includes(term) || policy.content.toLowerCase().includes(term)
+      );
+      if (hasLCDTerms) {
+        components.applicability += SCORING_WEIGHTS.APPLICABILITY.LCD_SPECIFIC_TERMS;
       }
       
       // Location hint scoring
@@ -234,7 +408,7 @@ export async function selectBestPolicy(params: SelectBestPolicyParams): Promise<
       // Try to find any current wound-care policy (with proper filtering)
       const currentWoundCarePolicies = filterSupersededPolicies(
         allPolicies.filter(p => 
-          p.status === 'current' && isWoundCareRelevant(p, woundType, woundLocation)
+          p.status === 'current' && isWoundCareRelevant(p, woundType, woundLocation, icd10Codes)
         )
       );
       
@@ -253,7 +427,7 @@ export async function selectBestPolicy(params: SelectBestPolicyParams): Promise<
         // Try nearest future wound-care policy (with proper filtering)
         const futurePolicies = filterSupersededPolicies(
           allPolicies.filter(p => 
-            p.status === 'future' && isWoundCareRelevant(p, woundType, woundLocation)
+            p.status === 'future' && isWoundCareRelevant(p, woundType, woundLocation, icd10Codes)
           )
         );
         if (futurePolicies.length > 0) {
@@ -268,7 +442,7 @@ export async function selectBestPolicy(params: SelectBestPolicyParams): Promise<
           // Try most recent proposed wound-care policy (with proper filtering)
           const proposedPolicies = filterSupersededPolicies(
             allPolicies.filter(p => 
-              p.status === 'proposed' && isWoundCareRelevant(p, woundType, woundLocation)
+              p.status === 'proposed' && isWoundCareRelevant(p, woundType, woundLocation, icd10Codes)
             )
           );
           if (proposedPolicies.length > 0) {
@@ -280,11 +454,66 @@ export async function selectBestPolicy(params: SelectBestPolicyParams): Promise<
             selectedReason = 'Fallback: Selected most recent proposed wound-care policy';
             fallbackUsed = 'most_recent_proposed';
           } else {
-            selectedReason = 'No applicable policies found even with fallback logic';
-            fallbackUsed = 'no_policies_available';
+            // Final fallback: Try general wound care without specific wound type
+            filtersApplied.push('general_wound_care_fallback');
+            const generalWoundCarePolicies = filterSupersededPolicies(
+              allPolicies.filter(p => {
+                const lowerTitle = p.title.toLowerCase();
+                const lowerContent = p.content.toLowerCase();
+                // Look for any general wound care terms
+                return LCD_SPECIFIC_TERMS.some(term => 
+                  lowerTitle.includes(term) || lowerContent.includes(term)
+                ) || ['wound', 'ulcer', 'skin'].some(term =>
+                  lowerTitle.includes(term) || lowerContent.includes(term)
+                );
+              })
+            );
+            
+            if (generalWoundCarePolicies.length > 0) {
+              // Prioritize current, then future, then proposed
+              const currentGeneral = generalWoundCarePolicies.filter(p => p.status === 'current');
+              const futureGeneral = generalWoundCarePolicies.filter(p => p.status === 'future');
+              const proposedGeneral = generalWoundCarePolicies.filter(p => p.status === 'proposed');
+              
+              if (currentGeneral.length > 0) {
+                selectedPolicy = currentGeneral.sort((a, b) => 
+                  b.effectiveDate.getTime() - a.effectiveDate.getTime()
+                )[0];
+                selectedReason = 'Fallback: Selected general wound care policy (current)';
+                fallbackUsed = 'general_wound_care_current';
+              } else if (futureGeneral.length > 0) {
+                selectedPolicy = futureGeneral.sort((a, b) => 
+                  a.effectiveDate.getTime() - b.effectiveDate.getTime()
+                )[0];
+                selectedReason = 'Fallback: Selected general wound care policy (future)';
+                fallbackUsed = 'general_wound_care_future';
+              } else if (proposedGeneral.length > 0) {
+                selectedPolicy = proposedGeneral.sort((a, b) => 
+                  b.effectiveDate.getTime() - a.effectiveDate.getTime()
+                )[0];
+                selectedReason = 'Fallback: Selected general wound care policy (proposed)';
+                fallbackUsed = 'general_wound_care_proposed';
+              }
+            }
+            
+            if (!selectedPolicy) {
+              selectedReason = 'No applicable policies found even with all fallback strategies';
+              fallbackUsed = 'no_policies_available';
+            }
           }
         }
       }
+    }
+
+    // Log detailed scoring for debugging
+    if (scoredPolicies.length > 0) {
+      console.log(`Policy scoring for wound type: ${woundType}, ICD-10: ${icd10Codes?.join(', ') || 'none'}`);
+      scoredPolicies.slice(0, 3).forEach(scored => {
+        const policy = relevantPolicies.find(p => p.lcdId === scored.lcdId);
+        if (policy) {
+          console.log(`  - ${policy.title}: Score ${scored.score} (components: ${JSON.stringify(scored.components)})`);
+        }
+      });
     }
 
     return {
@@ -321,7 +550,8 @@ export async function buildRAGContext(
   patientCharacteristics?: {
     isDiabetic?: boolean;
     hasVenousDisease?: boolean;
-  }
+  },
+  icd10Codes?: string[]  // Add ICD-10 codes parameter
 ): Promise<RAGContext> {
   try {
     // Use the new intelligent single policy selection algorithm
@@ -329,6 +559,7 @@ export async function buildRAGContext(
       macRegion,
       woundType,
       woundLocation,
+      icd10Codes,  // Pass ICD-10 codes to policy selection
       patientCharacteristics
     });
 
@@ -338,7 +569,8 @@ export async function buildRAGContext(
     if (!policy) {
       // Use audit trail to build informative content explaining why no policy was found
       const auditInfo = audit.fallbackUsed ? ` (${audit.selectedReason})` : '';
-      const content = `No specific LCD policies found for MAC region ${macRegion} and wound type "${woundType}"${auditInfo}. ` +
+      const icd10Info = icd10Codes && icd10Codes.length > 0 ? ` with ICD-10 codes: ${icd10Codes.join(', ')}` : '';
+      const content = `No specific LCD policies found for MAC region ${macRegion} and wound type "${woundType}"${icd10Info}${auditInfo}. ` +
         `General Medicare coverage principles apply: ` +
         `Coverage may be available for medically necessary wound care treatments when they meet Medicare criteria. ` +
         `Providers should refer to general Medicare guidelines and consult with the MAC for specific coverage determinations.`;
