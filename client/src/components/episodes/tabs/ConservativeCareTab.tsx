@@ -91,7 +91,7 @@ function convertToMedicareLcdCompliance(
   encounters: ParsedEncounterData[]
 ): MedicareLcdCompliance {
   // Use centralized result data instead of recalculating
-  const woundClassification = classifyWound(episode);
+  const woundClassification = classifyWound(episode, episode.primaryDiagnosis || undefined);
   const isDFU = woundClassification.isDFU;
   const isVLU = woundClassification.isVLU;
   

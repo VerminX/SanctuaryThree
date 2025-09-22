@@ -120,9 +120,13 @@ export function getExpectedISOWeeks(startDate: Date, endDate: Date): string[] {
 }
 
 // Enhanced wound classification using ICD-10 codes and wound type field
-export function classifyWound(episode: Episode): WoundClassification {
-  // Start with ICD-10 primary diagnosis
-  const primaryICD10 = getCodeByCode(episode.primaryDiagnosis || '');
+export function classifyWound(
+  episode: Episode,
+  icd10Code?: string
+): WoundClassification {
+  // Use provided ICD-10 code or fall back to episode's primary diagnosis
+  const codeToAnalyze = icd10Code || episode.primaryDiagnosis || '';
+  
   let classification: WoundClassification = {
     isDFU: false,
     isVLU: false,
@@ -135,30 +139,76 @@ export function classifyWound(episode: Episode): WoundClassification {
     evidenceSource: 'clinical-assessment'
   };
 
-  // ICD-10 based classification (most reliable)
-  if (primaryICD10) {
-    classification.icd10Codes.push(primaryICD10.code);
-    classification.evidenceSource = 'icd10-primary';
+  // First, try direct ICD-10 code matching with enhanced mapping rules
+  if (codeToAnalyze) {
+    classification.icd10Codes.push(codeToAnalyze);
     
-    switch (primaryICD10.category) {
-      case 'Diabetic Foot Ulcer':
+    // Enhanced ICD-10 mapping rules as specified
+    if (codeToAnalyze.startsWith('E10.6') || codeToAnalyze.startsWith('E11.6') || codeToAnalyze.startsWith('E13.6')) {
+      // Diabetic foot ulcers
+      classification.isDFU = true;
+      classification.category = 'diabetic-foot';
+      classification.requiresOffloading = true;
+      classification.evidenceSource = 'icd10-primary';
+    } else if (codeToAnalyze.startsWith('I83.0') || codeToAnalyze.startsWith('I83.2') || codeToAnalyze.startsWith('I87')) {
+      // Venous leg ulcers
+      classification.isVLU = true;
+      classification.category = 'venous-leg';
+      classification.requiresCompression = true;
+      classification.evidenceSource = 'icd10-primary';
+    } else if (codeToAnalyze.startsWith('L89')) {
+      // Pressure ulcers
+      classification.isPU = true;
+      classification.category = 'pressure';
+      classification.evidenceSource = 'icd10-primary';
+    } else if (codeToAnalyze.startsWith('L97')) {
+      // Non-pressure chronic ulcers - determine specific type from location if available
+      const location = episode.woundLocation?.toLowerCase() || '';
+      if (location.includes('foot') || location.includes('toe') || location.includes('heel')) {
+        // Likely DFU if on foot
         classification.isDFU = true;
         classification.category = 'diabetic-foot';
         classification.requiresOffloading = true;
-        break;
-      case 'Venous Leg Ulcer':
+      } else if (location.includes('leg') || location.includes('ankle') || location.includes('calf')) {
+        // Likely VLU if on leg
         classification.isVLU = true;
         classification.category = 'venous-leg';
         classification.requiresCompression = true;
-        break;
-      case 'Pressure Ulcer':
-        classification.isPU = true;
-        classification.category = 'pressure';
-        break;
-      case 'Arterial Ulcer':
-        classification.isArterial = true;
-        classification.category = 'arterial';
-        break;
+      } else {
+        classification.category = 'chronic_wound';
+      }
+      classification.evidenceSource = 'icd10-primary';
+    } else if (codeToAnalyze.startsWith('L98.4')) {
+      // Non-healing surgical wounds
+      classification.category = 'chronic_wound';
+      classification.evidenceSource = 'icd10-primary';
+    } else {
+      // Try database lookup for other codes
+      const databaseCode = getCodeByCode(codeToAnalyze);
+      if (databaseCode) {
+        classification.evidenceSource = 'icd10-primary';
+        
+        switch (databaseCode.category) {
+          case 'Diabetic Foot Ulcer':
+            classification.isDFU = true;
+            classification.category = 'diabetic-foot';
+            classification.requiresOffloading = true;
+            break;
+          case 'Venous Leg Ulcer':
+            classification.isVLU = true;
+            classification.category = 'venous-leg';
+            classification.requiresCompression = true;
+            break;
+          case 'Pressure Ulcer':
+            classification.isPU = true;
+            classification.category = 'pressure';
+            break;
+          case 'Arterial Ulcer':
+            classification.isArterial = true;
+            classification.category = 'arterial';
+            break;
+        }
+      }
     }
   }
 
@@ -166,42 +216,72 @@ export function classifyWound(episode: Episode): WoundClassification {
   if (classification.category === 'other' && episode.woundType) {
     classification.evidenceSource = 'wound-type-field';
     const woundType = episode.woundType.toLowerCase();
+    const location = episode.woundLocation?.toLowerCase() || '';
     
-    // More sophisticated pattern matching for wound types
-    const dfuPatterns = [
-      /\bdfu\b/, /diabetic.*foot/, /foot.*diabetic/, /diabetic.*ulcer.*foot/,
-      /plantar.*ulcer/, /toe.*ulcer.*diabet/, /heel.*ulcer.*diabet/
-    ];
+    // Handle "full-thickness ulceration" terminology with location context
+    if (woundType.includes('full-thickness') || woundType.includes('full thickness')) {
+      if (woundType.includes('ulcer') || woundType.includes('wound')) {
+        // Full-thickness ulceration with location context
+        if (location.includes('foot') || location.includes('toe') || location.includes('heel') ||
+            woundType.includes('foot') || woundType.includes('toe') || woundType.includes('heel')) {
+          classification.isDFU = true;
+          classification.category = 'diabetic-foot';
+          classification.requiresOffloading = true;
+        } else if (location.includes('leg') || location.includes('ankle') || location.includes('calf') ||
+                   woundType.includes('leg') || woundType.includes('ankle') || woundType.includes('calf')) {
+          classification.isVLU = true;
+          classification.category = 'venous-leg';
+          classification.requiresCompression = true;
+        } else {
+          // Full-thickness ulceration without clear location - default to chronic wound
+          classification.category = 'chronic_wound';
+        }
+      }
+    }
     
-    const vluPatterns = [
-      /\bvlu\b/, /venous.*leg/, /leg.*venous/, /venous.*ulcer.*leg/,
-      /stasis.*ulcer/, /chronic.*venous/, /lower.*leg.*ulcer/
-    ];
-    
-    const puPatterns = [
-      /pressure.*ulcer/, /decubitus/, /bed.*sore/, /pressure.*sore/,
-      /stage.*[1-4]/, /sacral.*ulcer/, /heel.*pressure/
-    ];
-    
-    const arterialPatterns = [
-      /arterial.*ulcer/, /ischemic.*ulcer/, /\bpad\b.*ulcer/,
-      /peripheral.*arterial/, /arterial.*insufficiency/
-    ];
-    
-    if (dfuPatterns.some(pattern => pattern.test(woundType))) {
-      classification.isDFU = true;
-      classification.category = 'diabetic-foot';
-      classification.requiresOffloading = true;
-    } else if (vluPatterns.some(pattern => pattern.test(woundType))) {
-      classification.isVLU = true;
-      classification.category = 'venous-leg';
-      classification.requiresCompression = true;
-    } else if (puPatterns.some(pattern => pattern.test(woundType))) {
-      classification.isPU = true;
-      classification.category = 'pressure';
-    } else if (arterialPatterns.some(pattern => pattern.test(woundType))) {
-      classification.isArterial = true;
-      classification.category = 'arterial';
+    // Continue with pattern matching if not already classified
+    if (classification.category === 'other') {
+      // More sophisticated pattern matching for wound types
+      const dfuPatterns = [
+        /\bdfu\b/, /diabetic.*foot/, /foot.*diabetic/, /diabetic.*ulcer.*foot/,
+        /plantar.*ulcer/, /toe.*ulcer.*diabet/, /heel.*ulcer.*diabet/,
+        /diabetic.*ulcer/, /neuropathic.*ulcer/
+      ];
+      
+      const vluPatterns = [
+        /\bvlu\b/, /venous.*leg/, /leg.*venous/, /venous.*ulcer.*leg/,
+        /stasis.*ulcer/, /chronic.*venous/, /lower.*leg.*ulcer/,
+        /venous.*insufficiency/, /venous.*stasis/
+      ];
+      
+      const puPatterns = [
+        /pressure.*ulcer/, /decubitus/, /bed.*sore/, /pressure.*sore/,
+        /stage.*[1-4]/, /sacral.*ulcer/, /heel.*pressure/
+      ];
+      
+      const arterialPatterns = [
+        /arterial.*ulcer/, /ischemic.*ulcer/, /\bpad\b.*ulcer/,
+        /peripheral.*arterial/, /arterial.*insufficiency/
+      ];
+      
+      if (dfuPatterns.some(pattern => pattern.test(woundType))) {
+        classification.isDFU = true;
+        classification.category = 'diabetic-foot';
+        classification.requiresOffloading = true;
+      } else if (vluPatterns.some(pattern => pattern.test(woundType))) {
+        classification.isVLU = true;
+        classification.category = 'venous-leg';
+        classification.requiresCompression = true;
+      } else if (puPatterns.some(pattern => pattern.test(woundType))) {
+        classification.isPU = true;
+        classification.category = 'pressure';
+      } else if (arterialPatterns.some(pattern => pattern.test(woundType))) {
+        classification.isArterial = true;
+        classification.category = 'arterial';
+      } else {
+        // Default to chronic wound for unmatched types
+        classification.category = 'chronic_wound';
+      }
     }
   }
   
@@ -436,8 +516,8 @@ export function assessMedicareCompliance(
   const currentDate = new Date();
   const treatmentDays = Math.ceil((currentDate.getTime() - episodeStartDate.getTime()) / (1000 * 60 * 60 * 24));
 
-  // Classify wound using enhanced logic
-  const woundClassification = classifyWound(episode);
+  // Classify wound using enhanced logic with ICD-10 code
+  const woundClassification = classifyWound(episode, episode.primaryDiagnosis || undefined);
 
   // Assess weekly compliance with exceptions
   const weeklyCompliance = assessWeeklyCompliance(encounters, episodeStartDate, currentDate, documentedExceptions);

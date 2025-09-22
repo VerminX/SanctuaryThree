@@ -284,7 +284,7 @@ export default function ComplianceTab({ episode, encounters, patient, isLoading 
   // Add wound classification info for debugging and display
   const woundClassification = useMemo(() => {
     if (!episode) return null;
-    return classifyWound(episode);
+    return classifyWound(episode, episode.primaryDiagnosis || undefined);
   }, [episode]);
 
   if (isLoading) {
