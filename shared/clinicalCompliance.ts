@@ -175,12 +175,12 @@ export function classifyWound(
         classification.category = 'venous-leg';
         classification.requiresCompression = true;
       } else {
-        classification.category = 'chronic_wound';
+        classification.category = 'other';
       }
       classification.evidenceSource = 'icd10-primary';
     } else if (codeToAnalyze.startsWith('L98.4')) {
       // Non-healing surgical wounds
-      classification.category = 'chronic_wound';
+      classification.category = 'other';
       classification.evidenceSource = 'icd10-primary';
     } else {
       // Try database lookup for other codes
@@ -234,7 +234,7 @@ export function classifyWound(
           classification.requiresCompression = true;
         } else {
           // Full-thickness ulceration without clear location - default to chronic wound
-          classification.category = 'chronic_wound';
+          classification.category = 'other';
         }
       }
     }
@@ -280,7 +280,7 @@ export function classifyWound(
         classification.category = 'arterial';
       } else {
         // Default to chronic wound for unmatched types
-        classification.category = 'chronic_wound';
+        classification.category = 'other';
       }
     }
   }
@@ -309,7 +309,7 @@ export function assessWeeklyCompliance(
   // Track which weeks have measurements
   encounters.forEach(encounter => {
     const woundDetails = parseWoundDetails(encounter.woundDetails);
-    if (woundDetails?.measurements || woundDetails?.currentMeasurement) {
+    if (woundDetails?.measurementHistory?.length || woundDetails?.currentMeasurement) {
       const week = getISOWeekIdentifier(new Date(encounter.date));
       documentedWeeks.add(week);
     }
@@ -383,7 +383,7 @@ export function assessWoundReduction(encounters: Encounter[], episodeStartDate: 
       date: new Date(encounter.date),
       woundDetails: parseWoundDetails(encounter.woundDetails)
     }))
-    .filter(enc => enc.woundDetails?.measurements || enc.woundDetails?.currentMeasurement)
+    .filter(enc => enc.woundDetails?.measurementHistory?.length || enc.woundDetails?.currentMeasurement)
     .sort((a, b) => a.date.getTime() - b.date.getTime());
 
   if (sortedEncounters.length < 1) {
@@ -403,12 +403,16 @@ export function assessWoundReduction(encounters: Encounter[], episodeStartDate: 
 
   // Get baseline measurement (first available)
   const baselineEncounter = sortedEncounters[0];
-  const baselineMeasurements = baselineEncounter.woundDetails?.measurements || baselineEncounter.woundDetails?.currentMeasurement;
+  const baselineMeasurements = baselineEncounter.woundDetails?.currentMeasurement || 
+    (baselineEncounter.woundDetails?.measurementHistory?.length ? 
+      baselineEncounter.woundDetails.measurementHistory[baselineEncounter.woundDetails.measurementHistory.length - 1] : null);
   const baseline = calculateWoundArea(baselineMeasurements);
 
   // Get current measurement (latest available)
   const currentEncounter = sortedEncounters[sortedEncounters.length - 1];
-  const currentMeasurements = currentEncounter.woundDetails?.measurements || currentEncounter.woundDetails?.currentMeasurement;
+  const currentMeasurements = currentEncounter.woundDetails?.currentMeasurement || 
+    (currentEncounter.woundDetails?.measurementHistory?.length ? 
+      currentEncounter.woundDetails.measurementHistory[currentEncounter.woundDetails.measurementHistory.length - 1] : null);
   const current = calculateWoundArea(currentMeasurements);
 
   const percentage = baseline > 0 ? Math.max(0, ((baseline - current) / baseline) * 100) : 0;
@@ -428,16 +432,27 @@ export function assessWoundReduction(encounters: Encounter[], episodeStartDate: 
 function calculateWoundArea(measurements: any): number {
   if (!measurements) return 0;
   
-  // Try to get area directly
-  if (typeof measurements.area === 'number' && measurements.area > 0) {
-    return measurements.area;
+  // Try to get area directly - handle string or number
+  if (measurements.area !== undefined && measurements.area !== null) {
+    const area = typeof measurements.area === 'string' ? parseFloat(measurements.area) : measurements.area;
+    if (!isNaN(area) && area > 0) {
+      return area;
+    }
   }
   
-  // Calculate from length and width
-  const length = typeof measurements.length === 'number' ? measurements.length : null;
-  const width = typeof measurements.width === 'number' ? measurements.width : null;
+  // Calculate from length and width - handle string or number
+  let length: number | null = null;
+  let width: number | null = null;
   
-  if (length && width && length > 0 && width > 0) {
+  if (measurements.length !== undefined && measurements.length !== null) {
+    length = typeof measurements.length === 'string' ? parseFloat(measurements.length) : measurements.length;
+  }
+  
+  if (measurements.width !== undefined && measurements.width !== null) {
+    width = typeof measurements.width === 'string' ? parseFloat(measurements.width) : measurements.width;
+  }
+  
+  if (length && width && !isNaN(length) && !isNaN(width) && length > 0 && width > 0) {
     return length * width;
   }
   
