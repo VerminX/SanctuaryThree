@@ -51,6 +51,20 @@ export default function Sidebar() {
   const { user } = useAuth();
   const [isOtherOpen, setIsOtherOpen] = useState(false);
 
+  // Defensive check to ensure navigation items are properly defined
+  if (!mainNavigationItems || !otherNavigationItems) {
+    console.error('Navigation items not properly defined in sidebar');
+    return (
+      <aside className="w-64 bg-card border-r border-border flex flex-col" data-testid="sidebar">
+        <div className="p-6 border-b border-border">
+          <div className="text-center text-destructive">
+            <p>Sidebar configuration error. Please refresh the page.</p>
+          </div>
+        </div>
+      </aside>
+    );
+  }
+
   // Get user's display name and role
   const displayName = user?.firstName && user?.lastName 
     ? `${user.firstName} ${user.lastName}`
@@ -107,7 +121,12 @@ export default function Sidebar() {
       {/* Navigation Menu */}
       <nav className="flex-1 p-4 space-y-2" data-testid="navigation">
         {/* Main Navigation Items */}
-        {mainNavigationItems.map((item) => {
+        {(mainNavigationItems || []).map((item) => {
+          if (!item || !item.href || !item.label || !item.icon) {
+            console.warn('Invalid navigation item:', item);
+            return null;
+          }
+          
           const isActive = location === item.href || 
             (item.href !== "/" && location.startsWith(item.href));
           const Icon = item.icon;
@@ -129,7 +148,7 @@ export default function Sidebar() {
               </Button>
             </Link>
           );
-        })}
+        }).filter(Boolean)}
 
         {/* Other Section Dropdown */}
         <Collapsible open={isOtherOpen} onOpenChange={setIsOtherOpen}>
@@ -149,7 +168,12 @@ export default function Sidebar() {
             </Button>
           </CollapsibleTrigger>
           <CollapsibleContent className="space-y-1 mt-1">
-            {otherNavigationItems.map((item) => {
+            {(otherNavigationItems || []).map((item) => {
+              if (!item || !item.href || !item.label || !item.icon) {
+                console.warn('Invalid other navigation item:', item);
+                return null;
+              }
+              
               const isActive = location === item.href || 
                 (item.href !== "/" && location.startsWith(item.href));
               const Icon = item.icon;
@@ -171,7 +195,7 @@ export default function Sidebar() {
                   </Button>
                 </Link>
               );
-            })}
+            }).filter(Boolean)}
           </CollapsibleContent>
         </Collapsible>
       </nav>
