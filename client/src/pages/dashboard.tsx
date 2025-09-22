@@ -3,20 +3,17 @@ import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
 import { useQuery } from "@tanstack/react-query";
 import { useLocation } from "wouter";
-import { isUnauthorizedError } from "@/lib/authUtils";
 import Sidebar from "@/components/layout/sidebar";
 import Header from "@/components/layout/header";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Users, Search, FileText, RefreshCw, CheckCircle, AlertTriangle, Clock } from "lucide-react";
-import { User } from "@shared/schema";
+import { Users, Search, FileText, RefreshCw, CheckCircle, Upload } from "lucide-react";
 
 interface DashboardStats {
   activePatients: number;
   pendingEligibility: number;
   generatedLetters: number;
   policyUpdates: number;
-  recentActivity: any[];
 }
 
 export default function Dashboard() {
@@ -193,7 +190,23 @@ export default function Dashboard() {
                 <p className="text-sm text-muted-foreground">Common clinical workflows and tools</p>
               </div>
               <CardContent className="p-6">
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
+                  <button 
+                    className="p-4 border border-border rounded-lg text-left hover:bg-muted/50 transition-colors"
+                    onClick={() => setLocation("/upload")}
+                    data-testid="button-pdf-upload"
+                  >
+                    <div className="flex items-center space-x-3">
+                      <div className="w-10 h-10 bg-chart-1/10 rounded-lg flex items-center justify-center">
+                        <Upload className="text-chart-1" />
+                      </div>
+                      <div>
+                        <p className="font-medium text-foreground">PDF Upload</p>
+                        <p className="text-sm text-muted-foreground">Upload patient documents</p>
+                      </div>
+                    </div>
+                  </button>
+
                   <button 
                     className="p-4 border border-border rounded-lg text-left hover:bg-muted/50 transition-colors"
                     onClick={() => setLocation("/patients")}
