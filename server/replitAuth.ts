@@ -130,15 +130,35 @@ export async function setupAuth(app: Express) {
   passport.serializeUser((user: Express.User, cb) => cb(null, user));
   passport.deserializeUser((user: Express.User, cb) => cb(null, user));
 
+  // Helper function to get the correct domain for strategy lookup
+  const getDomainForStrategy = (hostname: string): string => {
+    const domains = process.env.REPLIT_DOMAINS!.split(",");
+    
+    // If hostname matches one of our configured domains, use it
+    if (domains.includes(hostname)) {
+      return hostname;
+    }
+    
+    // For local development (127.0.0.1, localhost), use the first configured domain
+    if (hostname === '127.0.0.1' || hostname === 'localhost') {
+      return domains[0];
+    }
+    
+    // Default to the first configured domain
+    return domains[0];
+  };
+
   app.get("/api/login", (req, res, next) => {
-    passport.authenticate(`replitauth:${req.hostname}`, {
+    const strategyDomain = getDomainForStrategy(req.hostname);
+    passport.authenticate(`replitauth:${strategyDomain}`, {
       prompt: "login consent",
       scope: ["openid", "email", "profile", "offline_access"],
     })(req, res, next);
   });
 
   app.get("/api/callback", (req, res, next) => {
-    passport.authenticate(`replitauth:${req.hostname}`, {
+    const strategyDomain = getDomainForStrategy(req.hostname);
+    passport.authenticate(`replitauth:${strategyDomain}`, {
       successReturnToOrRedirect: "/",
       failureRedirect: "/api/login",
     })(req, res, next);
