@@ -185,62 +185,15 @@ export default function Dashboard() {
             </Card>
           </div>
 
-          {/* Main Dashboard Grid */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            {/* Recent Activity */}
-            <Card data-testid="card-recent-activity">
-              <div className="p-6 border-b border-border">
-                <div className="flex items-center justify-between">
-                  <h3 className="text-lg font-semibold text-foreground">Recent Activity</h3>
-                  <button className="text-primary hover:text-primary/80 text-sm font-medium">
-                    View All
-                  </button>
-                </div>
-              </div>
-              <CardContent className="p-6">
-                {statsLoading ? (
-                  <div className="space-y-4">
-                    {[...Array(3)].map((_, i) => (
-                      <div key={i} className="animate-pulse">
-                        <div className="h-4 bg-muted rounded w-3/4 mb-2"></div>
-                        <div className="h-3 bg-muted rounded w-1/2"></div>
-                      </div>
-                    ))}
-                  </div>
-                ) : stats?.recentActivity?.length ? (
-                  <div className="space-y-4">
-                    {stats?.recentActivity?.map((activity: any, index: number) => (
-                      <div key={index} className="flex items-center justify-between text-sm">
-                        <div className="flex items-center space-x-2">
-                          <Clock className="text-muted-foreground w-4 h-4" />
-                          <span className="text-foreground">{activity.action}</span>
-                        </div>
-                        <span className="text-muted-foreground">
-                          {new Date(activity.timestamp).toLocaleTimeString()}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  <div className="text-center py-8">
-                    <Clock className="mx-auto h-12 w-12 text-muted-foreground/50" />
-                    <h3 className="mt-2 text-sm font-medium text-foreground">No recent activity</h3>
-                    <p className="mt-1 text-sm text-muted-foreground">
-                      Activity will appear here as you use the system.
-                    </p>
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-
-            {/* Quick Actions */}
+          {/* Quick Actions Section */}
+          <div className="max-w-4xl">
             <Card data-testid="card-quick-actions">
               <div className="p-6 border-b border-border">
                 <h3 className="text-lg font-semibold text-foreground">Quick Actions</h3>
                 <p className="text-sm text-muted-foreground">Common clinical workflows and tools</p>
               </div>
               <CardContent className="p-6">
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
                   <button 
                     className="p-4 border border-border rounded-lg text-left hover:bg-muted/50 transition-colors"
                     onClick={() => setLocation("/patients")}
