@@ -13,6 +13,8 @@ import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
 import { DataQualityIndicator } from "@/components/data-quality/data-quality-indicator";
 import { Link } from "wouter";
+import Sidebar from "@/components/layout/sidebar";
+import Header from "@/components/layout/header";
 
 interface FileUpload {
   id: string;
@@ -288,21 +290,13 @@ export default function UploadPage() {
   };
 
   return (
-    <div className="container mx-auto p-6 space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-3xl font-bold text-gray-900 dark:text-white">PDF Upload & Data Extraction</h1>
-          <p className="text-gray-600 dark:text-gray-300 mt-2">
-            Upload patient registration forms and medical records to automatically extract patient and encounter data.
-          </p>
-        </div>
-        <Link href="/">
-          <Button variant="outline" className="flex items-center gap-2" data-testid="back-to-dashboard">
-            <ArrowLeft className="w-4 h-4" />
-            Back to Dashboard
-          </Button>
-        </Link>
-      </div>
+    <div className="min-h-screen flex bg-background">
+      <Sidebar />
+      
+      <main className="flex-1">
+        <Header title="PDF Upload & Data Extraction" subtitle="Upload patient registration forms and medical records to automatically extract patient and encounter data." />
+        
+        <div className="p-6 space-y-6">
 
       {/* Upload Area */}
       <Card>
@@ -845,6 +839,8 @@ export default function UploadPage() {
           )}
         </CardContent>
       </Card>
+      </div>
+      </main>
     </div>
   );
 }
