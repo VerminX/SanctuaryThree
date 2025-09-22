@@ -1,5 +1,4 @@
 import { z } from "zod";
-import type { WoundMeasurements, MedicareLCDComplianceResult } from "@shared/schema";
 
 // Common types and interfaces
 export interface DiagnosisValidationResult {
@@ -312,9 +311,9 @@ export function generateDiagnosisRecommendations(
   const auditTrail: string[] = [`Diagnosis recommendations generation initiated at ${timestamp}`];
   
   const recommendations: DiagnosisRecommendationsResult['recommendations'] = [];
-  const codingImprovements = { suggestedCodes: [], sequencingChanges: [], specificityEnhancements: [] };
-  const clinicalActions = { assessmentsNeeded: [], consultationsRecommended: [], additionalTesting: [] };
-  const documentationNeeds = { missingElements: [], clarificationNeeded: [], evidenceRequired: [] };
+  const codingImprovements = { suggestedCodes: [] as string[], sequencingChanges: [] as string[], specificityEnhancements: [] as string[] };
+  const clinicalActions = { assessmentsNeeded: [] as string[], consultationsRecommended: [] as string[], additionalTesting: [] as string[] };
+  const documentationNeeds = { missingElements: [] as string[], clarificationNeeded: [] as string[], evidenceRequired: [] as string[] };
   const implementationPlan: string[] = [];
 
   // Process diagnosis validation issues
@@ -509,4 +508,211 @@ export function calculateWoundSeverityScore(characteristics: any): number {
   if (characteristics?.exudate_level === 'heavy') score += 10;
   
   return Math.min(score, 100);
+}
+
+// Interface for the pre-eligibility check result
+export interface PreEligibilityCheckResult {
+  overallEligible: boolean;
+  failureReasons: string[];
+  auditTrail: string[];
+  policyViolations: string[];
+  validationResults?: {
+    diagnosisValidation: DiagnosisValidationResult;
+    clinicalNecessity: ClinicalNecessityResult;
+    complexityAnalysis: any;
+    woundTypeMapping: WoundTypeMappingResult;
+  };
+}
+
+/**
+ * MAIN FUNCTION: Perform Pre-Eligibility Checks
+ * Comprehensive pre-eligibility validation before AI analysis
+ * Integrates all existing validation functions into a single comprehensive check
+ */
+export async function performPreEligibilityChecks(
+  episodeData: {
+    id: string;
+    woundType: string;
+    woundLocation: string;
+    primaryDiagnosis: string;
+    episodeStartDate: Date;
+    status: string;
+  },
+  validatorEncounters: Array<{
+    id: string;
+    date: string;
+    primaryDiagnosis: string;
+    woundDetails: any;
+    conservativeCare: any;
+    allText: string;
+    diabeticStatus: string | null;
+  }>
+): Promise<PreEligibilityCheckResult> {
+  const timestamp = new Date().toISOString();
+  const auditTrail: string[] = [`Pre-eligibility checks initiated at ${timestamp}`];
+  const failureReasons: string[] = [];
+  const policyViolations: string[] = [];
+  
+  auditTrail.push(`Analyzing episode ${episodeData.id} with ${validatorEncounters.length} encounters`);
+
+  try {
+    // Extract secondary diagnoses from encounters
+    const secondaryDiagnoses: string[] = [];
+    validatorEncounters.forEach(encounter => {
+      if (encounter.woundDetails?.secondaryDiagnoses) {
+        secondaryDiagnoses.push(...encounter.woundDetails.secondaryDiagnoses);
+      }
+    });
+
+    auditTrail.push(`Found ${secondaryDiagnoses.length} secondary diagnoses across encounters`);
+
+    // STEP 1: Validate diagnosis codes
+    const diagnosisValidation = validateDiagnosisCodes(
+      episodeData.primaryDiagnosis,
+      secondaryDiagnoses
+    );
+    auditTrail.push(...diagnosisValidation.auditTrail);
+
+    if (!diagnosisValidation.isValid) {
+      failureReasons.push(...diagnosisValidation.errorMessages);
+      policyViolations.push('Invalid ICD-10 diagnosis codes detected');
+    }
+
+    // STEP 2: Assess clinical necessity across all encounters
+    const allDiagnoses = [episodeData.primaryDiagnosis, ...secondaryDiagnoses].filter(Boolean);
+    
+    // Aggregate wound characteristics from the most recent encounter
+    const latestEncounter = validatorEncounters[validatorEncounters.length - 1];
+    const woundCharacteristics = latestEncounter?.woundDetails || {};
+    
+    // Aggregate treatment history
+    const treatmentHistory = {
+      failed_conservative_care: validatorEncounters.some(enc => 
+        enc.conservativeCare?.failedPriorTreatments === true ||
+        enc.conservativeCare?.previousTreatments?.length > 0
+      ),
+      conservativeCareAttempts: validatorEncounters.reduce((total, enc) => {
+        return total + (enc.conservativeCare?.treatments?.length || 0);
+      }, 0)
+    };
+
+    // Patient condition assessment
+    const patientCondition = {
+      vascularAssessment: latestEncounter?.woundDetails?.vascularStatus || 'unknown',
+      diabeticStatus: validatorEncounters.some(enc => enc.diabeticStatus === 'diabetic') ? 'diabetic' : 'nondiabetic'
+    };
+
+    const clinicalNecessity = assessClinicalNecessity(
+      allDiagnoses,
+      woundCharacteristics,
+      treatmentHistory,
+      patientCondition
+    );
+    auditTrail.push(...clinicalNecessity.auditTrail);
+
+    // Check for critical policy violations based on clinical necessity
+    if (clinicalNecessity.necessityLevel === 'low') {
+      policyViolations.push('Clinical necessity score too low for advanced therapy coverage');
+      failureReasons.push('Insufficient clinical justification for cellular therapy products');
+    }
+
+    // STEP 3: Analyze diagnosis complexity
+    const complexityAnalysis = analyzeDiagnosisComplexity(
+      episodeData.primaryDiagnosis,
+      secondaryDiagnoses,
+      { treatmentFailures: treatmentHistory.conservativeCareAttempts },
+      woundCharacteristics
+    );
+    auditTrail.push(...complexityAnalysis.auditTrail);
+
+    // STEP 4: Map wound type
+    const woundTypeMapping = await mapICD10ToWoundType(episodeData.primaryDiagnosis);
+    auditTrail.push(...woundTypeMapping.auditTrail);
+
+    if (woundTypeMapping.confidence < 50) {
+      failureReasons.push('Low confidence in wound type classification');
+      policyViolations.push('Uncertain wound type may not qualify for coverage');
+    }
+
+    // STEP 5: Medicare-specific policy checks
+    auditTrail.push('Performing Medicare LCD L39806 compliance checks');
+
+    // Check for diabetic foot ulcer specific requirements
+    const isDiabeticFootUlcer = woundTypeMapping.woundType === 'diabetic_foot_ulcer' ||
+                               episodeData.primaryDiagnosis.startsWith('E1') ||
+                               patientCondition.diabeticStatus === 'diabetic';
+
+    if (isDiabeticFootUlcer) {
+      auditTrail.push('Identified as diabetic foot ulcer - applying DFU-specific criteria');
+      
+      // Check for Wagner grade requirements
+      const wagnerGrade = woundCharacteristics?.wagnerGrade || 0;
+      if (wagnerGrade < 1) {
+        policyViolations.push('Wagner Grade 1 or higher required for DFU CTP coverage');
+        failureReasons.push('Insufficient wound severity documentation (Wagner Grade)');
+      }
+
+      // Check for adequate conservative care duration
+      const conservativeCareWeeks = treatmentHistory.conservativeCareAttempts;
+      if (conservativeCareWeeks < 4) {
+        policyViolations.push('Minimum 4 weeks of conservative care required before CTP');
+        failureReasons.push('Insufficient conservative care duration documented');
+      }
+    }
+
+    // STEP 6: Documentation completeness check
+    const hasWoundMeasurements = validatorEncounters.some(enc => 
+      enc.woundDetails?.length || enc.woundDetails?.width || enc.woundDetails?.area
+    );
+
+    if (!hasWoundMeasurements) {
+      policyViolations.push('Wound measurements required for coverage determination');
+      failureReasons.push('Missing wound size documentation');
+    }
+
+    // Check for vascular assessment documentation
+    const hasVascularAssessment = validatorEncounters.some(enc =>
+      enc.woundDetails?.vascularStatus && enc.woundDetails.vascularStatus !== 'unknown'
+    );
+
+    if (!hasVascularAssessment) {
+      policyViolations.push('Vascular assessment required for wound therapy coverage');
+      failureReasons.push('Missing vascular assessment documentation');
+    }
+
+    // STEP 7: Overall eligibility determination
+    const overallEligible = failureReasons.length === 0 && 
+                           diagnosisValidation.isValid && 
+                           clinicalNecessity.necessityLevel !== 'low' &&
+                           woundTypeMapping.confidence >= 50;
+
+    auditTrail.push(`Pre-eligibility determination: ${overallEligible ? 'ELIGIBLE' : 'NOT ELIGIBLE'}`);
+    auditTrail.push(`Total failure reasons: ${failureReasons.length}`);
+    auditTrail.push(`Total policy violations: ${policyViolations.length}`);
+
+    return {
+      overallEligible,
+      failureReasons,
+      auditTrail,
+      policyViolations,
+      validationResults: {
+        diagnosisValidation,
+        clinicalNecessity,
+        complexityAnalysis,
+        woundTypeMapping
+      }
+    };
+
+  } catch (error) {
+    const errorMessage = `Pre-eligibility check failed: ${(error as Error).message}`;
+    auditTrail.push(errorMessage);
+    failureReasons.push(errorMessage);
+    
+    return {
+      overallEligible: false,
+      failureReasons,
+      auditTrail,
+      policyViolations,
+    };
+  }
 }
