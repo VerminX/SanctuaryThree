@@ -44,6 +44,14 @@ import {
 import { useAuth } from "@/hooks/useAuth";
 import { queryClient, getParameterizedQueryFn, apiRequest } from "@/lib/queryClient";
 
+// Safe number formatting function to prevent crashes when data is null/undefined
+function safeFormatNumber(value: number | undefined | null, fallback: string = "N/A"): string {
+  if (value === null || value === undefined || isNaN(Number(value))) {
+    return fallback;
+  }
+  return Number(value).toLocaleString();
+}
+
 // Types for analytics data
 interface DashboardSummary {
   totalPatients: number;
@@ -644,7 +652,7 @@ export default function AnalyticsPage() {
           />
           <SummaryCard
             title="Cost Efficiency"
-            value={isAllLoading ? "..." : (effectiveSummaryData ? `$${effectiveSummaryData.costEfficiency.toLocaleString()}` : "N/A")}
+            value={isAllLoading ? "..." : (effectiveSummaryData ? `$${safeFormatNumber(effectiveSummaryData.costEfficiency)}` : "N/A")}
             icon={DollarSign}
             trend={effectiveSummaryData ? "-3%" : ""}
             trendUp={false}
@@ -804,7 +812,7 @@ export default function AnalyticsPage() {
                 <div className="space-y-4">
                   <div className="text-center">
                     <div className="text-4xl font-bold text-foreground">
-                      {summaryLoading ? "..." : `$${(effectiveSummaryData?.totalCostSavings || 0).toLocaleString()}`}
+                      {summaryLoading ? "..." : `$${safeFormatNumber(effectiveSummaryData?.totalCostSavings, "0")}`}
                     </div>
                     <p className="text-sm text-muted-foreground">This Period</p>
                   </div>
@@ -1081,13 +1089,13 @@ function FinancialAnalyticsSection({ data, loading }: FinancialAnalyticsSectionP
             <div className="space-y-2">
               <p className="text-sm text-muted-foreground">Captured Revenue</p>
               <p className="text-2xl font-bold text-success">
-                ${(data?.reimbursementCapture?.captured || 0).toLocaleString()}
+                ${safeFormatNumber(data?.reimbursementCapture?.captured, "0")}
               </p>
             </div>
             <div className="space-y-2">
               <p className="text-sm text-muted-foreground">Potential Revenue</p>
               <p className="text-2xl font-bold">
-                ${(data?.reimbursementCapture?.potential || 0).toLocaleString()}
+                ${safeFormatNumber(data?.reimbursementCapture?.potential, "0")}
               </p>
             </div>
             <div className="space-y-2">
