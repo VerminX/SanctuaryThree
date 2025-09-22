@@ -3744,8 +3744,23 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       } catch (extractionError) {
         console.error('Error extracting text from PDF:', extractionError);
-        await storage.updateFileUploadStatus(uploadId, 'failed', (extractionError as Error).message);
-        res.status(500).json({ message: "Failed to extract text from PDF" });
+        
+        // Check if this is a validation error (malformed PDF, password-protected, etc.)
+        if ((extractionError as any).isValidationError) {
+          // Update status to failed with user-friendly message
+          await storage.updateFileUploadStatus(uploadId, 'extraction_failed', (extractionError as Error).message);
+          return res.status(400).json({ 
+            message: (extractionError as Error).message,
+            isValidationError: true
+          });
+        }
+        
+        // For all other errors, return 500 (server error)
+        await storage.updateFileUploadStatus(uploadId, 'extraction_failed', (extractionError as Error).message);
+        res.status(500).json({ 
+          message: "Failed to extract text from PDF",
+          error: process.env.NODE_ENV === 'development' ? (extractionError as Error).message : 'Internal extraction error'
+        });
       }
     } catch (error) {
       console.error("Error in text extraction:", error);
@@ -3965,6 +3980,124 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error("Error fetching uploads:", error);
       res.status(500).json({ message: "Failed to fetch uploads" });
+    }
+  });
+
+  // Get extracted data for a specific upload
+  app.get('/api/upload/:uploadId/extracted-data', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const { uploadId } = req.params;
+      
+      // Get the file upload record to verify ownership
+      const upload = await storage.getFileUpload(uploadId);
+      if (!upload) {
+        return res.status(404).json({ message: "Upload not found" });
+      }
+      
+      // Verify user has access to this file
+      const userTenantRole = await storage.getUserTenantRole(userId, upload.tenantId);
+      if (!userTenantRole) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+
+      // Get the extracted data
+      const extractedData = await storage.getPdfExtractedDataByFileUpload(uploadId);
+      if (!extractedData) {
+        return res.status(404).json({ 
+          message: "No extracted data found",
+          hasData: false
+        });
+      }
+
+      try {
+        // Decrypt the extracted data for frontend display (non-PHI parts only)
+        const { decryptPHI } = await import('./services/encryption');
+        
+        const patientData = extractedData.extractedPatientData as any;
+        const encounterDataArray = extractedData.extractedEncounterData as any;
+        
+        // Decrypt non-sensitive patient data for display (keeping PHI safe)
+        const displayPatientData = {
+          mrn: patientData?.mrn ? decryptPHI(patientData.mrn) : undefined,
+          firstName: patientData?.firstName ? decryptPHI(patientData.firstName) : undefined,
+          lastName: patientData?.lastName ? decryptPHI(patientData.lastName) : undefined,
+          dateOfBirth: patientData?.dateOfBirth ? decryptPHI(patientData.dateOfBirth) : undefined,
+          payerType: patientData?.payerType,
+          planName: patientData?.planName,
+          insuranceId: patientData?.insuranceId ? decryptPHI(patientData.insuranceId) : undefined,
+          secondaryPayerType: patientData?.secondaryPayerType,
+          secondaryPlanName: patientData?.secondaryPlanName,
+          secondaryInsuranceId: patientData?.secondaryInsuranceId ? decryptPHI(patientData.secondaryInsuranceId) : undefined,
+          macRegion: patientData?.macRegion,
+          phoneNumber: patientData?.phoneNumber ? decryptPHI(patientData.phoneNumber) : undefined,
+          address: patientData?.address ? decryptPHI(patientData.address) : undefined
+        };
+
+        // Process encounter data (decrypt sensitive notes)
+        const displayEncounterData = Array.isArray(encounterDataArray) ? encounterDataArray.map((encounter: any) => ({
+          encounterDate: encounter?.encounterDate,
+          notes: encounter?.notes?.map((note: string) => {
+            try {
+              return decryptPHI(note);
+            } catch {
+              return note; // Return as-is if not encrypted
+            }
+          }),
+          woundDetails: encounter?.woundDetails,
+          conservativeCare: encounter?.conservativeCare,
+          infectionStatus: encounter?.infectionStatus,
+          procedureCodes: encounter?.procedureCodes,
+          vascularAssessment: encounter?.vascularAssessment,
+          functionalStatus: encounter?.functionalStatus,
+          diabeticStatus: encounter?.diabeticStatus,
+          comorbidities: encounter?.comorbidities,
+          assessment: encounter?.assessment ? decryptPHI(encounter.assessment) : undefined,
+          plan: encounter?.plan ? decryptPHI(encounter.plan) : undefined
+        })) : [];
+
+        // Determine if we can create records based on data completeness
+        const canCreateRecords = !!(
+          displayPatientData.firstName && 
+          displayPatientData.lastName && 
+          displayPatientData.mrn &&
+          displayEncounterData.length > 0
+        );
+
+        // Get missing fields for validation
+        const missingFields: string[] = [];
+        if (!displayPatientData.firstName) missingFields.push('Patient First Name');
+        if (!displayPatientData.lastName) missingFields.push('Patient Last Name');
+        if (!displayPatientData.mrn) missingFields.push('Medical Record Number');
+        if (!displayPatientData.dateOfBirth) missingFields.push('Date of Birth');
+        if (displayEncounterData.length === 0) missingFields.push('Encounter Data');
+
+        res.json({
+          extractionId: extractedData.id,
+          confidence: parseFloat(extractedData.extractionConfidence || '0'),
+          validationScore: parseFloat(extractedData.validationScore || '0'),
+          isComplete: canCreateRecords,
+          missingFields,
+          warnings: [],
+          patientData: displayPatientData,
+          encounterData: displayEncounterData,
+          canCreateRecords,
+          hasData: true,
+          dataExtractedAt: extractedData.createdAt
+        });
+
+      } catch (decryptionError) {
+        console.error('Error decrypting extracted data:', decryptionError);
+        return res.status(500).json({ 
+          message: "Error processing extracted data",
+          hasData: true,
+          canCreateRecords: false
+        });
+      }
+
+    } catch (error) {
+      console.error("Error fetching extracted data:", error);
+      res.status(500).json({ message: "Failed to fetch extracted data" });
     }
   });
 

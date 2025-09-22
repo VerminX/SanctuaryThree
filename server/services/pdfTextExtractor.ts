@@ -41,7 +41,43 @@ export class PdfTextExtractor {
       };
     } catch (error) {
       console.error('Error extracting text from PDF:', error);
-      throw new Error('Failed to extract text from PDF: ' + (error as Error).message);
+      const errorMessage = (error as Error).message || 'Unknown error';
+      
+      // Handle specific PDF format errors that should return 400 instead of 500
+      if (errorMessage.includes('FormatError') || 
+          errorMessage.includes('bad XRef entry') ||
+          errorMessage.includes('Invalid PDF structure') ||
+          errorMessage.includes('PDF is corrupted') ||
+          errorMessage.includes('unexpected end of input') ||
+          errorMessage.includes('Invalid or corrupted PDF') ||
+          errorMessage.includes('PDF header signature not found')) {
+        
+        // Create a user-friendly validation error for malformed PDFs
+        const validationError = new Error('This PDF file appears to be corrupted or in an unsupported format. Please try uploading a different PDF file or ensure the file is not damaged.');
+        (validationError as any).isValidationError = true; // Mark as validation error
+        throw validationError;
+      }
+      
+      // Handle password-protected PDFs
+      if (errorMessage.includes('password') || 
+          errorMessage.includes('encrypted') ||
+          errorMessage.includes('security')) {
+        const validationError = new Error('This PDF file is password-protected or encrypted. Please upload an unlocked PDF file.');
+        (validationError as any).isValidationError = true;
+        throw validationError;
+      }
+      
+      // Handle unsupported PDF versions or features
+      if (errorMessage.includes('unsupported') || 
+          errorMessage.includes('not supported') ||
+          errorMessage.includes('version')) {
+        const validationError = new Error('This PDF file uses features that are not supported. Please try converting it to a standard PDF format.');
+        (validationError as any).isValidationError = true;
+        throw validationError;
+      }
+      
+      // Generic server error for other cases
+      throw new Error('Failed to extract text from PDF: ' + errorMessage);
     }
   }
 

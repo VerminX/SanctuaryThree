@@ -394,6 +394,7 @@ export async function extractDataFromPdfText(pdfText: string): Promise<PdfExtrac
     // For development testing, allow non-BAA processing
     if (process.env.NODE_ENV === 'development') {
       console.warn('WARNING: Using OpenAI.com API for PHI processing in development mode. Only allowed for testing with synthetic data.');
+      // Allow development mode processing for testing purposes
     } else if (process.env.DEVELOPMENT_ALLOW_NON_BAA_PHI !== 'true') {
       throw new Error('HIPAA VIOLATION PREVENTED: PHI processing requires BAA-compliant provider. Set DEVELOPMENT_ALLOW_NON_BAA_PHI=true only for synthetic data testing.');
     }
