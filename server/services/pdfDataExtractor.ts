@@ -30,6 +30,19 @@ export interface ExtractedEncounterData {
   notes?: string[];
   clinicalFindings?: string[]; // Comprehensive clinical observations and findings
   
+  // Diagnosis information (ICD-10 codes)
+  primaryDiagnosis?: {
+    description?: string;
+    icd10Code?: string;
+  };
+  icd10Codes?: string[]; // Array of all ICD-10 codes mentioned
+  problemList?: Array<{
+    description: string;
+    icd10Code?: string;
+    onsetDate?: string; // YYYY-MM-DD format
+    status?: 'active' | 'resolved' | 'chronic';
+  }>;
+  
   // Treatment details
   treatmentDetails?: {
     proceduresPerformed?: string[];
@@ -375,6 +388,117 @@ export interface PdfExtractionResult {
   warnings: string[]; // Any issues or missing data warnings
 }
 
+// Helper function to map problem descriptions to ICD-10 codes
+function mapProblemToICD10(description: string): string | null {
+  const descriptionLower = description.toLowerCase();
+  
+  // Map common problem descriptions to ICD-10 codes
+  const mappings: Record<string, string> = {
+    // Diabetic foot ulcer variations
+    'ulcer of left foot due to type 2 diabetes': 'E11.621',
+    'ulcer of right foot due to type 2 diabetes': 'E11.621',
+    'ulcer of foot due to type 2 diabetes': 'E11.621',
+    'diabetic foot ulcer': 'E11.621',
+    'dfu': 'E11.621',
+    'diabetic ulcer': 'E11.621',
+    
+    // Fungal infections
+    'onychomycosis': 'B35.1',
+    'fungal nail infection': 'B35.1',
+    'tinea unguium': 'B35.1',
+    
+    // Gait and mobility issues
+    'walking disability': 'R26.2',
+    'difficulty walking': 'R26.2',
+    'antalgic gait': 'R26.89',
+    'gait abnormality': 'R26.89',
+    'abnormal gait': 'R26.89',
+    
+    // Venous ulcers
+    'venous stasis ulcer': 'I87.33',
+    'venous ulcer': 'I87.33',
+    'stasis ulcer': 'I87.33',
+    'venous insufficiency ulcer': 'I87.33',
+    'vlu': 'I87.33',
+    
+    // Pressure ulcers
+    'pressure ulcer': 'L89.9',
+    'pressure sore': 'L89.9',
+    'decubitus ulcer': 'L89.9',
+    'bedsore': 'L89.9',
+    
+    // Nervous system disorders due to diabetes
+    'disorder of nervous system due to type 2 diabetes': 'E11.40',
+    'diabetic neuropathy': 'E11.40',
+    'diabetic peripheral neuropathy': 'E11.40',
+    
+    // Amputations
+    'amputated big toe': 'Z89.411',
+    'amputation of toe': 'Z89.419',
+    'toe amputation': 'Z89.419',
+    
+    // Arterial conditions
+    'peripheral arterial disease': 'I73.9',
+    'pad': 'I73.9',
+    'pvd': 'I73.9',
+    'peripheral vascular disease': 'I73.9',
+    
+    // Cellulitis
+    'cellulitis of foot': 'L03.116',
+    'cellulitis of toe': 'L03.039',
+    'cellulitis of leg': 'L03.115',
+    
+    // Osteomyelitis
+    'osteomyelitis of foot': 'M86.671',
+    'osteomyelitis': 'M86.9',
+    'bone infection': 'M86.9',
+    
+    // Diabetic angiopathy
+    'diabetic angiopathy': 'E11.51',
+    'diabetic peripheral angiopathy': 'E11.51',
+    
+    // Lymphedema
+    'lymphedema': 'I89.0',
+    'lymphatic obstruction': 'I89.0',
+    
+    // Chronic wound
+    'chronic ulcer of lower limb': 'L97.909',
+    'non-healing wound': 'L97.909',
+    'chronic wound': 'L97.909'
+  };
+  
+  // Check for exact matches first
+  for (const [key, code] of Object.entries(mappings)) {
+    if (descriptionLower === key || descriptionLower.includes(key)) {
+      return code;
+    }
+  }
+  
+  // Check for partial matches with more specific patterns
+  if (descriptionLower.includes('ulcer') && descriptionLower.includes('foot') && 
+      (descriptionLower.includes('diabet') || descriptionLower.includes('type 2'))) {
+    return 'E11.621';
+  }
+  
+  if (descriptionLower.includes('ulcer') && descriptionLower.includes('venous')) {
+    return 'I87.33';
+  }
+  
+  if (descriptionLower.includes('ulcer') && descriptionLower.includes('pressure')) {
+    return 'L89.9';
+  }
+  
+  if (descriptionLower.includes('amputat') && descriptionLower.includes('toe')) {
+    return 'Z89.419';
+  }
+  
+  if (descriptionLower.includes('neuropath') && descriptionLower.includes('diabet')) {
+    return 'E11.40';
+  }
+  
+  return null;
+}
+
 export async function extractDataFromPdfText(pdfText: string): Promise<PdfExtractionResult> {
   // HIPAA COMPLIANCE: BLOCK processing of PHI without proper BAA-compliant provider
   const azureApiKey = process.env.AZURE_OPENAI_API_KEY;
@@ -437,6 +561,13 @@ COMPLETENESS MANDATE:
 - Include detailed wound measurements, drainage descriptions, and healing progression
 - Extract provider recommendations, follow-up instructions, and treatment modifications
 
+DIAGNOSIS AND ICD-10 EXTRACTION:
+- Look for "Problems", "Problem List", or "Diagnoses" sections
+- Extract ALL ICD-10 diagnosis codes explicitly mentioned (format: A00.0 through Z99.9)
+- Capture the primary diagnosis for the encounter
+- Build a comprehensive problem list with descriptions, ICD-10 codes, and onset dates
+- Map common problem descriptions to ICD-10 codes when codes are not explicitly stated
+
 ENCOUNTER IDENTIFICATION:
 - Look for date patterns, visit numbers, follow-up references, or chronological treatment progressions
 - Each distinct clinical encounter should have comprehensive notes, assessment, and plan
@@ -448,6 +579,7 @@ Instructions:
 - Extract numeric measurements precisely with units when available
 - Group conservative care by category with specific details and timeframes
 - Include direct quotes from clinical notes when they provide important context
+- Extract all diagnosis codes and problem descriptions systematically
 
 PHASE 4.1 VASCULAR ASSESSMENT EXTRACTION:
 - Extract ALL vascular study data including ABI, TBI, TcPO2, PVR, angiography results
@@ -492,6 +624,19 @@ Return JSON in this exact format:
       "encounterDate": "YYYY-MM-DD | null",
       "notes": ["string"] | null,
       "clinicalFindings": ["string"] | null,
+      "primaryDiagnosis": {
+        "description": "string | null",
+        "icd10Code": "string | null"
+      } | null,
+      "icd10Codes": ["string"] | null,
+      "problemList": [
+        {
+          "description": "string",
+          "icd10Code": "string | null",
+          "onsetDate": "YYYY-MM-DD | null",
+          "status": "active | resolved | chronic | null"
+        }
+      ] | null,
       "treatmentDetails": {
         "proceduresPerformed": ["string"] | null,
         "cptCodes": [{"code": "string", "description": "string", "modifier": "string | null"}] | null,
@@ -920,6 +1065,78 @@ Return JSON in this exact format:
     console.log('Found diabetic status indicator');
   }
   
+  // Extract ICD-10 diagnosis codes
+  const icd10Patterns = [
+    /\b([A-TV-Z][0-9][0-9AB]\.?[0-9]{0,4})\b/gi, // Standard ICD-10 format
+    /ICD[-\s]?10[:\s]+([A-TV-Z][0-9][0-9AB]\.?[0-9]{0,4})/gi, // With ICD-10 prefix
+    /(?:code|diagnosis)[:\s]+([A-TV-Z][0-9][0-9AB]\.?[0-9]{0,4})/gi, // With "code" or "diagnosis" prefix
+  ];
+  
+  const extractedICD10Codes: string[] = [];
+  for (const pattern of icd10Patterns) {
+    const matches = Array.from(pdfText.matchAll(pattern));
+    matches.forEach(match => {
+      if (match[1]) {
+        // Normalize the code format (add decimal point if missing)
+        let code = match[1].toUpperCase();
+        if (code.length > 3 && !code.includes('.')) {
+          code = code.substring(0, 3) + '.' + code.substring(3);
+        }
+        if (!extractedICD10Codes.includes(code)) {
+          extractedICD10Codes.push(code);
+        }
+      }
+    });
+  }
+  
+  // Extract problem descriptions that might map to ICD-10 codes
+  const problemPatterns = [
+    /Problems[:\s]*([\s\S]*?)(?=\n\n|Family History|Social History|Advance Directive|HPI|ROS|Physical Exam|Assessment|Plan|$)/gi,
+    /Diagnoses[:\s]*([\s\S]*?)(?=\n\n|Family History|Social History|Advance Directive|HPI|ROS|Physical Exam|Assessment|Plan|$)/gi,
+    /Problem List[:\s]*([\s\S]*?)(?=\n\n|Family History|Social History|Advance Directive|HPI|ROS|Physical Exam|Assessment|Plan|$)/gi,
+  ];
+  
+  const extractedProblems: Array<{description: string, icd10Code?: string}> = [];
+  for (const pattern of problemPatterns) {
+    const matches = Array.from(pdfText.matchAll(pattern));
+    matches.forEach(match => {
+      if (match[1]) {
+        // Split by common delimiters and extract individual problems
+        const problemLines = match[1].split(/[\n\r]+/).filter(line => line.trim());
+        problemLines.forEach(line => {
+          // Clean up the line and extract problem description
+          const cleanedLine = line.replace(/^[\s\-\*•]+/, '').trim();
+          if (cleanedLine && cleanedLine.length > 3) {
+            // Extract onset date if present
+            const onsetMatch = cleanedLine.match(/Onset:\s*(\d{1,2}\/\d{1,2}\/\d{4})/i);
+            const description = cleanedLine.replace(/\s*-?\s*Onset:.*$/i, '').trim();
+            
+            // Try to map to ICD-10 code
+            const mappedCode = mapProblemToICD10(description);
+            
+            extractedProblems.push({
+              description: description,
+              icd10Code: mappedCode || undefined
+            });
+            
+            // Add mapped code to extracted codes if found
+            if (mappedCode && !extractedICD10Codes.includes(mappedCode)) {
+              extractedICD10Codes.push(mappedCode);
+            }
+          }
+        });
+      }
+    });
+  }
+  
+  if (extractedICD10Codes.length > 0) {
+    console.log(`Found ${extractedICD10Codes.length} ICD-10 code(s)`);  
+  }
+  
+  if (extractedProblems.length > 0) {
+    console.log(`Found ${extractedProblems.length} problem(s) in problem list`);
+  }
+  
   try {
     const modelName = azureApiKey ? azureDeployment : "gpt-4o-mini";
     console.log('Using AI model:', modelName);
@@ -941,6 +1158,8 @@ PRE-EXTRACTED CRITICAL DATA (verify and incorporate):
 - Wound Measurements Found: ${extractedMeasurements.map(m => m.full).join(', ') || 'None found via regex'}
 - Vascular Findings: ${JSON.stringify(extractedVascular) || 'None found via regex'}
 - Diabetic Status: ${diabeticStatus || 'Not found via regex'}
+- ICD-10 Codes Found: ${extractedICD10Codes.join(', ') || 'None found via regex'}
+- Problems Found: ${extractedProblems.map(p => `${p.description}${p.icd10Code ? ` (${p.icd10Code})` : ''}`).join(', ') || 'None found via regex'}
 
 CRITICAL EXTRACTION RULES:
 1. MEASUREMENTS - Convert to NUMERIC values:
@@ -973,6 +1192,21 @@ CRITICAL EXTRACTION RULES:
 6. DIABETIC STATUS - Explicitly identify:
    - "diabetic", "nondiabetic", "prediabetic"
    - Look for mentions of DM, IDDM, NIDDM, or "no history of diabetes"
+
+7. DIAGNOSIS AND ICD-10 EXTRACTION:
+   - Extract ALL ICD-10 codes mentioned in the document
+   - Look for "Problems" or "Problem List" sections and extract each problem with its details
+   - Map problem descriptions to ICD-10 codes:
+     * "Ulcer of left/right foot due to type 2 diabetes" → E11.621
+     * "Diabetic foot ulcer" → E11.621  
+     * "Onychomycosis" → B35.1
+     * "Walking disability" → R26.2
+     * "Antalgic gait" → R26.89
+     * "Disorder of nervous system due to type 2 diabetes" → E11.40
+     * "Venous stasis ulcer" → I87.33
+     * "Pressure ulcer" → L89.9
+   - Extract onset dates when mentioned (e.g., "Onset: 05/22/2025")
+   - Identify the primary diagnosis for the encounter
 
 SPECIFIC REQUIREMENTS:
 - Extract COMPLETE clinical notes, assessments, and plans for each encounter date
