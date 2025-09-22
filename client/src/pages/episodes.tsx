@@ -48,19 +48,20 @@ export default function Episodes() {
   const currentTenant = user?.tenants?.[0];
 
   // Get patients for dropdown (only needed for create episode form)
-  const { data: patients, isLoading: patientsLoading, error: patientsError } = useQuery<Array<{
+  const { data: patients, isLoading: patientsLoading, error: patientsError, refetch: refetchPatients } = useQuery<Array<{
     id: string;
     firstName: string;
     lastName: string;
     mrn: string;
   }>>({
     queryKey: [`/api/tenants/${currentTenant?.id}/patients`],
-    enabled: !!currentTenant?.id,
+    enabled: !!currentTenant?.id && isCreateDialogOpen, // Only fetch when dialog is open and tenant is available
     retry: (failureCount, error) => {
       console.error('Patients query failed:', error);
-      return failureCount < 1; // Retry once
+      return failureCount < 2; // Retry twice for better recovery
     },
     staleTime: 1000 * 60 * 5, // Cache for 5 minutes
+    refetchOnWindowFocus: false, // Prevent refetch on window focus
   });
 
   // OPTIMIZED: Use bulk endpoint instead of N+1 queries for Episodes page  
@@ -85,14 +86,25 @@ export default function Episodes() {
     retry: false,
   });
 
+  // Handle modal open/close with proper state reset
+  const handleCreateDialogChange = (open: boolean) => {
+    setIsCreateDialogOpen(open);
+    if (!open) {
+      // Reset state when closing
+      setSelectedPatientId("");
+    } else if (open && currentTenant?.id) {
+      // Refetch patients when opening the dialog
+      refetchPatients();
+    }
+  };
+
   const createEpisodeMutation = useMutation({
     mutationFn: async (episodeData: any) => {
       await apiRequest("POST", `/api/patients/${selectedPatientId}/episodes`, episodeData);
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/episodes-with-patients", currentTenant?.id] });
-      setIsCreateDialogOpen(false);
-      setSelectedPatientId("");
+      handleCreateDialogChange(false); // Use the handler to close and reset
       toast({
         title: "Success",
         description: "Episode created successfully",
@@ -236,9 +248,14 @@ export default function Episodes() {
               </p>
             </div>
             
-            <Dialog open={isCreateDialogOpen} onOpenChange={setIsCreateDialogOpen}>
+            <Dialog open={isCreateDialogOpen} onOpenChange={handleCreateDialogChange}>
               <DialogTrigger asChild>
-                <Button className="space-x-2" data-testid="button-create-episode">
+                <Button 
+                  className="space-x-2" 
+                  data-testid="button-create-episode"
+                  disabled={!currentTenant?.id}
+                  title={!currentTenant?.id ? "Loading tenant information..." : "Create a new episode"}
+                >
                   <Plus className="h-4 w-4" />
                   <span>Create Episode</span>
                 </Button>
@@ -267,7 +284,15 @@ export default function Episodes() {
                         )}
                         {patientsError && (
                           <div className="p-2 text-sm text-destructive text-center">
-                            Error loading patients: {patientsError instanceof Error ? patientsError.message : 'Unknown error'}
+                            <div>Error loading patients: {patientsError instanceof Error ? patientsError.message : 'Unknown error'}</div>
+                            <Button
+                              variant="link"
+                              size="sm"
+                              onClick={() => refetchPatients()}
+                              className="mt-1 h-auto p-0 text-xs"
+                            >
+                              Try again
+                            </Button>
                           </div>
                         )}
                         {!patientsLoading && !patientsError && patients && Array.isArray(patients) && patients.length === 0 && (
@@ -293,10 +318,7 @@ export default function Episodes() {
                   {selectedPatientId && (
                     <EpisodeForm
                       onSubmit={(data) => createEpisodeMutation.mutate(data)}
-                      onCancel={() => {
-                        setIsCreateDialogOpen(false);
-                        setSelectedPatientId("");
-                      }}
+                      onCancel={() => handleCreateDialogChange(false)}
                       isLoading={createEpisodeMutation.isPending}
                       patientId={selectedPatientId}
                       mode="create"
