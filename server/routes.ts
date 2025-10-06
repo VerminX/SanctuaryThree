@@ -3058,7 +3058,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ message: "Tenant not found" });
       }
 
-      const policies = await storage.getPolicySourcesByMAC(tenant.macRegion);
+      const policies = await storage.getAllPolicySources();
       res.json(policies);
     } catch (error) {
       console.error("Error fetching policies:", error);
