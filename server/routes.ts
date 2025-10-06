@@ -3083,10 +3083,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ message: "Tenant not found" });
       }
 
-      console.log(`Policy refresh triggered by user: ${userId} for tenant: ${tenantId} (MAC: ${tenant.macRegion})`);
+      console.log(`Policy refresh triggered by user: ${userId} for tenant: ${tenantId} - refreshing ALL MAC regions`);
       
-      // Perform MAC-specific policy update
-      const result = await performPolicyUpdateForMAC(tenant.macRegion);
+      // Perform full policy update for ALL MAC regions
+      const result = await performPolicyUpdate();
       
       // Log audit event for tenant-specific action
       await storage.createAuditLog({
@@ -3094,7 +3094,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         userId,
         action: 'TRIGGER_TENANT_POLICY_REFRESH',
         entity: 'PolicySource',
-        entityId: tenant.macRegion,
+        entityId: 'all_regions',
         ipAddress: req.ip,
         userAgent: req.get('User-Agent'),
         previousHash: '',
@@ -3104,15 +3104,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
       await trackActivity(
         tenantId,
         userId,
-        'Refreshed policy database',
+        'Refreshed policy database for all MAC regions',
         'PolicyUpdate',
-        tenant.macRegion,
-        `MAC region ${tenant.macRegion}`
+        'all_regions',
+        'All MAC regions'
       );
 
       res.json({
-        message: `Policy refresh completed successfully for MAC region ${tenant.macRegion}`,
-        macRegion: tenant.macRegion,
+        message: 'Policy refresh completed successfully for all MAC regions',
         result
       });
     } catch (error) {
