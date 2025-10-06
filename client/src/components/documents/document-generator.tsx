@@ -32,24 +32,6 @@ interface DocumentGeneratorProps {
   isLoading: boolean;
 }
 
-const DOCUMENT_TEMPLATES = [
-  {
-    id: "medicare-original",
-    name: "Medicare Original",
-    description: "Standard LCD template",
-  },
-  {
-    id: "medicare-advantage",
-    name: "Medicare Advantage", 
-    description: "Plan-specific requirements",
-  },
-  {
-    id: "custom",
-    name: "Custom Template",
-    description: "Clinic-specific format",
-  },
-];
-
 export default function DocumentGenerator({
   patients,
   onGenerateDocument,
@@ -59,7 +41,6 @@ export default function DocumentGenerator({
 }: DocumentGeneratorProps) {
   const [selectedPatient, setSelectedPatient] = useState<string>("");
   const [selectedEligibilityCheck, setSelectedEligibilityCheck] = useState<string>("");
-  const [selectedTemplate, setSelectedTemplate] = useState<string>("medicare-original");
 
   const selectedPatientData = patients.find(p => p.id === selectedPatient);
 
@@ -122,29 +103,6 @@ export default function DocumentGenerator({
               </Select>
             </div>
           )}
-
-          <div>
-            <label className="block text-sm font-medium text-foreground mb-2">
-              Document Template
-            </label>
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-              {DOCUMENT_TEMPLATES.map((template) => (
-                <button
-                  key={template.id}
-                  onClick={() => setSelectedTemplate(template.id)}
-                  className={`p-3 border rounded-lg text-left transition-colors ${
-                    selectedTemplate === template.id
-                      ? "border-primary bg-primary/5"
-                      : "border-border hover:bg-muted/50"
-                  }`}
-                  data-testid={`template-${template.id}`}
-                >
-                  <p className="text-sm font-medium text-foreground">{template.name}</p>
-                  <p className="text-xs text-muted-foreground">{template.description}</p>
-                </button>
-              ))}
-            </div>
-          </div>
         </div>
 
         {/* Document Generation Buttons */}
