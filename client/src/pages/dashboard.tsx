@@ -114,10 +114,6 @@ export default function Dashboard() {
                     <Users className="text-primary text-xl" />
                   </div>
                 </div>
-                <div className="mt-4 flex items-center text-sm">
-                  <span className="text-chart-2 font-medium">+12%</span>
-                  <span className="text-muted-foreground ml-1">vs last month</span>
-                </div>
               </CardContent>
             </Card>
 
@@ -133,10 +129,6 @@ export default function Dashboard() {
                   <div className="w-12 h-12 bg-chart-3/10 rounded-lg flex items-center justify-center">
                     <Search className="text-chart-3 text-xl" />
                   </div>
-                </div>
-                <div className="mt-4 flex items-center text-sm">
-                  <span className="text-chart-3 font-medium">-3</span>
-                  <span className="text-muted-foreground ml-1">since yesterday</span>
                 </div>
               </CardContent>
             </Card>
@@ -154,10 +146,6 @@ export default function Dashboard() {
                     <FileText className="text-chart-2 text-xl" />
                   </div>
                 </div>
-                <div className="mt-4 flex items-center text-sm">
-                  <span className="text-chart-2 font-medium">+24</span>
-                  <span className="text-muted-foreground ml-1">this week</span>
-                </div>
               </CardContent>
             </Card>
 
@@ -173,10 +161,6 @@ export default function Dashboard() {
                   <div className="w-12 h-12 bg-chart-5/10 rounded-lg flex items-center justify-center">
                     <RefreshCw className="text-chart-5 text-xl" />
                   </div>
-                </div>
-                <div className="mt-4 flex items-center text-sm">
-                  <span className="text-muted-foreground">Last sync:</span>
-                  <span className="text-foreground ml-1 font-medium">2 hours ago</span>
                 </div>
               </CardContent>
             </Card>
