@@ -161,7 +161,7 @@ export default function ReportsPage() {
   const [generatedReports, setGeneratedReports] = useState<GeneratedReport[]>([]);
 
   // Safe array helper function
-  const safeArray = <T>(array: T[] | undefined | null): T[] => {
+  const safeArray = <T,>(array: T[] | undefined | null): T[] => {
     return Array.isArray(array) ? array : [];
   };
 
@@ -174,7 +174,7 @@ export default function ReportsPage() {
   });
 
   // Extract templates from API response structure
-  const templates: ReportTemplates | undefined = templatesResponse?.success ? templatesResponse.templates : undefined;
+  const templates: ReportTemplates | undefined = (templatesResponse as any)?.success ? (templatesResponse as any).templates : undefined;
 
   // Generate report mutation
   const generateReportMutation = useMutation({
@@ -221,12 +221,10 @@ export default function ReportsPage() {
   // Quick export mutations for common reports
   const exportClinicalSummaryMutation = useMutation({
     mutationFn: async ({ format, tenantId, startDate, endDate }: any) => {
-      const response = await apiRequest(`/api/analytics/export/clinical-summary?tenantId=${tenantId}&format=${format}&startDate=${startDate}&endDate=${endDate}`, {
-        method: 'GET'
-      });
-      return response;
+      const response = await apiRequest('GET', `/api/analytics/export/clinical-summary?tenantId=${tenantId}&format=${format}&startDate=${startDate}&endDate=${endDate}`);
+      return await response.json();
     },
-    onSuccess: (data) => {
+    onSuccess: (data: any) => {
       if (data.success && data.report) {
         toast({
           title: "Clinical Summary Generated",
@@ -247,12 +245,10 @@ export default function ReportsPage() {
 
   const exportComplianceReportMutation = useMutation({
     mutationFn: async ({ format, tenantId, startDate, endDate }: any) => {
-      const response = await apiRequest(`/api/analytics/export/compliance-report?tenantId=${tenantId}&format=${format}&startDate=${startDate}&endDate=${endDate}`, {
-        method: 'GET'
-      });
-      return response;
+      const response = await apiRequest('GET', `/api/analytics/export/compliance-report?tenantId=${tenantId}&format=${format}&startDate=${startDate}&endDate=${endDate}`);
+      return await response.json();
     },
-    onSuccess: (data) => {
+    onSuccess: (data: any) => {
       if (data.success && data.report) {
         toast({
           title: "Compliance Report Generated",
@@ -749,7 +745,7 @@ export default function ReportsPage() {
                   <Switch
                     checked={options.includeCharts}
                     onCheckedChange={(checked) => 
-                      setOptions(prev => ({ ...prev, includeCharts: checked }))
+                      setOptions((prev: any) => ({ ...prev, includeCharts: checked }))
                     }
                     data-testid="switch-include-charts"
                   />
@@ -765,7 +761,7 @@ export default function ReportsPage() {
                   <Switch
                     checked={options.includeDetails}
                     onCheckedChange={(checked) => 
-                      setOptions(prev => ({ ...prev, includeDetails: checked }))
+                      setOptions((prev: any) => ({ ...prev, includeDetails: checked }))
                     }
                     data-testid="switch-include-details"
                   />
@@ -781,7 +777,7 @@ export default function ReportsPage() {
                   <Switch
                     checked={options.includeCitations}
                     onCheckedChange={(checked) => 
-                      setOptions(prev => ({ ...prev, includeCitations: checked }))
+                      setOptions((prev: any) => ({ ...prev, includeCitations: checked }))
                     }
                     data-testid="switch-include-citations"
                   />
