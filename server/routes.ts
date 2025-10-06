@@ -994,6 +994,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const userId = req.user.claims.sub;
       const { encounterId } = req.params;
+      const { macRegion: requestMacRegion } = req.body;
       
       const encounter = await storage.getEncounter(encounterId);
       if (!encounter) {
@@ -1011,10 +1012,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(403).json({ message: "Access denied" });
       }
 
+      // Use MAC region from request body (user selection) or fall back to patient's stored MAC region
+      const macRegion = requestMacRegion?.trim() || patient.macRegion?.trim();
+      
       // Validate MAC region is present before proceeding with eligibility analysis
-      if (!patient.macRegion?.trim()) {
+      if (!macRegion) {
         return res.status(422).json({ 
-          message: "MAC region is required for eligibility analysis. Please update the patient's profile to include their MAC region before running the analysis.",
+          message: "MAC region is required for eligibility analysis. Please select a MAC region or update the patient's profile to include their MAC region.",
           error: "MISSING_MAC_REGION",
           patientId: patient.id
         });
@@ -1039,7 +1043,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // Build RAG context with enhanced policy selection using patient characteristics and ICD-10 codes
       const ragContext = await buildRAGContext(
-        patient.macRegion,
+        macRegion,
         (encounter.woundDetails as any)?.type || 'DFU',
         (encounter.woundDetails as any)?.location,
         patientCharacteristics,
@@ -1048,9 +1052,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // Log policy selection result for audit purposes
       if (ragContext.selectedPolicyId) {
-        console.log(`Policy selection successful: Selected LCD ${ragContext.selectedPolicyId} for MAC ${patient.macRegion}, wound type: ${(encounter.woundDetails as any)?.type || 'DFU'}`);
+        console.log(`Policy selection successful: Selected LCD ${ragContext.selectedPolicyId} for MAC ${macRegion}, wound type: ${(encounter.woundDetails as any)?.type || 'DFU'}`);
       } else {
-        console.warn(`Policy selection failed: No applicable policy found for MAC ${patient.macRegion}, wound type: ${(encounter.woundDetails as any)?.type || 'DFU'}. Reason: ${ragContext.audit?.selectedReason}`);
+        console.warn(`Policy selection failed: No applicable policy found for MAC ${macRegion}, wound type: ${(encounter.woundDetails as any)?.type || 'DFU'}. Reason: ${ragContext.audit?.selectedReason}`);
       }
 
       // Get ALL encounters in the episode for complete context
@@ -1103,7 +1107,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           secondaryPayerType: patient.secondaryPayerType || undefined,
           secondaryPlanName: patient.secondaryPlanName || undefined,
           secondaryInsuranceId: patient.secondaryInsuranceId || undefined,
-          macRegion: patient.macRegion!, // Safe to use ! here due to validation above
+          macRegion: macRegion, // Use the selected MAC region from request or patient record
         },
         policyContext: ragContext.content,
       });
@@ -1152,6 +1156,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const userId = req.user.claims.sub;
       const { episodeId } = req.params;
+      const { macRegion: requestMacRegion } = req.body;
       
       const episode = await storage.getEpisode(episodeId);
       if (!episode) {
@@ -1169,10 +1174,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(403).json({ message: "Access denied" });
       }
 
+      // Use MAC region from request body (user selection) or fall back to patient's stored MAC region
+      const macRegion = requestMacRegion?.trim() || patient.macRegion?.trim();
+      
       // Validate MAC region is present before proceeding with eligibility analysis
-      if (!patient.macRegion?.trim()) {
+      if (!macRegion) {
         return res.status(422).json({ 
-          message: "MAC region is required for eligibility analysis. Please update the patient's profile to include their MAC region before running the analysis.",
+          message: "MAC region is required for eligibility analysis. Please select a MAC region or update the patient's profile to include their MAC region.",
           error: "MISSING_MAC_REGION",
           patientId: patient.id
         });
@@ -1221,7 +1229,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // Build RAG context with enhanced policy selection using patient characteristics and ICD-10 codes
       const ragContext = await buildRAGContext(
-        patient.macRegion,
+        macRegion,
         episode.woundType || 'DFU',
         episode.woundLocation || (latestEncounter.woundDetails as any)?.location,
         patientCharacteristics,
@@ -1230,9 +1238,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // Log policy selection result for audit purposes
       if (ragContext.selectedPolicyId) {
-        console.log(`Episode-level policy selection successful: Selected LCD ${ragContext.selectedPolicyId} for MAC ${patient.macRegion}, wound type: ${episode.woundType || 'DFU'}`);
+        console.log(`Episode-level policy selection successful: Selected LCD ${ragContext.selectedPolicyId} for MAC ${macRegion}, wound type: ${episode.woundType || 'DFU'}`);
       } else {
-        console.warn(`Episode-level policy selection failed: No applicable policy found for MAC ${patient.macRegion}, wound type: ${episode.woundType || 'DFU'}. Reason: ${ragContext.audit?.selectedReason}`);
+        console.warn(`Episode-level policy selection failed: No applicable policy found for MAC ${macRegion}, wound type: ${episode.woundType || 'DFU'}. Reason: ${ragContext.audit?.selectedReason}`);
       }
 
       // Perform enhanced AI episode-level eligibility analysis with full patient history (NEW DEFAULT)
@@ -1243,7 +1251,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         patient.id,
         {
           payerType: patient.payerType,
-          macRegion: patient.macRegion!, // Safe to use ! here due to validation above
+          macRegion: macRegion, // Use the selected MAC region from request or patient record
         },
         ragContext.content
       );
