@@ -1,5 +1,6 @@
 import { Link, useLocation } from "wouter";
 import { useAuth } from "@/hooks/useAuth";
+import { useTheme } from "@/hooks/useTheme";
 import { 
   Heart, 
   BarChart3, 
@@ -13,6 +14,7 @@ import {
   ChevronDown,
   ChevronRight,
   Moon,
+  Sun,
   TestTube2,
   Upload,
   Calendar,
@@ -49,6 +51,7 @@ const otherNavigationItems = [
 export default function Sidebar() {
   const [location] = useLocation();
   const { user } = useAuth();
+  const { theme, toggleTheme } = useTheme();
   const [isOtherOpen, setIsOtherOpen] = useState(false);
 
   // Defensive check to ensure navigation items are properly defined
@@ -207,8 +210,17 @@ export default function Sidebar() {
             <div className="w-2 h-2 bg-chart-2 rounded-full"></div>
             <span className="text-xs text-muted-foreground">HIPAA Compliant</span>
           </div>
-          <button className="text-muted-foreground hover:text-foreground transition-colors">
-            <Moon className="w-4 h-4" />
+          <button 
+            onClick={toggleTheme}
+            className="text-muted-foreground hover:text-foreground transition-colors"
+            data-testid="button-toggle-theme"
+            aria-label="Toggle theme"
+          >
+            {theme === "light" ? (
+              <Moon className="w-4 h-4" />
+            ) : (
+              <Sun className="w-4 h-4" />
+            )}
           </button>
         </div>
       </div>

@@ -8,7 +8,7 @@ Preferred communication style: Simple, everyday language.
 
 ## System Architecture
 ### UI/UX Decisions
-The frontend uses React with TypeScript and Vite, styled with Shadcn/ui (built on Radix UI) and Tailwind CSS. Wouter handles client-side routing, React Hook Form with Zod manages forms, and TanStack Query is used for server state management.
+The frontend uses React with TypeScript and Vite, styled with Shadcn/ui (built on Radix UI) and Tailwind CSS. Wouter handles client-side routing, React Hook Form with Zod manages forms, and TanStack Query is used for server state management. The application includes a dark mode feature with theme persistence via localStorage, toggled through a Moon/Sun icon button in the sidebar footer.
 
 ### Technical Implementations
 The backend is built with Node.js and Express.js using TypeScript. Drizzle ORM provides type-safe database operations, while Replit Auth (with OpenID Connect/OAuth2) handles authentication. Sessions are managed via Express sessions stored in PostgreSQL. RESTful endpoints ensure consistent API design.
