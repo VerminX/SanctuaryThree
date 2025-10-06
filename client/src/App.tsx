@@ -5,7 +5,6 @@ import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { ThemeProvider } from "@/contexts/ThemeContext";
 import { useAuth } from "@/hooks/useAuth";
-import NotFound from "@/pages/not-found";
 import Landing from "@/pages/landing";
 import Dashboard from "@/pages/dashboard";
 import Analytics from "@/pages/analytics";
@@ -81,8 +80,6 @@ function Router() {
           <Route path="/validation" component={Validation} />
           <Route path="/upload" component={Upload} />
           <Route path="/settings" component={Settings} />
-          {/* 404 for authenticated users only */}
-          <Route component={NotFound} />
         </>
       )}
     </Switch>
