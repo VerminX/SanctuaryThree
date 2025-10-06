@@ -2,83 +2,93 @@ import crypto from 'crypto';
 import { healthMonitor } from './healthMonitoring';
 
 // ============================================================================
-// DEVELOPMENT MODE: ENCRYPTION DISABLED
+// PRODUCTION MODE: EFFICIENT SINGLE-KEY ENCRYPTION
 // ============================================================================
-// All encryption/decryption functions are pass-through (no actual encryption)
-// This dramatically improves performance during development
-// 
-// TO RE-ENABLE ENCRYPTION:
-// - Replace encryptPHI() and decryptPHI() with actual AES-256-GCM implementation
-// - All other functions will automatically work since they use these base functions
+// AES-256-GCM encryption with single-key, single-AAD approach
+// Performance: 1 decryption attempt per field (vs 16 in legacy system)
+// Security: Industry-standard AES-256-GCM with authenticated encryption
 // ============================================================================
 
 const ALGORITHM = 'aes-256-gcm';
 const KEY_LENGTH = 32;
 const IV_LENGTH = 16;
 const TAG_LENGTH = 16;
+const AAD = Buffer.from('PHI-AAD'); // Single AAD for all encryption
 
 // Get encryption key from environment (ENCRYPTION_KEY only)
 const getEncryptionKey = (): Buffer => {
   const key = process.env.ENCRYPTION_KEY;
   if (!key) {
-    // In development mode, we don't actually need the key
-    // Return a dummy buffer to keep the function signature
-    return Buffer.alloc(KEY_LENGTH);
+    throw new Error('ENCRYPTION_KEY environment variable must be set for PHI encryption.');
   }
   
   // Derive a consistent key from the provided secret
   return crypto.scryptSync(key, 'woundcare-phi-salt', KEY_LENGTH);
 };
 
-// Legacy key derivation methods for backward compatibility
-const getLegacyKeys = (): Buffer[] => {
-  const encryptionKey = process.env.ENCRYPTION_KEY;
-  const sessionSecret = process.env.SESSION_SECRET;
-  
-  const keys: Buffer[] = [];
-  
-  // Try ENCRYPTION_KEY with various salt methods (preferred)
-  if (encryptionKey) {
-    keys.push(
-      // Current method
-      crypto.scryptSync(encryptionKey, 'woundcare-phi-salt', KEY_LENGTH),
-      // Alternative salt that might have been used
-      crypto.scryptSync(encryptionKey, 'woundcare-phi', KEY_LENGTH),
-      // Alternative salt format
-      crypto.scryptSync(encryptionKey, 'phi-salt', KEY_LENGTH),
-      // Direct key without salt (if original implementation was different)
-      Buffer.from(crypto.createHash('sha256').update(encryptionKey).digest().subarray(0, KEY_LENGTH))
-    );
-  }
-  
-  // Legacy fallback for SESSION_SECRET (only for decrypting old data)
-  if (sessionSecret && encryptionKey !== sessionSecret) {
-    keys.push(
-      crypto.scryptSync(sessionSecret, 'woundcare-phi-salt', KEY_LENGTH),
-      crypto.scryptSync(sessionSecret, 'woundcare-phi', KEY_LENGTH),
-      crypto.scryptSync(sessionSecret, 'phi-salt', KEY_LENGTH),
-      Buffer.from(crypto.createHash('sha256').update(sessionSecret).digest().subarray(0, KEY_LENGTH))
-    );
-  }
-  
-  return keys;
-};
-
-// DEVELOPMENT MODE: Pass-through encryption (no actual encryption)
+// EFFICIENT ENCRYPTION: Single-key AES-256-GCM
 export function encryptPHI(plaintext: string): string {
-  // In development mode, just return the plaintext
-  // This eliminates all encryption overhead
-  return plaintext;
+  const key = getEncryptionKey();
+  const iv = crypto.randomBytes(IV_LENGTH);
+  const cipher = crypto.createCipheriv(ALGORITHM, key, iv);
+  cipher.setAAD(AAD);
+  
+  let encrypted = cipher.update(plaintext, 'utf8', 'hex');
+  encrypted += cipher.final('hex');
+  
+  const tag = cipher.getAuthTag();
+  
+  // Combine iv + tag + encrypted data
+  const combined = Buffer.concat([iv, tag, Buffer.from(encrypted, 'hex')]);
+  return combined.toString('base64');
 }
 
 // Cache for failed decryption attempts to avoid repeated processing of corrupted data
 const decryptionFailureCache = new Map<string, boolean>();
 
-// DEVELOPMENT MODE: Pass-through decryption (no actual decryption)
+// EFFICIENT DECRYPTION: Single-key, single-AAD (1 attempt per field)
 export function decryptPHI(encryptedData: string): string {
-  // In development mode, just return the data as-is
-  // This eliminates all decryption overhead and multi-key attempts
-  return encryptedData;
+  // PERFORMANCE OPTIMIZATION: Quick cache check for known corrupted data
+  if (decryptionFailureCache.has(encryptedData)) {
+    throw new Error('Invalid encrypted data: previously failed decryption (cached)');
+  }
+
+  try {
+    const combined = Buffer.from(encryptedData, 'base64');
+    
+    // Basic validation
+    if (combined.length < IV_LENGTH + TAG_LENGTH) {
+      decryptionFailureCache.set(encryptedData, true);
+      throw new Error('Invalid encrypted data: too short');
+    }
+    
+    const iv = combined.subarray(0, IV_LENGTH);
+    const tag = combined.subarray(IV_LENGTH, IV_LENGTH + TAG_LENGTH);
+    const encrypted = combined.subarray(IV_LENGTH + TAG_LENGTH);
+    
+    // Single decryption attempt with current key and AAD
+    const key = getEncryptionKey();
+    const decipher = crypto.createDecipheriv(ALGORITHM, key, iv);
+    decipher.setAuthTag(tag);
+    decipher.setAAD(AAD);
+    
+    let decrypted = decipher.update(encrypted, undefined, 'utf8');
+    decrypted += decipher.final('utf8');
+    
+    return decrypted;
+  } catch (error) {
+    // Cache this failure for future performance
+    decryptionFailureCache.set(encryptedData, true);
+    
+    // Clean cache periodically to prevent memory leaks (keep only last 1000 failures)
+    if (decryptionFailureCache.size > 1000) {
+      const entries = Array.from(decryptionFailureCache.keys());
+      const toDelete = entries.slice(0, entries.length - 500);
+      toDelete.forEach(key => decryptionFailureCache.delete(key));
+    }
+    
+    throw new Error(`Failed to decrypt PHI data: ${error instanceof Error ? error.message : 'Unknown error'}`);
+  }
 }
 
 // Helper functions for patient data
