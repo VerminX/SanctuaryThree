@@ -74,11 +74,11 @@ export const patients = pgTable("patients", {
   encryptedFirstName: text("encrypted_first_name").notNull(),
   encryptedLastName: text("encrypted_last_name").notNull(),
   encryptedDob: text("encrypted_dob"), // encrypted date of birth
-  payerType: varchar("payer_type", { length: 50 }).notNull(), // Original Medicare, Medicare Advantage
+  payerType: varchar("payer_type", { length: 150 }).notNull(), // Original Medicare, Medicare Advantage
   planName: varchar("plan_name", { length: 255 }),
   insuranceId: varchar("insurance_id", { length: 100 }), // Primary insurance ID
   // Secondary insurance fields for comprehensive coverage analysis
-  secondaryPayerType: varchar("secondary_payer_type", { length: 50 }), // BCBS, Aetna, etc.
+  secondaryPayerType: varchar("secondary_payer_type", { length: 150 }), // BCBS, Aetna, etc.
   secondaryPlanName: varchar("secondary_plan_name", { length: 255 }),
   secondaryInsuranceId: varchar("secondary_insurance_id", { length: 100 }),
   macRegion: varchar("mac_region", { length: 50 }),
@@ -3332,7 +3332,6 @@ export type AggregationPeriod = 'daily' | 'weekly' | 'monthly' | 'quarterly';
 export type MetricPeriod = 'daily' | 'weekly' | 'monthly' | 'quarterly' | 'yearly';
 export type MetricScope = 'provider' | 'tenant' | 'system';
 export type AnalysisPeriod = 'episode' | 'monthly' | 'quarterly' | 'yearly';
-export type WoundCondition = 'improving' | 'stable' | 'deteriorating';
 export type AssessmentType = 'episode' | 'encounter' | 'product_application' | 'documentation';
 export type ComplianceScope = 'medicare_lcd' | 'internal_protocol' | 'regulatory';
 export type ComplianceRiskLevel = 'low' | 'moderate' | 'high' | 'critical';
