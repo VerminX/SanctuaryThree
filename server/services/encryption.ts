@@ -15,15 +15,26 @@ const IV_LENGTH = 16;
 const TAG_LENGTH = 16;
 const AAD = Buffer.from('PHI-AAD'); // Single AAD for all encryption
 
-// Get encryption key from environment (ENCRYPTION_KEY only)
+// PERFORMANCE OPTIMIZATION: Derive and cache encryption key at module initialization
+// This eliminates expensive scryptSync calls on every encrypt/decrypt operation
+let cachedEncryptionKey: Buffer | null = null;
+
 const getEncryptionKey = (): Buffer => {
+  // Return cached key if already derived
+  if (cachedEncryptionKey) {
+    return cachedEncryptionKey;
+  }
+  
   const key = process.env.ENCRYPTION_KEY;
   if (!key) {
     throw new Error('ENCRYPTION_KEY environment variable must be set for PHI encryption.');
   }
   
-  // Derive a consistent key from the provided secret
-  return crypto.scryptSync(key, 'woundcare-phi-salt', KEY_LENGTH);
+  // Derive key once and cache it for all future operations
+  // NOTE: ENCRYPTION_KEY should be high-entropy (e.g., generated via crypto.randomBytes)
+  // since this derivation only happens once at startup
+  cachedEncryptionKey = crypto.scryptSync(key, 'woundcare-phi-salt', KEY_LENGTH);
+  return cachedEncryptionKey;
 };
 
 // EFFICIENT ENCRYPTION: Single-key AES-256-GCM
