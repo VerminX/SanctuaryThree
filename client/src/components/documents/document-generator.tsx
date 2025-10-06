@@ -148,31 +148,7 @@ export default function DocumentGenerator({
         </div>
 
         {/* Document Generation Buttons */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <Card className="border border-border">
-            <CardContent className="p-4">
-              <div className="flex items-center space-x-3 mb-4">
-                <div className="w-10 h-10 bg-primary/10 rounded-lg flex items-center justify-center">
-                  <File className="text-primary" />
-                </div>
-                <div>
-                  <h4 className="font-semibold text-foreground">Pre-Determination Letter</h4>
-                  <p className="text-sm text-muted-foreground">For payer submission</p>
-                </div>
-              </div>
-              <div className="space-y-3">
-                <Button
-                  onClick={() => handleGenerate('PreDetermination')}
-                  disabled={!selectedPatient || !selectedEligibilityCheck || isLoading}
-                  className="w-full"
-                  data-testid="button-generate-predetermination"
-                >
-                  {isLoading ? "Generating..." : "Draft New Letter"}
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
-
+        <div>
           <Card className="border border-border">
             <CardContent className="p-4">
               <div className="flex items-center space-x-3 mb-4">
