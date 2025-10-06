@@ -21,6 +21,7 @@ The backend is built with Node.js and Express.js using TypeScript. Drizzle ORM p
 - **Audit Logging**: Comprehensive, signed audit trails of all user actions.
 - **AI Integration**: Utilizes OpenAI API (with Azure OpenAI fallback) and supports local LLM deployment via Ollama.
 - **RAG System**: Policy database with embedding-based retrieval using `pgvector` and automated nightly updates for Medicare LCD policies.
+- **Policy Database**: Displays LCDs from ALL MAC regions (Noridian, CGS, Novitas, Palmetto, First Coast, WPS, National Government Services, etc.) to all tenants, enabling clinics across different regions to access comprehensive policy information regardless of their own MAC jurisdiction.
 
 ### System Design Choices
 - **Database**: PostgreSQL with Neon serverless connection pooling, Drizzle Kit for migrations, and `pgvector` for vector storage.
