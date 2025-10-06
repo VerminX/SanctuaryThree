@@ -183,8 +183,7 @@ export default function Dashboard() {
           </div>
 
           {/* Quick Actions Section */}
-          <div className="max-w-4xl">
-            <Card data-testid="card-quick-actions">
+          <Card data-testid="card-quick-actions">
               <div className="p-6 border-b border-border">
                 <h3 className="text-lg font-semibold text-foreground">Quick Actions</h3>
                 <p className="text-sm text-muted-foreground">Common clinical workflows and tools</p>
@@ -273,7 +272,6 @@ export default function Dashboard() {
                 </div>
               </CardContent>
             </Card>
-          </div>
 
           {/* Security Status */}
           <Card data-testid="card-security-status">
