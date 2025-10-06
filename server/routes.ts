@@ -1158,6 +1158,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const { episodeId } = req.params;
       const { macRegion: requestMacRegion } = req.body;
       
+      // Debug logging
+      console.log('Episode analysis request body:', req.body);
+      console.log('Request MAC region:', requestMacRegion);
+      
       const episode = await storage.getEpisode(episodeId);
       if (!episode) {
         return res.status(404).json({ message: "Episode not found" });
