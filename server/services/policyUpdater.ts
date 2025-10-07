@@ -182,6 +182,250 @@ function extractTextFromHTML(html: string): string {
 }
 
 /**
+ * Scrapes full LCD text content from CMS Medicare Coverage Database URL
+ * Extracts coverage guidance, indications, limitations, and documentation requirements
+ */
+async function scrapeLCDContent(url: string, lcdId: string, maxRetries: number = 3): Promise<string> {
+  console.log(`📥 Scraping LCD content from: ${url}`);
+  
+  let lastError: Error | null = null;
+  
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      // Add delay to avoid overwhelming CMS servers
+      if (attempt > 1) {
+        const delay = Math.pow(2, attempt - 1) * 1000 + Math.random() * 500;
+        console.log(`⏳ Waiting ${delay}ms before retry attempt ${attempt}...`);
+        await new Promise(resolve => setTimeout(resolve, delay));
+      }
+      
+      const response = await fetch(url, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+          'Accept-Language': 'en-US,en;q=0.5',
+          'Cache-Control': 'no-cache',
+        },
+        signal: AbortSignal.timeout(30000) // 30 second timeout
+      });
+      
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      }
+      
+      const html = await response.text();
+      
+      if (!html || html.length < 100) {
+        throw new Error('Received empty or invalid HTML response');
+      }
+      
+      const $ = cheerio.load(html);
+      
+      // Detect if we got a redirect or error page
+      const pageTitle = $('title').text().toLowerCase();
+      if (pageTitle.includes('search') || pageTitle.includes('not found') || pageTitle.includes('error')) {
+        throw new Error(`Received invalid page (possible redirect): ${pageTitle}`);
+      }
+      
+      // Extract LCD title - look for the actual LCD title, not page navigation
+      let title = $('h1').first().text().trim();
+      
+      // Filter out navigation titles
+      if (title.toLowerCase().includes('welcome') || title.toLowerCase().includes('search') || title.length === 0) {
+        // Try alternative title selectors for LCD pages
+        title = $('h1[id*="lcd"], h1.lcd-title, .document-title h1').first().text().trim();
+        
+        if (!title) {
+          // Last resort: extract from page title
+          const fullTitle = $('title').text().trim();
+          title = fullTitle.split('|')[0].split('-')[0].trim() || 'LCD Policy';
+        }
+      }
+      
+      // Extract main content sections
+      const contentSections: string[] = [];
+      
+      // Add title
+      contentSections.push(`# ${title}\n`);
+      contentSections.push(`LCD ID: ${lcdId}\n`);
+      contentSections.push(`Source: ${url}\n\n`);
+      
+      // Extract Coverage Guidance section - this is the most important section
+      const coverageGuidanceHeader = $('h3:contains("Coverage Guidance"), h2:contains("Coverage Guidance")').first();
+      if (coverageGuidanceHeader.length > 0) {
+        contentSections.push('## COVERAGE GUIDANCE\n');
+        
+        // Get all content after Coverage Guidance header until next major section
+        let currentElement = coverageGuidanceHeader.next();
+        let coverageContent = '';
+        
+        while (currentElement.length > 0 && !currentElement.is('h2, h3')) {
+          const elementText = currentElement.text().trim();
+          if (elementText) {
+            // Handle different element types
+            if (currentElement.is('h4, h5, h6')) {
+              coverageContent += `\n### ${elementText}\n`;
+            } else if (currentElement.is('ul, ol')) {
+              const listItems = currentElement.find('li').map((_, el) => `  • ${$(el).text().trim()}`).get().join('\n');
+              coverageContent += listItems + '\n';
+            } else if (currentElement.is('table')) {
+              coverageContent += '\n[TABLE CONTENT]\n';
+              currentElement.find('tr').each((_, row) => {
+                const cells = $(row).find('td, th').map((_, cell) => $(cell).text().trim()).get();
+                if (cells.length > 0) {
+                  coverageContent += cells.join(' | ') + '\n';
+                }
+              });
+            } else {
+              coverageContent += elementText + '\n';
+            }
+          }
+          currentElement = currentElement.next();
+        }
+        
+        if (coverageContent) {
+          contentSections.push(coverageContent + '\n');
+        }
+      }
+      
+      // Extract Coverage Indications, Limitations, and/or Medical Necessity
+      const indicationsText = $('h3:contains("Coverage Indications"), h4:contains("Coverage Indications"), h3:contains("Indications"), h4:contains("Indications")').first().parent().text().trim();
+      if (indicationsText) {
+        contentSections.push('## COVERAGE INDICATIONS AND LIMITATIONS\n');
+        contentSections.push(indicationsText + '\n\n');
+      }
+      
+      // Extract all paragraphs and lists within main content area - try multiple selectors
+      const mainContentSelectors = [
+        '#main-content', 
+        '.lcd-content', 
+        '.content', 
+        'main', 
+        'article', 
+        '[role="main"]',
+        '.document-content',
+        '#lcd-body',
+        '.policy-content'
+      ];
+      
+      let mainContent = $();
+      for (const selector of mainContentSelectors) {
+        mainContent = $(selector).first();
+        if (mainContent.length > 0 && mainContent.text().trim().length > 500) {
+          console.log(`📍 Found main content using selector: ${selector}`);
+          break;
+        }
+      }
+      
+      if (mainContent.length > 0) {
+        // Extract structured content
+        mainContent.find('h2, h3, h4').each((_, heading) => {
+          const headingText = $(heading).text().trim();
+          const headingLevel = heading.tagName.toLowerCase();
+          
+          // Skip navigation, footer, and irrelevant headings
+          if (headingText && 
+              !headingText.toLowerCase().includes('navigation') && 
+              !headingText.toLowerCase().includes('footer') &&
+              !headingText.toLowerCase().includes('copyright') &&
+              !headingText.toLowerCase().includes('basket') &&
+              !headingText.toLowerCase().includes('settings') &&
+              headingText.length > 2) {
+            
+            if (headingLevel === 'h2') {
+              contentSections.push(`\n## ${headingText}\n`);
+            } else if (headingLevel === 'h3') {
+              contentSections.push(`\n### ${headingText}\n`);
+            } else {
+              contentSections.push(`\n#### ${headingText}\n`);
+            }
+            
+            // Get content after this heading
+            let nextElement = $(heading).next();
+            let sectionContent = '';
+            
+            while (nextElement.length > 0 && !nextElement.is('h2, h3, h4')) {
+              const text = nextElement.text().trim();
+              if (text && text.length > 0) {
+                if (nextElement.is('ul, ol')) {
+                  const items = nextElement.find('li').map((_, li) => `  • ${$(li).text().trim()}`).get();
+                  sectionContent += items.join('\n') + '\n';
+                } else if (nextElement.is('p, div')) {
+                  sectionContent += text + '\n';
+                }
+              }
+              nextElement = nextElement.next();
+            }
+            
+            if (sectionContent) {
+              contentSections.push(sectionContent);
+            }
+          }
+        });
+      } else {
+        console.warn(`⚠ Could not find main content container for LCD ${lcdId}`);
+        // Fallback: extract all visible text from body, filtering out navigation
+        const bodyText = $('body').text()
+          .replace(/\s+/g, ' ')
+          .trim();
+        
+        if (bodyText.length > 500) {
+          contentSections.push('\n## Full Page Content\n');
+          contentSections.push(bodyText.substring(0, 5000) + '...\n'); // Limit to prevent too much noise
+        }
+      }
+      
+      // Combine all sections
+      let fullContent = contentSections.join('\n').trim();
+      
+      // Clean up the content
+      fullContent = fullContent
+        .replace(/\n{3,}/g, '\n\n') // Remove excessive line breaks
+        .replace(/\s+$/gm, '') // Remove trailing whitespace
+        .trim();
+      
+      // Validate we got meaningful content
+      if (fullContent.length < 200) {
+        throw new Error(`Extracted content too short (${fullContent.length} chars), may not have found main content`);
+      }
+      
+      console.log(`✅ Successfully scraped LCD ${lcdId}: ${fullContent.length} characters extracted`);
+      
+      return fullContent;
+      
+    } catch (error) {
+      lastError = error as Error;
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      console.error(`❌ Scraping attempt ${attempt}/${maxRetries} failed for LCD ${lcdId}: ${errorMessage}`);
+      
+      // Don't retry on certain errors
+      if (errorMessage.includes('HTTP 404') || errorMessage.includes('HTTP 403')) {
+        console.error(`💀 Permanent error for LCD ${lcdId}, skipping retries`);
+        break;
+      }
+    }
+  }
+  
+  // If all retries failed, return a fallback message with error info
+  const errorMessage = lastError ? lastError.message : 'Unknown error';
+  console.warn(`⚠ Failed to scrape LCD ${lcdId} after ${maxRetries} attempts: ${errorMessage}`);
+  
+  return `# LCD ${lcdId} - Content Extraction Failed
+
+**Note**: Automatic content extraction was unsuccessful. Please refer to the source URL for complete policy details.
+
+**Source URL**: ${url}
+
+**Extraction Error**: ${errorMessage}
+
+**Alternative**: Visit the CMS Medicare Coverage Database directly to view the complete LCD policy.
+
+---
+
+This LCD policy should be manually reviewed and content updated when possible.`;
+}
+
+/**
  * Checks if LCD content is relevant to wound care with enhanced debugging
  */
 function isWoundCareRelevant(title: string, content: string): boolean {
@@ -420,22 +664,41 @@ async function fetchCMSPolicyUpdates(): Promise<InsertPolicySource[]> {
           status = 'current'; // Default for final policies without effective date
         }
         
-        // Create policy record with enhanced metadata
+        // Construct the LCD URL
+        const lcdUrl = lcdSummary.url || `https://www.cms.gov/medicare-coverage-database/view/lcd.aspx?lcdid=${lcdSummary.document_id}`;
+        
+        // Scrape the actual LCD content from the URL with rate limiting
+        let scrapedContent: string;
+        try {
+          // Add delay between requests to avoid overwhelming CMS servers (500ms to 1s)
+          const delayMs = 500 + Math.random() * 500;
+          if (processedCount > 0) { // Don't delay the first request
+            await new Promise(resolve => setTimeout(resolve, delayMs));
+          }
+          
+          scrapedContent = await scrapeLCDContent(lcdUrl, lcdSummary.document_id.toString());
+        } catch (error) {
+          const errorMessage = error instanceof Error ? error.message : String(error);
+          console.error(`⚠ Failed to scrape LCD ${lcdSummary.document_id}: ${errorMessage}, using fallback content`);
+          scrapedContent = `# ${title}\n\nLCD ID: ${lcdSummary.document_id}\nContractor: ${contractorInfo}\nPolicy Type: ${lcdSummary.policyType}\nStatus: ${status}\n\n**Note**: Full content extraction failed. Please refer to source URL.\n\nSource: ${lcdUrl}`;
+        }
+        
+        // Create policy record with scraped content
         const policy: InsertPolicySource = {
           mac: macRegion,
           lcdId: lcdSummary.document_id.toString(),
           title: title,
-          url: lcdSummary.url || `https://www.cms.gov/medicare-coverage-database/view/lcd.aspx?lcdid=${lcdSummary.document_id}`,
-          effectiveDate: effectiveDate || new Date(), // Fallback to current date if no effective date
+          url: lcdUrl,
+          effectiveDate: effectiveDate || new Date(),
           status,
           policyType: lcdSummary.policyType,
           proposedDate: lcdSummary.policyType === 'proposed' ? new Date() : undefined,
-          content: `${title}\n\nContractor: ${contractorInfo}\nPolicy Type: ${lcdSummary.policyType}\nStatus: ${status}\n\nThis is a placeholder for the full LCD content which would be populated from the detailed LCD text.`
+          content: scrapedContent
         };
 
         policies.push(policy);
         relevantCount++;
-        console.log(`✓ Found wound care ${policy.policyType} LCD ${policy.lcdId}: ${policy.title.substring(0, 50)}... (${policy.mac}) [${policy.status}]`);
+        console.log(`✓ Found wound care ${policy.policyType} LCD ${policy.lcdId}: ${policy.title.substring(0, 50)}... (${policy.mac}) [${policy.status}] - ${scrapedContent.length} chars`);
 
       } catch (error) {
         const errorMessage = error instanceof Error ? error.message : String(error);
