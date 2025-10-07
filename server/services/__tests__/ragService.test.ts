@@ -571,4 +571,123 @@ describe('selectBestPolicy', () => {
       expect(['LCD037', 'LCD038']).toContain(result.policy?.lcdId);
     });
   });
+
+  describe('Placeholder Detection Filter', () => {
+    test('should filter out policies with explicit placeholder text', async () => {
+      const policies: PolicySource[] = [
+        createMockPolicy({
+          lcdId: 'LCD039',
+          title: 'Skin Substitutes for Diabetic Foot Ulcers',
+          content: 'This is a placeholder for the full LCD content. Real content will be available soon.',
+          status: 'current',
+          effectiveDate: new Date('2024-06-01')
+        }),
+        createMockPolicy({
+          lcdId: 'LCD040',
+          title: 'Cellular Tissue Products',
+          content: 'This policy contains real LCD content about cellular tissue products for wound care. '.repeat(100), // >10K chars
+          status: 'current',
+          effectiveDate: new Date('2024-05-01')
+        })
+      ];
+
+      mockStorage.getCurrentAndFuturePoliciesByMAC.mockResolvedValue(policies);
+
+      const result = await selectBestPolicy({
+        macRegion: 'J',
+        woundType: 'diabetic foot ulcer'
+      });
+
+      expect(result.policy).toBeTruthy();
+      expect(result.policy?.lcdId).toBe('LCD040'); // Should select non-placeholder policy
+      expect(result.audit.filtersApplied).toContain('placeholder_exclusion');
+    });
+
+    test('should filter out policies with insufficient content (<1000 chars)', async () => {
+      const policies: PolicySource[] = [
+        createMockPolicy({
+          lcdId: 'LCD041',
+          title: 'Wound Care Coverage',
+          content: 'Short content',
+          status: 'current',
+          effectiveDate: new Date('2024-06-01')
+        }),
+        createMockPolicy({
+          lcdId: 'LCD042',
+          title: 'Comprehensive Wound Care Policy',
+          content: 'This is comprehensive wound care policy content. '.repeat(50), // >1000 chars
+          status: 'current',
+          effectiveDate: new Date('2024-05-01')
+        })
+      ];
+
+      mockStorage.getCurrentAndFuturePoliciesByMAC.mockResolvedValue(policies);
+
+      const result = await selectBestPolicy({
+        macRegion: 'J',
+        woundType: 'wound care'
+      });
+
+      expect(result.policy).toBeTruthy();
+      expect(result.policy?.lcdId).toBe('LCD042');
+      expect(result.audit.filtersApplied).toContain('placeholder_exclusion');
+    });
+
+    test('should return null when only placeholder policies exist', async () => {
+      const policies: PolicySource[] = [
+        createMockPolicy({
+          lcdId: 'LCD043',
+          title: 'Wound Care',
+          content: 'This is a placeholder for the full LCD content.',
+          status: 'current'
+        }),
+        createMockPolicy({
+          lcdId: 'LCD044',
+          title: 'Skin Substitutes',
+          content: 'Short placeholder',
+          status: 'current'
+        })
+      ];
+
+      mockStorage.getCurrentAndFuturePoliciesByMAC.mockResolvedValue(policies);
+
+      const result = await selectBestPolicy({
+        macRegion: 'J',
+        woundType: 'wound'
+      });
+
+      expect(result.policy).toBeNull();
+      expect(result.audit.fallbackUsed).toBe('no_policies_available');
+    });
+
+    test('should prefer real content over higher-scoring placeholder', async () => {
+      const policies: PolicySource[] = [
+        createMockPolicy({
+          lcdId: 'LCD045',
+          title: 'Diabetic Foot Ulcer Treatment - Exact Match',
+          content: 'This is a placeholder for the full LCD content.',
+          status: 'current',
+          effectiveDate: new Date('2024-08-01')
+        }),
+        createMockPolicy({
+          lcdId: 'LCD046',
+          title: 'General Wound Care',
+          content: 'This policy provides comprehensive coverage for wound care and diabetic foot treatment. '.repeat(100),
+          status: 'current',
+          effectiveDate: new Date('2024-01-01')
+        })
+      ];
+
+      mockStorage.getCurrentAndFuturePoliciesByMAC.mockResolvedValue(policies);
+
+      const result = await selectBestPolicy({
+        macRegion: 'J',
+        woundType: 'diabetic foot ulcer'
+      });
+
+      expect(result.policy).toBeTruthy();
+      expect(result.policy?.lcdId).toBe('LCD046'); // Should select real content even if less specific
+      expect(result.audit.filtersApplied).toContain('placeholder_exclusion');
+    });
+  });
 });

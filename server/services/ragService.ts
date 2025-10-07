@@ -127,6 +127,29 @@ interface SelectBestPolicyResult {
 }
 
 /**
+ * Detects if a policy contains placeholder content instead of real LCD data
+ * Checks for:
+ * - Explicit placeholder text patterns
+ * - Content length < 1000 characters (real LCDs average 120K chars)
+ */
+function isPlaceholder(policy: PolicySource): boolean {
+  const content = policy.content || '';
+  
+  // Check for explicit placeholder text
+  if (content.includes('This is a placeholder for the full LCD content') ||
+      content.includes('placeholder') && content.length < 5000) {
+    return true;
+  }
+  
+  // Check for insufficient content length (real policies average 120K chars)
+  if (content.length < 1000) {
+    return true;
+  }
+  
+  return false;
+}
+
+/**
  * Get all relevant search terms for a wound type including synonyms
  */
 function getWoundTypeSearchTerms(woundType: string): string[] {
@@ -264,9 +287,29 @@ export async function selectBestPolicy(params: SelectBestPolicyParams): Promise<
 
     // 2. Filter for wound care relevance and exclude superseded policies
     filtersApplied.push('wound_care_relevance', 'superseded_exclusion');
-    const relevantPolicies = filterSupersededPolicies(
+    let relevantPolicies = filterSupersededPolicies(
       allPolicies.filter(policy => isWoundCareRelevant(policy, woundType, woundLocation, icd10Codes))
     );
+
+    // 2.5. Filter out placeholder policies - CRITICAL: Only select policies with real LCD content
+    const placeholderPolicies: PolicySource[] = [];
+    const validPolicies: PolicySource[] = [];
+    
+    relevantPolicies.forEach(policy => {
+      if (isPlaceholder(policy)) {
+        placeholderPolicies.push(policy);
+        console.log(`⏭️ Skipping placeholder policy LCD ${policy.lcdId} - ${policy.title} (${policy.content.length} chars)`);
+      } else {
+        validPolicies.push(policy);
+      }
+    });
+
+    if (placeholderPolicies.length > 0) {
+      filtersApplied.push('placeholder_exclusion');
+      console.log(`📋 Filtered out ${placeholderPolicies.length} placeholder policies, ${validPolicies.length} valid policies remain`);
+    }
+
+    relevantPolicies = validPolicies;
 
     // 3. Score each policy using weighted scoring system
     for (const policy of relevantPolicies) {
@@ -405,10 +448,12 @@ export async function selectBestPolicy(params: SelectBestPolicyParams): Promise<
       // Implement fallback logic
       filtersApplied.push('fallback_logic');
       
-      // Try to find any current wound-care policy (with proper filtering)
+      // Try to find any current wound-care policy (with proper filtering, excluding placeholders)
       const currentWoundCarePolicies = filterSupersededPolicies(
         allPolicies.filter(p => 
-          p.status === 'current' && isWoundCareRelevant(p, woundType, woundLocation, icd10Codes)
+          p.status === 'current' && 
+          isWoundCareRelevant(p, woundType, woundLocation, icd10Codes) &&
+          !isPlaceholder(p)
         )
       );
       
@@ -424,10 +469,12 @@ export async function selectBestPolicy(params: SelectBestPolicyParams): Promise<
         selectedReason = 'Fallback: Selected highest-scoring current wound-care policy';
         fallbackUsed = 'current_wound_care';
       } else {
-        // Try nearest future wound-care policy (with proper filtering)
+        // Try nearest future wound-care policy (with proper filtering, excluding placeholders)
         const futurePolicies = filterSupersededPolicies(
           allPolicies.filter(p => 
-            p.status === 'future' && isWoundCareRelevant(p, woundType, woundLocation, icd10Codes)
+            p.status === 'future' && 
+            isWoundCareRelevant(p, woundType, woundLocation, icd10Codes) &&
+            !isPlaceholder(p)
           )
         );
         if (futurePolicies.length > 0) {
@@ -439,10 +486,12 @@ export async function selectBestPolicy(params: SelectBestPolicyParams): Promise<
           selectedReason = 'Fallback: Selected nearest future wound-care policy';
           fallbackUsed = 'nearest_future';
         } else {
-          // Try most recent proposed wound-care policy (with proper filtering)
+          // Try most recent proposed wound-care policy (with proper filtering, excluding placeholders)
           const proposedPolicies = filterSupersededPolicies(
             allPolicies.filter(p => 
-              p.status === 'proposed' && isWoundCareRelevant(p, woundType, woundLocation, icd10Codes)
+              p.status === 'proposed' && 
+              isWoundCareRelevant(p, woundType, woundLocation, icd10Codes) &&
+              !isPlaceholder(p)
             )
           );
           if (proposedPolicies.length > 0) {
@@ -454,17 +503,19 @@ export async function selectBestPolicy(params: SelectBestPolicyParams): Promise<
             selectedReason = 'Fallback: Selected most recent proposed wound-care policy';
             fallbackUsed = 'most_recent_proposed';
           } else {
-            // Final fallback: Try general wound care without specific wound type
+            // Final fallback: Try general wound care without specific wound type (excluding placeholders)
             filtersApplied.push('general_wound_care_fallback');
             const generalWoundCarePolicies = filterSupersededPolicies(
               allPolicies.filter(p => {
                 const lowerTitle = p.title.toLowerCase();
                 const lowerContent = p.content.toLowerCase();
-                // Look for any general wound care terms
-                return LCD_SPECIFIC_TERMS.some(term => 
-                  lowerTitle.includes(term) || lowerContent.includes(term)
-                ) || ['wound', 'ulcer', 'skin'].some(term =>
-                  lowerTitle.includes(term) || lowerContent.includes(term)
+                // Look for any general wound care terms and exclude placeholders
+                return !isPlaceholder(p) && (
+                  LCD_SPECIFIC_TERMS.some(term => 
+                    lowerTitle.includes(term) || lowerContent.includes(term)
+                  ) || ['wound', 'ulcer', 'skin'].some(term =>
+                    lowerTitle.includes(term) || lowerContent.includes(term)
+                  )
                 );
               })
             );
