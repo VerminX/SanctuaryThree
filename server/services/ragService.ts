@@ -516,6 +516,19 @@ export async function selectBestPolicy(params: SelectBestPolicyParams): Promise<
       });
     }
 
+    // VERIFICATION LOGGING: Track policy content quality
+    if (selectedPolicy) {
+      const contentLength = selectedPolicy.content.length;
+      const isPlaceholder = selectedPolicy.content.includes('This is a placeholder');
+      console.log(`✓ POLICY SELECTED: LCD ${selectedPolicy.lcdId} - ${selectedPolicy.title}`);
+      console.log(`  Status: ${selectedPolicy.status}, Effective: ${selectedPolicy.effectiveDate.toISOString().split('T')[0]}`);
+      console.log(`  Content Length: ${contentLength} chars`);
+      console.log(`  Content Type: ${isPlaceholder ? '⚠️ PLACEHOLDER' : '✓ REAL LCD CONTENT'}`);
+      if (isPlaceholder) {
+        console.warn(`⚠️ WARNING: Selected policy contains placeholder text - AI will not receive real LCD requirements!`);
+      }
+    }
+
     return {
       policy: selectedPolicy,
       audit: {

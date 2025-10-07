@@ -155,6 +155,21 @@ export async function analyzeEligibility(request: EligibilityAnalysisRequest): P
   // Create HIPAA-compliant OpenAI client
   const openai = createOpenAIClient();
 
+  // VERIFICATION LOGGING: Track policy context quality before AI analysis
+  const policyContextLength = policyContext.length;
+  const isPlaceholder = policyContext.includes('This is a placeholder');
+  console.log(`📋 AI ELIGIBILITY ANALYSIS - Policy Context Verification:`);
+  console.log(`  MAC Region: ${patientInfo.macRegion}`);
+  console.log(`  Policy Context Length: ${policyContextLength} chars`);
+  console.log(`  Policy Type: ${isPlaceholder ? '⚠️ PLACEHOLDER TEXT' : '✓ REAL LCD CONTENT'}`);
+  if (isPlaceholder) {
+    console.error(`❌ CRITICAL: AI receiving placeholder policy text - analysis will lack real LCD requirements!`);
+  } else if (policyContextLength < 1000) {
+    console.warn(`⚠️ WARNING: Policy context is suspiciously short (${policyContextLength} chars) - may not contain full LCD`);
+  } else {
+    console.log(`✓ Policy context appears valid (${policyContextLength} chars of real content)`);
+  }
+
   const systemPrompt = `You are a compliance-focused clinical coverage assistant. Task: assess eligibility for non-analogous skin substitute/CTP use for DFU/VLU and draft payer-facing letters.
 
 Rules:
