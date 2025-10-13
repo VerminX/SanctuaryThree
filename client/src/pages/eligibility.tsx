@@ -12,12 +12,12 @@ import { Button } from "@/components/ui/button";
 import { SearchCheck, Brain, CheckCircle, AlertTriangle, XCircle } from "lucide-react";
 
 const MAC_REGIONS = [
-  "Noridian Healthcare Solutions (MAC J-E)",
-  "CGS Administrators (MAC J-H)",
-  "Novitas Solutions (MAC J-L)",
-  "First Coast Service Options (MAC J-N)",
-  "Palmetto GBA (MAC J-J)",
-  "Wisconsin Physicians Service (MAC J-5)",
+  { code: "JE", label: "Noridian Healthcare Solutions (MAC J-E)" },
+  { code: "JH", label: "CGS Administrators (MAC J-H)" },
+  { code: "JL", label: "Novitas Solutions (MAC J-L)" },
+  { code: "JN", label: "First Coast Service Options (MAC J-N)" },
+  { code: "JJ", label: "Palmetto GBA (MAC J-J)" },
+  { code: "J5", label: "Wisconsin Physicians Service (MAC J-5)" },
 ];
 
 export default function Eligibility() {

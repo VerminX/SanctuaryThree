@@ -41,6 +41,38 @@ import { ICD10_DATABASE, getCodeByCode, validateICD10Format, searchICD10Codes } 
 import { z } from "zod";
 import { format as formatDate } from "date-fns";
 
+// Valid Medicare MAC regions for eligibility analysis
+const VALID_MAC_REGIONS = [
+  'JE', // Noridian - CA, NV, HI, AS, GU
+  'JF', // Noridian - AK, WA, OR, ID, MT, WY, ND, SD, UT, AZ
+  'J5', // WPS - WI (Wisconsin Physicians Service)
+  'J6', // NGS - NY, PR, VI
+  'JH', // CGS - KY, OH
+  'JJ', // Palmetto - SC, NC, WV, VA, TN, GA, AL
+  'JK', // WPS - WI, IL, IN, MI, MN
+  'JL', // WPS - MO, KS
+  'JM', // NGS - LA, MS, AR, CO, TX, OK, NM
+  'JN', // First Coast - FL
+  'J8', // WPS - IA, KS, MO, NE
+];
+
+// Validate MAC region parameter
+function validateMACRegion(macRegion: string | null | undefined): { valid: boolean; error?: string } {
+  if (!macRegion || !macRegion.trim()) {
+    return { valid: false, error: "MAC region is required" };
+  }
+  
+  const normalizedRegion = macRegion.trim().toUpperCase();
+  if (!VALID_MAC_REGIONS.includes(normalizedRegion)) {
+    return { 
+      valid: false, 
+      error: `Invalid MAC region: ${macRegion}. Must be one of: ${VALID_MAC_REGIONS.join(', ')}` 
+    };
+  }
+  
+  return { valid: true };
+}
+
 // Helper function to track user activity (HIPAA-compliant, no PHI in descriptions)
 async function trackActivity(
   tenantId: string,
@@ -613,7 +645,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       res.json({
         ...encounter,
-        notes: await decryptEncounterNotes(encounter.encryptedNotes as string[], encounter.id),
+        notes: await decryptEncounterNotes(
+          Array.isArray(encounter.encryptedNotes) ? encounter.encryptedNotes as string[] : [],
+          encounter.id
+        ),
       });
     } catch (error) {
       console.error("Error creating encounter:", error);
@@ -648,12 +683,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const encounters = await storage.getEncountersByPatient(patientId);
       
-      // Decrypt encounter notes with safe error handling
+      // Decrypt encounter notes with safe error handling and array validation
       const decryptedEncounters = await Promise.all(encounters.map(async encounter => {
         try {
           return {
             ...encounter,
-            notes: await decryptEncounterNotes(encounter.encryptedNotes as string[], encounter.id),
+            notes: await decryptEncounterNotes(
+              Array.isArray(encounter.encryptedNotes) ? encounter.encryptedNotes as string[] : [],
+              encounter.id
+            ),
           };
         } catch (error: any) {
           console.error(`Error decrypting encounter ${encounter.id} notes:`, error.message);
@@ -803,12 +841,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const encounters = await storage.getEncountersByEpisode(episodeId);
       
-      // Decrypt encounter notes with safe error handling
+      // Decrypt encounter notes with safe error handling and array validation
       const decryptedEncounters = await Promise.all(encounters.map(async encounter => {
         try {
           return {
             ...encounter,
-            notes: await decryptEncounterNotes(encounter.encryptedNotes as string[], encounter.id),
+            notes: await decryptEncounterNotes(
+              Array.isArray(encounter.encryptedNotes) ? encounter.encryptedNotes as string[] : [],
+              encounter.id
+            ),
           };
         } catch (error: any) {
           console.error(`Error decrypting encounter ${encounter.id} notes:`, error.message);
@@ -955,6 +996,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       const { notes, ...encounterData } = encounterRequestSchema.parse(req.body);
       
+      // HIPAA CRITICAL: Validate episode belongs to same patient to prevent cross-patient data mixing
+      if (encounterData.episodeId) {
+        const episode = await storage.getEpisode(encounterData.episodeId);
+        if (!episode) {
+          return res.status(404).json({ message: "Episode not found" });
+        }
+        if (episode.patientId !== encounter.patientId) {
+          return res.status(400).json({ 
+            message: "Episode does not belong to the same patient as this encounter",
+            error: "PATIENT_BOUNDARY_VIOLATION"
+          });
+        }
+      }
+      
       // Only encrypt notes if they are provided
       const updateData: any = { ...encounterData };
       if (notes && notes.length > 0) {
@@ -981,7 +1036,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       res.json({
         ...updatedEncounter,
-        notes: await decryptEncounterNotes(updatedEncounter.encryptedNotes as string[], updatedEncounter.id),
+        notes: await decryptEncounterNotes(
+          Array.isArray(updatedEncounter.encryptedNotes) ? updatedEncounter.encryptedNotes as string[] : [],
+          updatedEncounter.id
+        ),
       });
     } catch (error) {
       console.error("Error updating encounter:", error);
@@ -1015,12 +1073,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Use MAC region from request body (user selection) or fall back to patient's stored MAC region
       const macRegion = requestMacRegion?.trim() || patient.macRegion?.trim();
       
-      // Validate MAC region is present before proceeding with eligibility analysis
-      if (!macRegion) {
+      // Validate MAC region is present and valid before proceeding with eligibility analysis
+      const macValidation = validateMACRegion(macRegion);
+      if (!macValidation.valid) {
         return res.status(422).json({ 
-          message: "MAC region is required for eligibility analysis. Please select a MAC region or update the patient's profile to include their MAC region.",
-          error: "MISSING_MAC_REGION",
-          patientId: patient.id
+          message: macValidation.error || "Invalid MAC region",
+          error: "INVALID_MAC_REGION",
+          patientId: patient.id,
+          validRegions: VALID_MAC_REGIONS
         });
       }
 
@@ -1181,12 +1241,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Use MAC region from request body (user selection) or fall back to patient's stored MAC region
       const macRegion = requestMacRegion?.trim() || patient.macRegion?.trim();
       
-      // Validate MAC region is present before proceeding with eligibility analysis
-      if (!macRegion) {
+      // Validate MAC region is present and valid before proceeding with eligibility analysis
+      const macValidation = validateMACRegion(macRegion);
+      if (!macValidation.valid) {
         return res.status(422).json({ 
-          message: "MAC region is required for eligibility analysis. Please select a MAC region or update the patient's profile to include their MAC region.",
-          error: "MISSING_MAC_REGION",
-          patientId: patient.id
+          message: macValidation.error || "Invalid MAC region",
+          error: "INVALID_MAC_REGION",
+          patientId: patient.id,
+          validRegions: VALID_MAC_REGIONS
         });
       }
 

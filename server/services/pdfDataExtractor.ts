@@ -539,7 +539,11 @@ export async function extractDataFromPdfText(pdfText: string): Promise<PdfExtrac
     });
   } else {
     // Fallback to OpenAI.com (development only)
-    openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+    const openaiKey = process.env.OPENAI_API_KEY;
+    if (!openaiKey) {
+      throw new Error('OPENAI_API_KEY environment variable is required when Azure OpenAI is not configured. Please set OPENAI_API_KEY or configure Azure OpenAI with AZURE_OPENAI_API_KEY and AZURE_OPENAI_ENDPOINT.');
+    }
+    openai = new OpenAI({ apiKey: openaiKey });
   }
   
   // HIPAA SAFEGUARD: Increase limit for comprehensive extraction while preventing context overflow

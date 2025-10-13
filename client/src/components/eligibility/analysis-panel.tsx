@@ -95,7 +95,7 @@ interface AnalysisPanelProps {
     status: string;
     encounterCount: number;
   }>;
-  macRegions: string[];
+  macRegions: Array<{ code: string; label: string }>;
   onAnalyze: (params: { 
     mode: 'episode' | 'encounter'; 
     id: string; 
@@ -257,8 +257,8 @@ export default function AnalysisPanel({
               </SelectTrigger>
               <SelectContent>
                 {macRegions.map((region) => (
-                  <SelectItem key={region} value={region}>
-                    {region}
+                  <SelectItem key={region.code} value={region.code}>
+                    {region.label}
                   </SelectItem>
                 ))}
               </SelectContent>

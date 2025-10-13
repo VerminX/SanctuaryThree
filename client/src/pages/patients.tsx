@@ -106,11 +106,11 @@ export default function Patients() {
     );
   }
 
-  // Filter patients based on search term
+  // Filter patients based on search term (null-safe for decryption errors)
   const filteredPatients = (patients || []).filter((patient) =>
-    patient.firstName.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    patient.lastName.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    patient.mrn.toLowerCase().includes(searchTerm.toLowerCase())
+    (patient.firstName ?? '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+    (patient.lastName ?? '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+    (patient.mrn ?? '').toLowerCase().includes(searchTerm.toLowerCase())
   );
 
   return (

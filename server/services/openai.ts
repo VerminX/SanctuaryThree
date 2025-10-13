@@ -38,7 +38,11 @@ function createOpenAIClient() {
     });
   } else {
     // Fallback to OpenAI.com (development only)
-    return new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+    const openaiKey = process.env.OPENAI_API_KEY;
+    if (!openaiKey) {
+      throw new Error('OPENAI_API_KEY environment variable is required when Azure OpenAI is not configured. Please set OPENAI_API_KEY or configure Azure OpenAI with AZURE_OPENAI_API_KEY and AZURE_OPENAI_ENDPOINT.');
+    }
+    return new OpenAI({ apiKey: openaiKey });
   }
 }
 
@@ -118,7 +122,7 @@ export async function analyzeEligibility(request: EligibilityAnalysisRequest): P
       status: 'active'
     };
 
-    const preCheckResult = performPreEligibilityChecks(episodeData, validatorEncounters);
+    const preCheckResult = await performPreEligibilityChecks(episodeData, validatorEncounters);
     
     // If pre-checks return definitive failure, return immediately
     if (!preCheckResult.overallEligible) {
@@ -298,7 +302,7 @@ export async function analyzeEligibilityWithFullContext(request: FullContextAnal
       woundDetails: encounter.woundDetails,
       conservativeCare: encounter.conservativeCare,
       allText: encounter.notes.join(' '),
-      diabeticStatus: encounter.diabeticStatus // Pass diabetic status to avoid false negatives
+      diabeticStatus: encounter.diabeticStatus ?? null // Convert undefined to null
     }));
 
     // Include current encounter
@@ -309,7 +313,7 @@ export async function analyzeEligibilityWithFullContext(request: FullContextAnal
       woundDetails: currentEncounter.woundDetails,
       conservativeCare: currentEncounter.conservativeCare,
       allText: currentEncounter.encounterNotes.join(' '),
-      diabeticStatus: currentEncounter.diabeticStatus
+      diabeticStatus: currentEncounter.diabeticStatus ?? null // Convert undefined to null
     });
 
     const episodeData = {
@@ -321,7 +325,7 @@ export async function analyzeEligibilityWithFullContext(request: FullContextAnal
       status: 'active'
     };
 
-    const preCheckResult = performPreEligibilityChecks(episodeData, validatorEncounters);
+    const preCheckResult = await performPreEligibilityChecks(episodeData, validatorEncounters);
     
     // If pre-checks return definitive failure, return immediately
     if (!preCheckResult.overallEligible) {
@@ -525,7 +529,8 @@ export async function analyzeEpisodeEligibility(request: EpisodeEligibilityAnaly
       primaryDiagnosis: episodeInfo.primaryDiagnosis,
       woundDetails: encounter.woundDetails,
       conservativeCare: encounter.conservativeCare,
-      allText: encounter.notes.join(' ')
+      allText: encounter.notes.join(' '),
+      diabeticStatus: null // No diabetic status available in this context
     }));
 
     const episodeData = {
@@ -537,7 +542,7 @@ export async function analyzeEpisodeEligibility(request: EpisodeEligibilityAnaly
       status: episodeInfo.status
     };
 
-    const preCheckResult = performPreEligibilityChecks(episodeData, validatorEncounters);
+    const preCheckResult = await performPreEligibilityChecks(episodeData, validatorEncounters);
     
     // If pre-checks return definitive failure, return immediately
     if (!preCheckResult.overallEligible) {
@@ -765,10 +770,11 @@ export async function analyzeEpisodeEligibilityWithFullHistory(request: Enhanced
     const validatorEncounters = targetEpisode.encounters.map(encounter => ({
       id: encounter.id,
       date: encounter.date.toISOString().split('T')[0],
-      primaryDiagnosis: targetEpisode.primaryDiagnosis,
+      primaryDiagnosis: targetEpisode.primaryDiagnosis || '',
       woundDetails: encounter.woundDetails,
       conservativeCare: encounter.conservativeCare,
-      allText: encounter.notes ? encounter.notes.join(' ') : ''
+      allText: encounter.notes ? encounter.notes.join(' ') : '',
+      diabeticStatus: null // No diabetic status available in this context
     }));
 
     // Perform pre-eligibility checks
@@ -776,11 +782,11 @@ export async function analyzeEpisodeEligibilityWithFullHistory(request: Enhanced
       id: targetEpisode.id,
       woundType: targetEpisode.woundType,
       woundLocation: targetEpisode.woundLocation,
-      primaryDiagnosis: targetEpisode.primaryDiagnosis,
+      primaryDiagnosis: targetEpisode.primaryDiagnosis || '', // Convert null to empty string
       episodeStartDate: targetEpisode.episodeStartDate,
       status: targetEpisode.status
     };
-    const preCheckResult = performPreEligibilityChecks(episodeData, validatorEncounters);
+    const preCheckResult = await performPreEligibilityChecks(episodeData, validatorEncounters);
     
     // If pre-checks return definitive failure, return immediately without AI analysis
     if (!preCheckResult.overallEligible) {
