@@ -7,7 +7,7 @@ import { Progress } from "@/components/ui/progress";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { CheckCircle, FileUp, Upload, AlertCircle, Clock, FileText, ArrowLeft, Users, Calendar, Brain, CreditCard, Code, Heart, Activity, Footprints } from "lucide-react";
+import { CheckCircle, FileUp, Upload, AlertCircle, Clock, FileText, ArrowLeft, Users, Calendar, Brain, CreditCard, Code, Heart, Activity, Footprints, Hash } from "lucide-react";
 import { apiRequest } from "@/lib/queryClient";
 import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
@@ -15,6 +15,7 @@ import { DataQualityIndicator } from "@/components/data-quality/data-quality-ind
 import { Link } from "wouter";
 import Sidebar from "@/components/layout/sidebar";
 import Header from "@/components/layout/header";
+import { format as formatDate } from "date-fns";
 
 interface FileUpload {
   id: string;
@@ -114,6 +115,19 @@ const getStatusIcon = (status: string) => {
     case 'failed':
     case 'extraction_failed': return <AlertCircle className="w-4 h-4" />;
     default: return <FileText className="w-4 h-4" />;
+  }
+};
+
+const getShortUploadId = (id: string): string => {
+  return id.substring(0, 8);
+};
+
+const formatUploadTime = (dateString: string): string => {
+  try {
+    const date = new Date(dateString);
+    return formatDate(date, 'MMM d, yyyy \'at\' h:mm a');
+  } catch (error) {
+    return new Date(dateString).toLocaleString();
   }
 };
 
@@ -379,17 +393,26 @@ export default function UploadPage() {
         <CardContent>
           {uploads?.uploads && Array.isArray(uploads.uploads) && uploads.uploads.length > 0 ? (
             <div className="space-y-4">
-              {uploads.uploads.map((upload: FileUpload) => (
-                <div key={upload.id} className="border rounded-lg p-4 space-y-3">
+              {uploads.uploads.map((upload: FileUpload, index: number) => (
+                <div key={upload.id} className="border rounded-lg p-4 space-y-3" data-testid={`upload-card-${upload.id}`}>
                   <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-3">
+                    <div className="flex items-center gap-3 flex-1">
                       {getStatusIcon(upload.status)}
-                      <div>
-                        <h3 className="font-medium" data-testid={`filename-${upload.id}`}>
-                          {upload.filename}
-                        </h3>
-                        <p className="text-sm text-gray-500">
-                          Uploaded {new Date(upload.uploadedAt).toLocaleString()}
+                      <div className="flex-1">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <Badge variant="outline" className="bg-gray-100 dark:bg-gray-800 text-xs" data-testid={`upload-counter-${upload.id}`}>
+                            #{uploads.uploads.length - index}
+                          </Badge>
+                          <h3 className="font-medium" data-testid={`filename-${upload.id}`}>
+                            {upload.filename}
+                          </h3>
+                          <Badge variant="secondary" className="flex items-center gap-1 text-xs font-mono" data-testid={`upload-id-${upload.id}`}>
+                            <Hash className="w-3 h-3" />
+                            {getShortUploadId(upload.id)}
+                          </Badge>
+                        </div>
+                        <p className="text-sm text-gray-500 mt-1" data-testid={`upload-timestamp-${upload.id}`}>
+                          {formatUploadTime(upload.uploadedAt)}
                         </p>
                       </div>
                     </div>
@@ -812,19 +835,19 @@ export default function UploadPage() {
                               </p>
                               <div className="flex flex-wrap gap-2">
                                 <Link href={`/patients/${createdRecords[upload.id].patientId}`}>
-                                  <Button size="sm" variant="outline" className="flex items-center gap-2">
+                                  <Button size="sm" variant="outline" className="flex items-center gap-2" data-testid={`view-patient-${upload.id}`}>
                                     <Users className="w-4 h-4" />
                                     View Patient
                                   </Button>
                                 </Link>
                                 <Link href={`/patients/${createdRecords[upload.id].patientId}/encounters/${createdRecords[upload.id].encounterIds[0]}`}>
-                                  <Button size="sm" variant="outline" className="flex items-center gap-2">
+                                  <Button size="sm" variant="outline" className="flex items-center gap-2" data-testid={`view-encounters-${upload.id}`}>
                                     <Calendar className="w-4 h-4" />
                                     View Encounters ({createdRecords[upload.id].encounterIds.length})
                                   </Button>
                                 </Link>
                                 <Link href="/">
-                                  <Button size="sm" variant="default" className="flex items-center gap-2">
+                                  <Button size="sm" variant="default" className="flex items-center gap-2" data-testid={`dashboard-${upload.id}`}>
                                     <ArrowLeft className="w-4 h-4" />
                                     Dashboard
                                   </Button>
