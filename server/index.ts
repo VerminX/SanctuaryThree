@@ -37,15 +37,41 @@ app.use((req, res, next) => {
   next();
 });
 
+// Middleware to ensure API routes always return JSON (catch any HTML responses)
+app.use('/api/*', (req: Request, res: Response, next: NextFunction) => {
+  // Override res.send to ensure JSON content-type for API routes
+  const originalSend = res.send;
+  res.send = function(data: any) {
+    if (!res.getHeader('Content-Type')) {
+      res.setHeader('Content-Type', 'application/json');
+    }
+    return originalSend.call(this, data);
+  };
+  next();
+});
+
 (async () => {
   const server = await registerRoutes(app);
 
-  app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
-    const status = err.status || err.statusCode || 500;
-    const message = err.message || "Internal Server Error";
+  // API-specific error handler to ensure JSON responses
+  app.use((err: any, req: Request, res: Response, next: NextFunction) => {
+    // Only handle errors for API routes
+    if (req.path.startsWith('/api')) {
+      const status = err.status || err.statusCode || 500;
+      const message = err.message || "Internal Server Error";
 
-    res.status(status).json({ message });
-    throw err;
+      // Ensure we haven't already sent a response
+      if (!res.headersSent) {
+        res.status(status).json({ message });
+      }
+      
+      // Log error but don't throw to prevent further error propagation
+      console.error('API Error:', err);
+      return;
+    }
+    
+    // Pass to next error handler for non-API routes
+    next(err);
   });
 
   // importantly only setup vite in development and after
