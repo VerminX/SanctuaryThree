@@ -3882,7 +3882,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // AI-Powered PDF Data Extraction Route
+  // AI-Powered PDF Data Extraction Route (Async Processing)
   app.post('/api/upload/:uploadId/extract-data', isAuthenticated, async (req: any, res) => {
     try {
       const userId = req.user.claims.sub;
@@ -3901,129 +3901,133 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const { FILE_UPLOAD_STATUS } = await import('../shared/schema');
-      if (upload.status !== FILE_UPLOAD_STATUS.PROCESSED) {
+      if (upload.status !== FILE_UPLOAD_STATUS.PROCESSED && upload.status !== FILE_UPLOAD_STATUS.EXTRACTION_FAILED) {
         return res.status(400).json({ message: "File must have text extracted first using /extract-text endpoint" });
       }
 
-      try {
-        // Step 1: Get extracted text (must exist from text extraction)
-        let extractedText = upload.extractedText;
-        
-        if (!extractedText) {
-          return res.status(500).json({ message: "Internal error: extracted text is missing for processed file" });
-        }
-
-        // Step 2: Use AI to extract structured data from the text (includes enhanced encounter normalization)
-        const { extractDataFromPdfText, validateExtractionCompleteness } = await import('./services/pdfDataExtractor');
-        let extractionResult = await extractDataFromPdfText(extractedText);
-
-        // Step 3: Validate completeness of extraction with comprehensive clinical information checking
-        const validation = validateExtractionCompleteness(extractionResult);
-        
-        // Log comprehensiveness warnings for completeness tracking
-        if (validation.comprehensivenessWarnings.length > 0) {
-          console.warn('EXTRACTION COMPREHENSIVENESS WARNINGS:', validation.comprehensivenessWarnings);
-        }
-
-        // Step 4: Encrypt ALL PHI before storing (HIPAA compliance)
-        const encryptedText = encryptPHI(extractionResult.extractedText);
-        
-        // Encrypt ALL patient PHI data (not just name/DOB)
-        const encryptedPatientData = {
-          mrn: extractionResult.patientData.mrn ? encryptPHI(extractionResult.patientData.mrn) : null,
-          firstName: extractionResult.patientData.firstName ? encryptPHI(extractionResult.patientData.firstName) : null,
-          lastName: extractionResult.patientData.lastName ? encryptPHI(extractionResult.patientData.lastName) : null,
-          dateOfBirth: extractionResult.patientData.dateOfBirth ? encryptPHI(extractionResult.patientData.dateOfBirth) : null,
-          phoneNumber: extractionResult.patientData.phoneNumber ? encryptPHI(extractionResult.patientData.phoneNumber) : null,
-          address: extractionResult.patientData.address ? encryptPHI(extractionResult.patientData.address) : null,
-          insuranceId: extractionResult.patientData.insuranceId ? encryptPHI(extractionResult.patientData.insuranceId) : null,
-          // Non-PHI fields remain unencrypted
-          payerType: extractionResult.patientData.payerType,
-          planName: extractionResult.patientData.planName,
-          macRegion: extractionResult.patientData.macRegion,
-        };
-
-        // Encrypt encounter PHI data (notes, wound details with potential patient identifiers)
-        // Handle array of encounters
-        const encryptedEncounterData = extractionResult.encounterData.map((encounter: any) => ({
-          ...encounter,
-          notes: encounter.notes ? encryptEncounterNotes(encounter.notes) : null,
-          assessment: encounter.assessment ? encryptPHI(encounter.assessment) : null,
-          plan: encounter.plan ? encryptPHI(encounter.plan) : null,
-          // Wound details, conservative care, etc. may contain PHI - encrypt as JSON strings
-          woundDetails: encounter.woundDetails ? encryptPHI(JSON.stringify(encounter.woundDetails)) : null,
-          conservativeCare: encounter.conservativeCare ? encryptPHI(JSON.stringify(encounter.conservativeCare)) : null,
-        }));
-
-        // Store extraction results in the database with comprehensive PHI encryption
-        const { PDF_VALIDATION_STATUS } = await import('../shared/schema');
-        
-        // Automatically approve high-confidence extractions for immediate record creation
-        const autoValidationStatus = validation.score >= 0.7 
-          ? PDF_VALIDATION_STATUS.APPROVED 
-          : PDF_VALIDATION_STATUS.PENDING;
-        
-        const extractedData = await storage.createPdfExtractedData({
-          fileUploadId: upload.id,
-          tenantId: upload.tenantId,
-          userId: upload.userId,
-          documentType: 'medical_record', // Default document type for PDF extraction
-          extractedText: encryptedText, // Encrypted PHI
-          extractedPatientData: encryptedPatientData, // Fully encrypted patient PHI
-          extractedEncounterData: encryptedEncounterData, // Encrypted encounter PHI
-          extractionConfidence: extractionResult.confidence.toString(), // Convert to string for decimal type
-          validationScore: validation.score.toString(), // Convert to string for decimal type
-          validationStatus: autoValidationStatus // Auto-approve high confidence extractions
-        });
-
-        // Step 5: CRITICAL HIPAA FIX - Replace plaintext extracted_text with encrypted version
-        await storage.updateFileUploadText(uploadId, encryptedText);
-        await storage.updateFileUploadStatus(uploadId, FILE_UPLOAD_STATUS.DATA_EXTRACTED);
-
-        // Step 6: Log audit event for HIPAA compliance (NO PHI in logs)
-        await storage.createAuditLog({
-          tenantId: upload.tenantId,
-          userId,
-          action: 'EXTRACT_PDF_DATA',
-          entity: 'PdfExtractedData',
-          entityId: extractedData.id,
-          ipAddress: req.ip,
-          userAgent: req.get('User-Agent'),
-          previousHash: '',
-        });
-
-        // Send response BEFORE clearing memory (so we can access extractionResult)
-        res.status(200).json({
-          message: "Data extraction completed",
-          extractionId: extractedData.id,
-          confidence: parseFloat(String(extractionResult.confidence)), // Ensure number format
-          validationScore: parseFloat(String(validation.score)), // Ensure number format
-          isComplete: validation.isComplete,
-          missingFields: validation.missingCriticalFields,
-          warnings: extractionResult.warnings,
-          patientData: extractionResult.patientData,
-          encounterData: extractionResult.encounterData,
-          canCreateRecords: validation.score >= 0.7 // Minimum threshold for record creation
-        });
-
-        // Clear plaintext from memory AFTER response is sent (HIPAA security)
-        extractedText = '';
-        extractionResult.patientData = {};
-        extractionResult.encounterData = [];
-        extractionResult = null as any;
-
-      } catch (extractionError) {
-        console.error('Error during PDF data extraction:', extractionError);
-        
-        // Update file status to reflect extraction failure using proper enum constant
-        const { FILE_UPLOAD_STATUS } = await import('../shared/schema');
-        await storage.updateFileUploadStatus(uploadId, FILE_UPLOAD_STATUS.EXTRACTION_FAILED);
-        
-        res.status(500).json({ 
-          message: "Failed to extract data from PDF",
-          error: process.env.NODE_ENV === 'development' ? (extractionError as Error).message : 'Internal extraction error'
-        });
+      // Validate extracted text exists
+      if (!upload.extractedText) {
+        return res.status(500).json({ message: "Internal error: extracted text is missing for processed file" });
       }
+
+      // Set status to PROCESSING immediately to provide user feedback
+      await storage.updateFileUploadStatus(uploadId, FILE_UPLOAD_STATUS.PROCESSING);
+      
+      // Return immediately with job started confirmation
+      res.status(202).json({
+        message: "AI data extraction started",
+        uploadId: uploadId,
+        status: FILE_UPLOAD_STATUS.PROCESSING,
+        estimatedTime: "30-60 seconds"
+      });
+
+      // Process extraction in background (no await - fire and forget)
+      (async () => {
+        try {
+          // Step 1: Get extracted text (must exist from text extraction)
+          let extractedText = upload.extractedText;
+          
+          if (!extractedText) {
+            console.error('Missing extracted text for upload:', uploadId);
+            await storage.updateFileUploadStatus(uploadId, FILE_UPLOAD_STATUS.EXTRACTION_FAILED, 'Internal error: extracted text is missing');
+            return;
+          }
+
+          // Step 2: Use AI to extract structured data from the text (includes enhanced encounter normalization)
+          const { extractDataFromPdfText, validateExtractionCompleteness } = await import('./services/pdfDataExtractor');
+          let extractionResult = await extractDataFromPdfText(extractedText);
+
+          // Step 3: Validate completeness of extraction with comprehensive clinical information checking
+          const validation = validateExtractionCompleteness(extractionResult);
+          
+          // Log comprehensiveness warnings for completeness tracking
+          if (validation.comprehensivenessWarnings.length > 0) {
+            console.warn('EXTRACTION COMPREHENSIVENESS WARNINGS:', validation.comprehensivenessWarnings);
+          }
+
+          // Step 4: Encrypt ALL PHI before storing (HIPAA compliance)
+          const encryptedText = encryptPHI(extractionResult.extractedText);
+          
+          // Encrypt ALL patient PHI data (not just name/DOB)
+          const encryptedPatientData = {
+            mrn: extractionResult.patientData.mrn ? encryptPHI(extractionResult.patientData.mrn) : null,
+            firstName: extractionResult.patientData.firstName ? encryptPHI(extractionResult.patientData.firstName) : null,
+            lastName: extractionResult.patientData.lastName ? encryptPHI(extractionResult.patientData.lastName) : null,
+            dateOfBirth: extractionResult.patientData.dateOfBirth ? encryptPHI(extractionResult.patientData.dateOfBirth) : null,
+            phoneNumber: extractionResult.patientData.phoneNumber ? encryptPHI(extractionResult.patientData.phoneNumber) : null,
+            address: extractionResult.patientData.address ? encryptPHI(extractionResult.patientData.address) : null,
+            insuranceId: extractionResult.patientData.insuranceId ? encryptPHI(extractionResult.patientData.insuranceId) : null,
+            // Non-PHI fields remain unencrypted
+            payerType: extractionResult.patientData.payerType,
+            planName: extractionResult.patientData.planName,
+            macRegion: extractionResult.patientData.macRegion,
+          };
+
+          // Encrypt encounter PHI data (notes, wound details with potential patient identifiers)
+          // Handle array of encounters
+          const encryptedEncounterData = extractionResult.encounterData.map((encounter: any) => ({
+            ...encounter,
+            notes: encounter.notes ? encryptEncounterNotes(encounter.notes) : null,
+            assessment: encounter.assessment ? encryptPHI(encounter.assessment) : null,
+            plan: encounter.plan ? encryptPHI(encounter.plan) : null,
+            // Wound details, conservative care, etc. may contain PHI - encrypt as JSON strings
+            woundDetails: encounter.woundDetails ? encryptPHI(JSON.stringify(encounter.woundDetails)) : null,
+            conservativeCare: encounter.conservativeCare ? encryptPHI(JSON.stringify(encounter.conservativeCare)) : null,
+          }));
+
+          // Store extraction results in the database with comprehensive PHI encryption
+          const { PDF_VALIDATION_STATUS } = await import('../shared/schema');
+          
+          // Automatically approve high-confidence extractions for immediate record creation
+          const autoValidationStatus = validation.score >= 0.7 
+            ? PDF_VALIDATION_STATUS.APPROVED 
+            : PDF_VALIDATION_STATUS.PENDING;
+          
+          const extractedData = await storage.createPdfExtractedData({
+            fileUploadId: upload.id,
+            tenantId: upload.tenantId,
+            userId: upload.userId,
+            documentType: 'medical_record', // Default document type for PDF extraction
+            extractedText: encryptedText, // Encrypted PHI
+            extractedPatientData: encryptedPatientData, // Fully encrypted patient PHI
+            extractedEncounterData: encryptedEncounterData, // Encrypted encounter PHI
+            extractionConfidence: extractionResult.confidence.toString(), // Convert to string for decimal type
+            validationScore: validation.score.toString(), // Convert to string for decimal type
+            validationStatus: autoValidationStatus // Auto-approve high confidence extractions
+          });
+
+          // Step 5: CRITICAL HIPAA FIX - Replace plaintext extracted_text with encrypted version
+          await storage.updateFileUploadText(uploadId, encryptedText);
+          await storage.updateFileUploadStatus(uploadId, FILE_UPLOAD_STATUS.DATA_EXTRACTED);
+
+          // Step 6: Log audit event for HIPAA compliance (NO PHI in logs)
+          await storage.createAuditLog({
+            tenantId: upload.tenantId,
+            userId,
+            action: 'EXTRACT_PDF_DATA',
+            entity: 'PdfExtractedData',
+            entityId: extractedData.id,
+            ipAddress: req.ip,
+            userAgent: req.get('User-Agent'),
+            previousHash: '',
+          });
+
+          console.log(`✓ Background AI extraction completed for upload ${uploadId} with confidence ${extractionResult.confidence}`);
+
+          // Clear plaintext from memory AFTER processing complete (HIPAA security)
+          extractedText = '';
+          extractionResult.patientData = {};
+          extractionResult.encounterData = [];
+          extractionResult = null as any;
+
+        } catch (extractionError) {
+          console.error('Error during background PDF data extraction:', extractionError);
+          
+          // Update file status to reflect extraction failure using proper enum constant
+          await storage.updateFileUploadStatus(uploadId, FILE_UPLOAD_STATUS.EXTRACTION_FAILED, 
+            (extractionError as Error).message || 'AI extraction failed');
+        }
+      })(); // Execute background async function immediately
 
     } catch (error) {
       console.error('Error in extract-data endpoint:', error);

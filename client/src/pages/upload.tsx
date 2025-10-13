@@ -212,24 +212,55 @@ export default function UploadPage() {
     }
   });
 
-  // AI data extraction mutation  
+  // AI data extraction mutation (now async processing)
   const extractDataMutation = useMutation({
-    mutationFn: async (uploadId: string): Promise<ExtractionResult> => {
+    mutationFn: async (uploadId: string) => {
       const response = await apiRequest('POST', `/api/upload/${uploadId}/extract-data`);
       return response.json();
     },
-    onSuccess: (data: ExtractionResult, uploadId) => {
-      setExtractionResults(prev => ({ ...prev, [uploadId]: data }));
+    onSuccess: (data, uploadId) => {
+      // Backend now returns 202 with job started confirmation
       toast({
-        title: "Data extraction completed",
-        description: `Extracted patient data with ${Math.round(data.confidence * 100)}% confidence.`
+        title: "AI extraction started",
+        description: data.estimatedTime ? `Processing will take approximately ${data.estimatedTime}. The page will update automatically.` : "Processing in background...",
       });
-      refetchUploads();
+      
+      // Start polling for status updates with smart termination
+      const pollInterval = setInterval(async () => {
+        const result = await refetchUploads();
+        
+        // Stop polling if upload has completed or failed
+        if (result.data?.uploads) {
+          const upload = result.data.uploads.find((u: FileUpload) => u.id === uploadId);
+          if (upload && (upload.status === 'data_extracted' || upload.status === 'extraction_failed')) {
+            clearInterval(pollInterval);
+            
+            // Show completion notification
+            if (upload.status === 'data_extracted') {
+              toast({
+                title: "AI extraction completed",
+                description: "Patient data extracted successfully. You can now create records.",
+              });
+            } else if (upload.status === 'extraction_failed') {
+              toast({
+                title: "AI extraction failed",
+                description: "There was an error processing the document. Please try again.",
+                variant: "destructive"
+              });
+            }
+          }
+        }
+      }, 3000); // Poll every 3 seconds
+      
+      // Safety: Clear interval after 2 minutes if status never updates
+      setTimeout(() => {
+        clearInterval(pollInterval);
+      }, 120000);
     },
     onError: (error: any) => {
       toast({
-        title: "Data extraction failed", 
-        description: error.message || "Failed to extract structured data",
+        title: "Failed to start extraction", 
+        description: error.message || "Failed to start AI data extraction",
         variant: "destructive"
       });
     }
@@ -482,16 +513,19 @@ export default function UploadPage() {
                       </div>
                       <div className="w-8 h-px bg-gray-300 dark:bg-gray-600"></div>
                       <div className={`flex items-center gap-2 ${
+                        upload.status === 'processing' && !upload.hasExtractedData ? 'text-yellow-600 dark:text-yellow-400 font-medium' :
                         upload.status === 'processed' && !extractionResults[upload.id] && !upload.hasExtractedData ? 'text-blue-600 dark:text-blue-400 font-medium' :
                         extractionResults[upload.id] || upload.status === 'data_extracted' ? 'text-green-600 dark:text-green-400' :
                         'text-gray-400'
                       }`}>
                         <div className={`w-6 h-6 rounded-full flex items-center justify-center text-xs ${
+                          upload.status === 'processing' && !upload.hasExtractedData ? 'bg-yellow-100 dark:bg-yellow-800 text-yellow-600 dark:text-yellow-300' :
                           upload.status === 'processed' && !extractionResults[upload.id] && !upload.hasExtractedData ? 'bg-blue-100 dark:bg-blue-800 text-blue-600 dark:text-blue-300' :
                           extractionResults[upload.id] || upload.status === 'data_extracted' ? 'bg-green-100 dark:bg-green-800 text-green-600 dark:text-green-300' :
                           'bg-gray-100 dark:bg-gray-700 text-gray-500'
                         }`}>
-                          {extractionResults[upload.id] || upload.status === 'data_extracted' ? '✓' : '2'}
+                          {upload.status === 'processing' && !upload.hasExtractedData ? '⋯' : 
+                           extractionResults[upload.id] || upload.status === 'data_extracted' ? '✓' : '2'}
                         </div>
                         Step 2: AI Analysis
                       </div>
@@ -537,7 +571,7 @@ export default function UploadPage() {
                       </Button>
                     )}
                     
-                    {(upload.status === 'processed' || upload.status === 'data_extracted') && !extractionResults[upload.id] && !upload.hasExtractedData && (
+                    {upload.status === 'processed' && !extractionResults[upload.id] && !upload.hasExtractedData && (
                       <Button
                         size="sm"
                         onClick={() => handleExtractData(upload.id)}
@@ -548,7 +582,7 @@ export default function UploadPage() {
                         {extractDataMutation.isPending ? (
                           <>
                             <Clock className="w-4 h-4 animate-spin" />
-                            Step 2: AI Analyzing...
+                            Step 2: Starting AI Analysis...
                           </>
                         ) : (
                           <>
@@ -556,6 +590,19 @@ export default function UploadPage() {
                             Step 2: Analyze with AI
                           </>
                         )}
+                      </Button>
+                    )}
+                    
+                    {upload.status === 'processing' && !upload.hasExtractedData && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled
+                        data-testid={`ai-processing-${upload.id}`}
+                        className="flex items-center gap-2"
+                      >
+                        <Clock className="w-4 h-4 animate-spin" />
+                        Step 2: AI Analyzing (30-60s)...
                       </Button>
                     )}
                     

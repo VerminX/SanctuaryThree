@@ -33,6 +33,7 @@ The backend is built with Node.js and Express.js using TypeScript. Drizzle ORM p
 - **API Optimization**: The GET /api/uploads endpoint performs an efficient LEFT JOIN between file_uploads and pdf_extracted_data tables to return extraction metadata (confidence scores, validation status, data completeness) in a single request, eliminating the need for additional API calls and improving UI responsiveness.
 - **Upload UX Enhancement**: Uploads page displays unique visual identifiers (counter badges #1, #2, etc., short upload IDs, formatted timestamps) to distinguish duplicate uploads, with comprehensive data-testid attributes for reliable E2E testing.
 - **API Error Handling**: Centralized error handler ensures all API endpoints return consistent JSON responses with proper status codes and error messages, improving client-side error handling and debugging.
+- **Async AI Processing**: The POST /api/upload/:uploadId/extract-data endpoint now uses asynchronous background processing, returning HTTP 202 (Accepted) immediately and processing OpenAI extraction in the background. This eliminates 30-60 second request blocking, prevents timeout issues, and provides better user experience with real-time status updates via polling.
 
 ## External Dependencies
 - **CMS Integration**: api.coverage.cms.gov for real-time Medicare LCD policy integration.
