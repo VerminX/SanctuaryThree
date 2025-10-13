@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { useDropzone } from "react-dropzone";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -276,6 +276,40 @@ export default function UploadPage() {
     }
   });
 
+  // Fetch persisted extraction data for uploads that have it
+  useEffect(() => {
+    if (!uploads?.uploads) return;
+
+    uploads.uploads.forEach(async (upload) => {
+      // If upload has extracted data but we don't have it in local state, fetch it
+      if (upload.hasExtractedData && upload.extractionId && !extractionResults[upload.id]) {
+        try {
+          const response = await apiRequest('GET', `/api/upload/${upload.id}/extracted-data`);
+          const data = await response.json();
+          
+          if (data.hasData) {
+            // Convert the API response to match our ExtractionResult interface
+            const extractionResult: ExtractionResult = {
+              extractionId: data.extractionId,
+              confidence: data.extractionConfidence || 0,
+              validationScore: data.validationScore || 0,
+              isComplete: data.isComplete || false,
+              missingFields: data.missingFields || [],
+              warnings: data.warnings || [],
+              patientData: data.patientData || {},
+              encounterData: data.encounterData || [],
+              canCreateRecords: upload.canCreateRecords || false
+            };
+            
+            setExtractionResults(prev => ({ ...prev, [upload.id]: extractionResult }));
+          }
+        } catch (error) {
+          console.error('Error fetching persisted extraction data:', error);
+        }
+      }
+    });
+  }, [uploads]);
+
   const onDrop = useCallback((acceptedFiles: File[]) => {
     const pdfFiles = acceptedFiles.filter(file => file.type === 'application/pdf');
     if (pdfFiles.length !== acceptedFiles.length) {
@@ -434,41 +468,41 @@ export default function UploadPage() {
                     <div className="flex items-center gap-4 text-sm">
                       <div className={`flex items-center gap-2 ${
                         upload.status === 'uploaded' ? 'text-blue-600 dark:text-blue-400 font-medium' : 
-                        upload.status === 'processed' || extractionResults[upload.id] ? 'text-green-600 dark:text-green-400' : 
+                        upload.status === 'processed' || upload.status === 'data_extracted' || extractionResults[upload.id] ? 'text-green-600 dark:text-green-400' : 
                         'text-gray-400'
                       }`}>
                         <div className={`w-6 h-6 rounded-full flex items-center justify-center text-xs ${
                           upload.status === 'uploaded' ? 'bg-blue-100 dark:bg-blue-800 text-blue-600 dark:text-blue-300' :
-                          upload.status === 'processed' || extractionResults[upload.id] ? 'bg-green-100 dark:bg-green-800 text-green-600 dark:text-green-300' :
+                          upload.status === 'processed' || upload.status === 'data_extracted' || extractionResults[upload.id] ? 'bg-green-100 dark:bg-green-800 text-green-600 dark:text-green-300' :
                           'bg-gray-100 dark:bg-gray-700 text-gray-500'
                         }`}>
-                          {upload.status === 'processed' || extractionResults[upload.id] ? '✓' : '1'}
+                          {upload.status === 'processed' || upload.status === 'data_extracted' || extractionResults[upload.id] ? '✓' : '1'}
                         </div>
                         Step 1: Extract Text
                       </div>
                       <div className="w-8 h-px bg-gray-300 dark:bg-gray-600"></div>
                       <div className={`flex items-center gap-2 ${
-                        upload.status === 'processed' && !extractionResults[upload.id] ? 'text-blue-600 dark:text-blue-400 font-medium' :
-                        extractionResults[upload.id] ? 'text-green-600 dark:text-green-400' :
+                        upload.status === 'processed' && !extractionResults[upload.id] && !upload.hasExtractedData ? 'text-blue-600 dark:text-blue-400 font-medium' :
+                        extractionResults[upload.id] || upload.status === 'data_extracted' ? 'text-green-600 dark:text-green-400' :
                         'text-gray-400'
                       }`}>
                         <div className={`w-6 h-6 rounded-full flex items-center justify-center text-xs ${
-                          upload.status === 'processed' && !extractionResults[upload.id] ? 'bg-blue-100 dark:bg-blue-800 text-blue-600 dark:text-blue-300' :
-                          extractionResults[upload.id] ? 'bg-green-100 dark:bg-green-800 text-green-600 dark:text-green-300' :
+                          upload.status === 'processed' && !extractionResults[upload.id] && !upload.hasExtractedData ? 'bg-blue-100 dark:bg-blue-800 text-blue-600 dark:text-blue-300' :
+                          extractionResults[upload.id] || upload.status === 'data_extracted' ? 'bg-green-100 dark:bg-green-800 text-green-600 dark:text-green-300' :
                           'bg-gray-100 dark:bg-gray-700 text-gray-500'
                         }`}>
-                          {extractionResults[upload.id] ? '✓' : '2'}
+                          {extractionResults[upload.id] || upload.status === 'data_extracted' ? '✓' : '2'}
                         </div>
                         Step 2: AI Analysis
                       </div>
                       <div className="w-8 h-px bg-gray-300 dark:bg-gray-600"></div>
                       <div className={`flex items-center gap-2 ${
-                        extractionResults[upload.id] && extractionResults[upload.id].canCreateRecords ? 'text-blue-600 dark:text-blue-400 font-medium' :
+                        (extractionResults[upload.id] && extractionResults[upload.id].canCreateRecords) || upload.canCreateRecords ? 'text-blue-600 dark:text-blue-400 font-medium' :
                         createdRecords[upload.id] ? 'text-green-600 dark:text-green-400' :
                         'text-gray-400'
                       }`}>
                         <div className={`w-6 h-6 rounded-full flex items-center justify-center text-xs ${
-                          extractionResults[upload.id] && extractionResults[upload.id].canCreateRecords ? 'bg-blue-100 dark:bg-blue-800 text-blue-600 dark:text-blue-300' :
+                          (extractionResults[upload.id] && extractionResults[upload.id].canCreateRecords) || upload.canCreateRecords ? 'bg-blue-100 dark:bg-blue-800 text-blue-600 dark:text-blue-300' :
                           createdRecords[upload.id] ? 'bg-green-100 dark:bg-green-800 text-green-600 dark:text-green-300' :
                           'bg-gray-100 dark:bg-gray-700 text-gray-500'
                         }`}>
@@ -503,7 +537,7 @@ export default function UploadPage() {
                       </Button>
                     )}
                     
-                    {upload.status === 'processed' && !extractionResults[upload.id] && (
+                    {(upload.status === 'processed' || upload.status === 'data_extracted') && !extractionResults[upload.id] && !upload.hasExtractedData && (
                       <Button
                         size="sm"
                         onClick={() => handleExtractData(upload.id)}
@@ -525,7 +559,7 @@ export default function UploadPage() {
                       </Button>
                     )}
                     
-                    {upload.status === 'processed' && extractionResults[upload.id] && !extractionResults[upload.id].canCreateRecords && (
+                    {(upload.status === 'processed' || upload.status === 'data_extracted') && extractionResults[upload.id] && !extractionResults[upload.id].canCreateRecords && (
                       <Button
                         size="sm"
                         variant="outline"
@@ -790,7 +824,7 @@ export default function UploadPage() {
                         </Alert>
                       )}
 
-                      {extractionResults[upload.id].canCreateRecords && (
+                      {(extractionResults[upload.id]?.canCreateRecords || upload.canCreateRecords) && (
                         <div className="mt-4 p-3 bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-lg">
                           <div className="flex items-center gap-2 mb-2">
                             <CheckCircle className="w-5 h-5 text-green-600" />
