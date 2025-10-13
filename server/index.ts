@@ -37,19 +37,6 @@ app.use((req, res, next) => {
   next();
 });
 
-// Middleware to ensure API routes always return JSON (catch any HTML responses)
-app.use('/api/*', (req: Request, res: Response, next: NextFunction) => {
-  // Override res.send to ensure JSON content-type for API routes
-  const originalSend = res.send;
-  res.send = function(data: any) {
-    if (!res.getHeader('Content-Type')) {
-      res.setHeader('Content-Type', 'application/json');
-    }
-    return originalSend.call(this, data);
-  };
-  next();
-});
-
 (async () => {
   const server = await registerRoutes(app);
 

@@ -6089,6 +6089,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Catch-all route for non-existent API endpoints - must be AFTER all API routes but BEFORE Vite
+  app.use('/api', (req, res) => {
+    res.status(404).json({ 
+      message: `API endpoint not found: ${req.method} ${req.path}`,
+      path: req.path,
+      method: req.method
+    });
+  });
+
   const httpServer = createServer(app);
   return httpServer;
 }
