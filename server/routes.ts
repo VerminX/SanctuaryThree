@@ -4076,8 +4076,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.json({ uploads: [] });
       }
 
-      // Get uploads for the first tenant (could be enhanced for multi-tenant support)
-      const uploads = await storage.getFileUploadsByTenant(tenants[0].id);
+      // Get uploads with extraction data for the first tenant (enhanced with extraction info)
+      const uploads = await storage.getFileUploadsWithExtractionDataByTenant(tenants[0].id);
 
       res.json({
         uploads: uploads.map(upload => ({
@@ -4088,7 +4088,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
           status: upload.status,
           uploadedAt: upload.createdAt,
           processedAt: upload.processedAt,
-          hasText: !!upload.extractedText
+          hasText: !!upload.extractedText,
+          // Include extraction data fields if available
+          extractionId: upload.extractionData?.id,
+          extractionConfidence: upload.extractionData?.extractionConfidence ? parseFloat(upload.extractionData.extractionConfidence) : undefined,
+          validationScore: upload.extractionData?.validationScore ? parseFloat(upload.extractionData.validationScore) : undefined,
+          validationStatus: upload.extractionData?.validationStatus,
+          hasExtractedData: !!upload.extractionData,
+          canCreateRecords: upload.extractionData?.patientId ? false : (upload.extractionData ? true : false)
         }))
       });
     } catch (error) {

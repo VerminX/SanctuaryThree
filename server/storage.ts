@@ -194,6 +194,7 @@ export interface IStorage {
   createFileUpload(upload: InsertFileUpload): Promise<FileUpload>;
   getFileUpload(id: string): Promise<FileUpload | undefined>;
   getFileUploadsByTenant(tenantId: string): Promise<FileUpload[]>;
+  getFileUploadsWithExtractionDataByTenant(tenantId: string): Promise<Array<FileUpload & { extractionData?: PdfExtractedData }>>;
   updateFileUploadStatus(id: string, status: string, processingError?: string): Promise<FileUpload>;
   updateFileUploadText(id: string, extractedText: string): Promise<FileUpload>;
   
@@ -1917,6 +1918,20 @@ export class DatabaseStorage implements IStorage {
       .from(fileUploads)
       .where(eq(fileUploads.tenantId, tenantId))
       .orderBy(desc(fileUploads.createdAt));
+  }
+
+  async getFileUploadsWithExtractionDataByTenant(tenantId: string): Promise<Array<FileUpload & { extractionData?: PdfExtractedData }>> {
+    const uploads = await db
+      .select()
+      .from(fileUploads)
+      .leftJoin(pdfExtractedData, eq(fileUploads.id, pdfExtractedData.fileUploadId))
+      .where(eq(fileUploads.tenantId, tenantId))
+      .orderBy(desc(fileUploads.createdAt));
+
+    return uploads.map(row => ({
+      ...row.file_uploads,
+      extractionData: row.pdf_extracted_data || undefined
+    }));
   }
 
   async updateFileUploadStatus(id: string, status: string, processingError?: string): Promise<FileUpload> {
