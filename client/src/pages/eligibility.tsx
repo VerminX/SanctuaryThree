@@ -45,7 +45,7 @@ export default function Eligibility() {
   
   // Validate tenant ID format
   const tenantId = currentTenant?.id;
-  const isValidTenant = tenantId && typeof tenantId === 'string' && tenantId.length >= 10;
+  const isValidTenant = Boolean(tenantId && typeof tenantId === 'string' && tenantId.length >= 10);
 
   // OPTIMIZED: Use bulk endpoints instead of N+1 queries with proper array-segmented query keys
   // Get all encounters with patient information in a single API call
