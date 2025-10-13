@@ -30,6 +30,7 @@ The backend is built with Node.js and Express.js using TypeScript. Drizzle ORM p
 - **Performance Optimization**: Optimized PHI encryption to reduce decryption attempts and eliminate redundant key derivation.
 - **Navigation**: Restructured sidebar navigation to follow clinical workflow (Dashboard, PDF Upload, Patients, Episodes, Encounters, Eligibility Analysis, Document Generation) with secondary features consolidated under an "Other" dropdown.
 - **Episode Detail Workspace**: Dedicated `/episodes/:episodeId` route with a 6-tab clinical interface for timeline & metrics, conservative care, diagnosis, vascular & diabetic assessments, product compliance, and overall compliance tracking.
+- **API Optimization**: The GET /api/uploads endpoint performs an efficient LEFT JOIN between file_uploads and pdf_extracted_data tables to return extraction metadata (confidence scores, validation status, data completeness) in a single request, eliminating the need for additional API calls and improving UI responsiveness.
 
 ## External Dependencies
 - **CMS Integration**: api.coverage.cms.gov for real-time Medicare LCD policy integration.
