@@ -23,6 +23,14 @@ interface FileUpload {
   uploadedAt: string;
   fileSize: number;
   processingError?: string;
+  hasText?: boolean;
+  // Extraction data fields (populated when data extraction is complete)
+  extractionId?: string;
+  extractionConfidence?: number;
+  validationScore?: number;
+  validationStatus?: string;
+  hasExtractedData?: boolean;
+  canCreateRecords?: boolean;
 }
 
 interface UploadsResponse {
