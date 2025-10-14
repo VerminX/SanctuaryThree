@@ -551,60 +551,34 @@ export async function extractDataFromPdfText(pdfText: string): Promise<PdfExtrac
   const truncatedText = pdfText.length > maxTextLength 
     ? pdfText.substring(0, maxTextLength) + '\n\n[TEXT TRUNCATED FOR PROCESSING - INCREASE LIMIT IF NEEDED]'
     : pdfText;
-  const systemPrompt = `You are a comprehensive medical document data extraction specialist. Extract ALL structured patient and encounter data with maximum completeness and clinical accuracy.
+  // OPTIMIZED: Use focused, simplified prompt for faster extraction
+  const systemPrompt = `You are a medical document data extraction specialist. Extract structured patient and encounter data efficiently and accurately.
 
-CRITICAL: If the document contains MULTIPLE ENCOUNTERS/VISITS (different dates), extract them as separate encounter objects in an array. Analyze the ENTIRE document to identify all encounters.
+CORE TASK: Identify all encounters (different visit dates) and extract key clinical data for each.
 
-COMPLETENESS MANDATE:
-- Extract ALL clinical information, notes, assessments, plans, and wound details for each encounter
-- Capture comprehensive wound progression, treatment details, and patient responses
-- Include ALL conservative care attempts, durations, and effectiveness details
-- Extract specific treatment numbers (e.g., "graft application #1", "visit #3")
-- Document complete assessment and plan information for each encounter
-- Capture patient education, dietary changes, and lifestyle modifications
-- Include detailed wound measurements, drainage descriptions, and healing progression
-- Extract provider recommendations, follow-up instructions, and treatment modifications
+CRITICAL FIELDS (extract these first):
+1. PATIENT INFO: Name, DOB, MRN, insurance (primary & secondary with IDs)
+2. ENCOUNTER BASICS: Date, wound type/location, primary diagnosis with ICD-10 code
+3. WOUND MEASUREMENTS: Length × width × depth (convert to numbers, e.g., "2×3 cm" → length: 2, width: 3, unit: "cm")
+4. TREATMENTS: Procedures performed, CPT/HCPCS codes, application numbers
 
-DIAGNOSIS AND ICD-10 EXTRACTION:
-- Look for "Problems", "Problem List", or "Diagnoses" sections
-- Extract ALL ICD-10 diagnosis codes explicitly mentioned (format: A00.0 through Z99.9)
-- Capture the primary diagnosis for the encounter
-- Build a comprehensive problem list with descriptions, ICD-10 codes, and onset dates
-- Map common problem descriptions to ICD-10 codes when codes are not explicitly stated
+ADDITIONAL FIELDS (if clearly documented):
+- Clinical notes, assessment, treatment plan
+- Conservative care details (offloading, wound care, debridement) with durations
+- Vascular findings (pulses, ABI, edema, varicosities)
+- ICD-10 codes and problem list
+- Diabetic status (diabetic/nondiabetic/prediabetic)
 
-ENCOUNTER IDENTIFICATION:
-- Look for date patterns, visit numbers, follow-up references, or chronological treatment progressions
-- Each distinct clinical encounter should have comprehensive notes, assessment, and plan
-- If HPI contains multiple time references or treatment sequences, separate them appropriately
+EFFICIENCY RULES:
+- Extract complete data but avoid redundant processing
+- Use null for truly missing data (don't infer)
+- Dates in YYYY-MM-DD format
+- Measurements as numbers (not strings)
+- Focus on documented facts, not interpretations
 
-Instructions:
-- Prioritize COMPLETENESS over brevity - capture all relevant clinical information
-- For dates, use YYYY-MM-DD format or best approximation from document context
-- Extract numeric measurements precisely with units when available
-- Group conservative care by category with specific details and timeframes
-- Include direct quotes from clinical notes when they provide important context
-- Extract all diagnosis codes and problem descriptions systematically
-
-PHASE 4.1 VASCULAR ASSESSMENT EXTRACTION:
-- Extract ALL vascular study data including ABI, TBI, TcPO2, PVR, angiography results
-- Capture comprehensive clinical vascular examination findings  
-- Document pulse examinations, perfusion assessment, venous insufficiency signs
-- Extract vascular intervention history and claudication symptoms
-- Correlate vascular findings with wound healing potential
-
-VASCULAR STUDY EXTRACTION PRIORITIES:
-1. ABI MEASUREMENTS - Look for ankle-brachial index, ABI values, resting/exercise ABI
-2. TBI MEASUREMENTS - Toe-brachial index, toe pressures (especially for diabetic patients)
-3. TcPO2 MEASUREMENTS - Transcutaneous oxygen pressure, healing potential assessments
-4. PVR ANALYSIS - Pulse volume recording, waveform patterns (triphasic, monophasic)
-5. ANGIOGRAPHY - CT angiography, MR angiography, vessel patency, stenosis grades
-6. ARTERIAL DUPLEX - Flow velocities, stenosis percentages, vessel assessments
-
-CLINICAL VASCULAR EXAMINATION:
-1. PULSE EXAMINATION - Dorsalis pedis, posterior tibial, popliteal, femoral pulses
-2. PERFUSION ASSESSMENT - Capillary refill time, skin temperature, skin color
-3. VENOUS ASSESSMENT - Edema grading, varicosities, skin changes, CEAP classification
-4. FUNCTIONAL ASSESSMENT - Claudication symptoms, walking distance, rest pain
+ENCOUNTER DETECTION:
+- Look for date patterns, visit numbers, "follow-up", chronological progressions
+- Separate encounters by distinct dates/visits
 
 Return JSON in this exact format:
 {
@@ -697,236 +671,7 @@ Return JSON in this exact format:
         "duration": "string | null",
         "overallEffectiveness": "string | null"
       },
-      "vascularStudies": {
-        "arterialDuplex": {
-          "studyDate": "YYYY-MM-DD | null",
-          "vesselAssessments": [
-            {
-              "vessel": "string",
-              "peakSystolicVelocity": number | null,
-              "endDiastolicVelocity": number | null,
-              "resistiveIndex": number | null,
-              "flowPattern": "triphasic | biphasic | monophasic | dampened | absent | null",
-              "stenosis": "none | mild | moderate | severe | occlusion | null",
-              "stenosisPercentage": number | null,
-              "location": "string | null"
-            }
-          ] | null,
-          "overallInterpretation": "string | null",
-          "technician": "string | null",
-          "radiologist": "string | null"
-        } | null,
-        "abi": {
-          "studyDate": "YYYY-MM-DD | null",
-          "restingABI": {
-            "rightDorsalisPedis": number | null,
-            "rightPosteriorTibial": number | null,
-            "leftDorsalisPedis": number | null,
-            "leftPosteriorTibial": number | null,
-            "rightABI": number | null,
-            "leftABI": number | null
-          } | null,
-          "postExerciseABI": {
-            "rightABI": number | null,
-            "leftABI": number | null,
-            "minutesToRecovery": number | null,
-            "exerciseProtocol": "string | null"
-          } | null,
-          "interpretation": {
-            "rightLimbCategory": "normal | borderline | mild_pad | moderate_pad | severe_pad | non_compressible | null",
-            "leftLimbCategory": "normal | borderline | mild_pad | moderate_pad | severe_pad | non_compressible | null",
-            "overallAssessment": "string | null",
-            "clinicalCorrelation": "string | null"
-          } | null,
-          "performedBy": "string | null"
-        } | null,
-        "tbi": {
-          "studyDate": "YYYY-MM-DD | null",
-          "measurements": {
-            "rightGreatToe": number | null,
-            "leftGreatToe": number | null,
-            "rightTBI": number | null,
-            "leftTBI": number | null
-          } | null,
-          "interpretation": {
-            "rightToePerfusion": "adequate | borderline | inadequate | null",
-            "leftToePerfusion": "adequate | borderline | inadequate | null",
-            "overallAssessment": "string | null",
-            "diabeticConsiderations": "string | null"
-          } | null,
-          "performedBy": "string | null"
-        } | null,
-        "tcpo2": {
-          "studyDate": "YYYY-MM-DD | null",
-          "measurements": {
-            "rightFoot": number | null,
-            "leftFoot": number | null,
-            "chestReference": number | null,
-            "ambientTemperature": number | null,
-            "patientPosition": "string | null"
-          } | null,
-          "interpretation": {
-            "rightFootPerfusion": "adequate | borderline | poor | null",
-            "leftFootPerfusion": "adequate | borderline | poor | null",
-            "healingPotential": "good | fair | poor | null",
-            "oxygenTherapyResponse": "string | null"
-          } | null,
-          "performedBy": "string | null"
-        } | null,
-        "pvr": {
-          "studyDate": "YYYY-MM-DD | null",
-          "waveformAnalysis": [
-            {
-              "level": "string",
-              "side": "right | left",
-              "waveformType": "triphasic | biphasic | monophasic | dampened | flat | null",
-              "amplitude": number | null,
-              "upstrokeTime": number | null,
-              "dicroticNotch": boolean | null
-            }
-          ] | null,
-          "interpretation": "string | null",
-          "performedBy": "string | null"
-        } | null,
-        "angiography": {
-          "studyType": "cta | mra | conventional_angiography | null",
-          "studyDate": "YYYY-MM-DD | null",
-          "contrastUsed": boolean | null,
-          "contrastType": "string | null",
-          "vesselPatency": [
-            {
-              "vessel": "string",
-              "patencyStatus": "patent | stenotic | occluded",
-              "stenosisGrade": "mild | moderate | severe | null",
-              "collateralFlow": "good | fair | poor | absent | null",
-              "location": "string | null"
-            }
-          ] | null,
-          "runoffVessels": {
-            "anterior_tibial": "patent | stenotic | occluded | null",
-            "posterior_tibial": "patent | stenotic | occluded | null",
-            "peroneal": "patent | stenotic | occluded | null",
-            "dorsalis_pedis": "patent | stenotic | occluded | null",
-            "plantar_arch": "patent | stenotic | occluded | null"
-          } | null,
-          "overallInterpretation": "string | null",
-          "radiologist": "string | null",
-          "reportDate": "YYYY-MM-DD | null"
-        } | null
-      } | null,
-      "clinicalVascularAssessment": {
-        "examinationDate": "YYYY-MM-DD | null",
-        "pulseExamination": {
-          "dorsalisPedis": {
-            "right": "palpable | diminished | absent | dopplerable_only | null",
-            "left": "palpable | diminished | absent | dopplerable_only | null"
-          } | null,
-          "posteriorTibial": {
-            "right": "palpable | diminished | absent | dopplerable_only | null",
-            "left": "palpable | diminished | absent | dopplerable_only | null"
-          } | null,
-          "popliteal": {
-            "right": "palpable | diminished | absent | null",
-            "left": "palpable | diminished | absent | null"
-          } | null,
-          "femoral": {
-            "right": "palpable | diminished | absent | null",
-            "left": "palpable | diminished | absent | null"
-          } | null
-        } | null,
-        "perfusionAssessment": {
-          "capillaryRefillTime": {
-            "right": number | null,
-            "left": number | null
-          } | null,
-          "skinTemperature": {
-            "right": "warm | cool | cold | null",
-            "left": "warm | cool | cold | null",
-            "temperatureDifference": boolean | null
-          } | null,
-          "skinColor": {
-            "right": "normal | pale | cyanotic | rubor | mottled | null",
-            "left": "normal | pale | cyanotic | rubor | mottled | null",
-            "dependentRubor": boolean | null,
-            "elevationPallor": boolean | null
-          } | null
-        } | null,
-        "venousAssessment": {
-          "edema": {
-            "right": "none | trace | 1+ | 2+ | 3+ | 4+ | null",
-            "left": "none | trace | 1+ | 2+ | 3+ | 4+ | null",
-            "pittingEdema": boolean | null,
-            "distribution": "string | null"
-          } | null,
-          "varicosities": {
-            "present": boolean | null,
-            "severity": "mild | moderate | severe | null",
-            "distribution": "string | null",
-            "complications": ["string"] | null
-          } | null,
-          "skinChanges": {
-            "hyperpigmentation": boolean | null,
-            "lipodermatosclerosis": boolean | null,
-            "atrophieBlanche": boolean | null,
-            "eczema": boolean | null,
-            "location": ["string"] | null
-          } | null,
-          "ceapClassification": {
-            "clinical": "string | null",
-            "etiology": "string | null",
-            "anatomy": "string | null",
-            "pathophysiology": "string | null"
-          } | null
-        } | null,
-        "vascularHistory": {
-          "previousInterventions": [
-            {
-              "type": "bypass | angioplasty | stenting | endarterectomy | amputation",
-              "date": "YYYY-MM-DD | null",
-              "location": "string | null",
-              "graftType": "string | null",
-              "patencyStatus": "patent | stenotic | occluded | unknown | null",
-              "complications": ["string"] | null
-            }
-          ] | null,
-          "currentMedications": [
-            {
-              "medication": "string",
-              "indication": "antiplatelet | anticoagulation | vasodilation | claudication",
-              "dose": "string | null",
-              "compliance": "good | fair | poor | null"
-            }
-          ] | null
-        } | null,
-        "functionalVascularAssessment": {
-          "claudicationSymptoms": {
-            "present": boolean | null,
-            "location": ["string"] | null,
-            "severity": "mild | moderate | severe | null",
-            "walkingDistance": {
-              "painFreeWalkingDistance": number | null,
-              "maxWalkingDistance": number | null,
-              "walkingSpeed": "normal | slow | very_slow | null"
-            } | null,
-            "reliefWithRest": boolean | null,
-            "reliefTime": number | null
-          } | null,
-          "restPain": {
-            "present": boolean | null,
-            "severity": number | null,
-            "location": ["string"] | null,
-            "nightPain": boolean | null,
-            "reliefWithDependency": boolean | null
-          } | null,
-          "functionalLimitations": {
-            "adlLimitations": ["string"] | null,
-            "mobilityAids": ["string"] | null,
-            "exerciseTolerance": "good | fair | poor | very_poor | null"
-          } | null
-        } | null,
-        "examinedBy": "string | null",
-        "clinicalImpression": "string | null"
-      } | null,
+      "vascularFindings": "string | null",
       "patientEducation": ["string"] | null,
       "followUpInstructions": ["string"] | null,
       "infectionStatus": "string | null",
@@ -1154,77 +899,15 @@ Return JSON in this exact format:
         },
         {
           role: "user", 
-          content: `Extract ALL structured data from this medical document with maximum completeness. Analyze the ENTIRE document and capture every clinical detail, wound progression note, treatment response, conservative care attempt, and provider recommendation for each encounter.
+          content: `Extract structured data from the following medical document. Return JSON matching the specified schema.
 
-PRE-EXTRACTED CRITICAL DATA (verify and incorporate):
-- CPT/HCPCS Codes Found: ${extractedCptCodes.join(', ') || 'None found via regex'}
-- Insurance IDs Found: ${extractedInsuranceIds.join(', ') || 'None found via regex'}
-- Wound Measurements Found: ${extractedMeasurements.map(m => m.full).join(', ') || 'None found via regex'}
-- Vascular Findings: ${JSON.stringify(extractedVascular) || 'None found via regex'}
-- Diabetic Status: ${diabeticStatus || 'Not found via regex'}
-- ICD-10 Codes Found: ${extractedICD10Codes.join(', ') || 'None found via regex'}
-- Problems Found: ${extractedProblems.map(p => `${p.description}${p.icd10Code ? ` (${p.icd10Code})` : ''}`).join(', ') || 'None found via regex'}
+QUICK HINTS:
+- Found ${extractedCptCodes.length || 0} CPT/HCPCS codes, ${extractedICD10Codes.length || 0} ICD-10 codes
+- Diabetic status detected: ${diabeticStatus || 'Check document'}
+- Convert measurements to numbers (e.g., "2×3 cm" → length: 2, width: 3)
+- Include both primary and secondary insurance if present
 
-CRITICAL EXTRACTION RULES:
-1. MEASUREMENTS - Convert to NUMERIC values:
-   - Parse "1×1 cm" as length: 1, width: 1, unit: "cm"
-   - Common formats: "2×3", "1.5 x 2.0", "measuring approximately X cm x Y cm"
-   - Ensure numeric fields or null - NEVER strings
-
-2. INSURANCE - Extract ALL payers:
-   - Primary: Medicare, Medicare Advantage, etc. with insurance ID
-   - Secondary: BCBS, Aetna, UHC, etc. with insurance ID
-   - Look for patterns like "Medicare-TN", "BCBS-TN - FEP"
-
-3. CPT/HCPCS CODES - Extract procedure codes:
-   - Look for patterns: "11042", "DR 11042", "CPT 97597", "Q4xxx"
-   - Include modifiers if present (e.g., "-59", "-RT")
-   - Capture procedure descriptions
-
-4. VASCULAR ASSESSMENT - Extract specific findings:
-   - Pulses: dorsalis pedis, posterior tibial (diminished/present/absent)
-   - Capillary refill time
-   - Presence of edema or varicosities
-   - ABI values if mentioned
-
-5. FUNCTIONAL/MOBILITY STATUS:
-   - Self-care abilities
-   - Mobility level (ambulatory, limited, wheelchair-bound)
-   - Use of assistive devices
-   - ADL scores if present
-
-6. DIABETIC STATUS - Explicitly identify:
-   - "diabetic", "nondiabetic", "prediabetic"
-   - Look for mentions of DM, IDDM, NIDDM, or "no history of diabetes"
-
-7. DIAGNOSIS AND ICD-10 EXTRACTION:
-   - Extract ALL ICD-10 codes mentioned in the document
-   - Look for "Problems" or "Problem List" sections and extract each problem with its details
-   - Map problem descriptions to ICD-10 codes:
-     * "Ulcer of left/right foot due to type 2 diabetes" → E11.621
-     * "Diabetic foot ulcer" → E11.621  
-     * "Onychomycosis" → B35.1
-     * "Walking disability" → R26.2
-     * "Antalgic gait" → R26.89
-     * "Disorder of nervous system due to type 2 diabetes" → E11.40
-     * "Venous stasis ulcer" → I87.33
-     * "Pressure ulcer" → L89.9
-   - Extract onset dates when mentioned (e.g., "Onset: 05/22/2025")
-   - Identify the primary diagnosis for the encounter
-
-SPECIFIC REQUIREMENTS:
-- Extract COMPLETE clinical notes, assessments, and plans for each encounter date
-- Capture ALL wound measurements, healing progression details, and treatment responses
-- Include ALL conservative care attempts with SPECIFIC DURATIONS (e.g., "4 weeks", "3 months")
-- Document ALL provider recommendations, patient education, and follow-up instructions
-- Extract CPT/HCPCS codes with descriptions and modifiers
-- Include ALL comorbidities mentioned and their management
-- Capture vascular exam findings in structured format
-- Document mobility/functional status and ADL limitations
-- Identify diabetic status explicitly (diabetic/nondiabetic/prediabetic)
-- Extract both PRIMARY and SECONDARY insurance information
-
-Document text to analyze:
+DOCUMENT:
 
 ${truncatedText}`,
         }
