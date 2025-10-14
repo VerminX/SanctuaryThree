@@ -884,7 +884,7 @@ export class DatabaseStorage implements IStorage {
       });
     } catch (error) {
       console.error('Database error in getAllEpisodesWithPatientsByTenant:', error);
-      throw new Error(`Failed to fetch episodes with patients: ${error.message}`);
+      throw new Error(`Failed to fetch episodes with patients: ${(error as Error).message}`);
     }
   }
 
@@ -1202,7 +1202,29 @@ export class DatabaseStorage implements IStorage {
     return results.map(result => ({
       ...result,
       patientName: 'Patient Name', // In real app, decrypt result.patientName
-      encounterDate: result.encounterDate.toISOString()
+      encounterDate: result.encounterDate.toISOString(),
+      // Add missing diagnosis validation fields with null defaults
+      primaryDiagnosis: null,
+      secondaryDiagnoses: null,
+      diagnosisValidationResult: null,
+      diagnosisValidationScore: null,
+      diagnosisValidationStatus: null,
+      clinicalNecessityResult: null,
+      clinicalNecessityScore: null,
+      clinicalNecessityLevel: null,
+      woundTypeMappingResult: null,
+      mappedWoundType: null,
+      woundMappingConfidence: null,
+      diagnosisComplexityResult: null,
+      complexityScore: null,
+      complexityLevel: null,
+      diagnosisRecommendationsResult: null,
+      recommendationsCount: null,
+      criticalRecommendationsCount: null,
+      overallDiagnosisScore: null,
+      diagnosisValidationTimestamp: null,
+      diagnosisValidationVersion: null,
+      validationAuditTrail: null
     }));
   }
 
@@ -1225,7 +1247,31 @@ export class DatabaseStorage implements IStorage {
       .where(eq(encounters.patientId, patientId))
       .orderBy(desc(eligibilityChecks.createdAt));
     
-    return results;
+    // Add missing diagnosis validation fields with null defaults
+    return results.map(result => ({
+      ...result,
+      primaryDiagnosis: null,
+      secondaryDiagnoses: null,
+      diagnosisValidationResult: null,
+      diagnosisValidationScore: null,
+      diagnosisValidationStatus: null,
+      clinicalNecessityResult: null,
+      clinicalNecessityScore: null,
+      clinicalNecessityLevel: null,
+      woundTypeMappingResult: null,
+      mappedWoundType: null,
+      woundMappingConfidence: null,
+      diagnosisComplexityResult: null,
+      complexityScore: null,
+      complexityLevel: null,
+      diagnosisRecommendationsResult: null,
+      recommendationsCount: null,
+      criticalRecommendationsCount: null,
+      overallDiagnosisScore: null,
+      diagnosisValidationTimestamp: null,
+      diagnosisValidationVersion: null,
+      validationAuditTrail: null
+    }));
   }
 
   async getEpisodeWithEnrichedHistory(episodeId: string): Promise<EpisodeWithFullHistory> {
@@ -1447,13 +1493,12 @@ export class DatabaseStorage implements IStorage {
     necessityDistribution: Record<string, number>;
     commonRecommendations: Array<{ recommendation: string; count: number }>;
   }> {
-    let dateCondition = sql`TRUE`;
-    if (dateRange) {
-      dateCondition = and(
-        gte(eligibilityChecks.diagnosisValidationTimestamp, dateRange.start),
-        lte(eligibilityChecks.diagnosisValidationTimestamp, dateRange.end)
-      );
-    }
+    const dateCondition = dateRange 
+      ? and(
+          gte(eligibilityChecks.diagnosisValidationTimestamp, dateRange.start),
+          lte(eligibilityChecks.diagnosisValidationTimestamp, dateRange.end)
+        )
+      : sql`TRUE`;
 
     // Get basic metrics
     const basicMetrics = await db
@@ -1984,11 +2029,11 @@ export class DatabaseStorage implements IStorage {
     }
     
     if (filters.category) {
-      conditions.push(eq(products.category, filters.category));
+      conditions.push(eq(products.productCategory, filters.category));
     }
     
     if (filters.hcpcsCode) {
-      conditions.push(eq(products.hcpcsCode, filters.hcpcsCode));
+      conditions.push(eq(products.primaryHcpcsCode, filters.hcpcsCode));
     }
     
     if (filters.manufacturerName) {
@@ -2002,7 +2047,7 @@ export class DatabaseStorage implements IStorage {
     // For wound types, we need to check if any of the requested wound types match the product indications
     if (filters.woundTypes && filters.woundTypes.length > 0) {
       // This is a simplified implementation - in reality we'd need more complex array matching
-      conditions.push(sql`${products.woundTypeIndications} && ${filters.woundTypes}`);
+      conditions.push(sql`${products.indicatedWoundTypes} && ${filters.woundTypes}`);
     }
     
     if (conditions.length > 0) {
@@ -2021,14 +2066,14 @@ export class DatabaseStorage implements IStorage {
     return await db
       .select()
       .from(products)
-      .where(eq(products.hcpcsCode, hcpcsCode));
+      .where(eq(products.primaryHcpcsCode, hcpcsCode));
   }
 
   async getProductsByWoundType(woundType: string): Promise<Product[]> {
     return await db
       .select()
       .from(products)
-      .where(sql`${products.woundTypeIndications} @> ${[woundType]}`);
+      .where(sql`${products.indicatedWoundTypes} @> ${[woundType]}`);
   }
 
   async getProductsByManufacturer(manufacturerName: string): Promise<Product[]> {
@@ -2045,8 +2090,7 @@ export class DatabaseStorage implements IStorage {
       .from(productLcdCoverage)
       .where(and(
         eq(productLcdCoverage.productId, productId),
-        eq(productLcdCoverage.macRegion, macRegion),
-        eq(productLcdCoverage.isActive, true)
+        eq(productLcdCoverage.macRegion, macRegion)
       ));
     return coverage;
   }
@@ -2057,8 +2101,7 @@ export class DatabaseStorage implements IStorage {
       .from(productLcdCoverage)
       .where(and(
         eq(productLcdCoverage.productId, productId),
-        eq(productLcdCoverage.macRegion, macRegion),
-        eq(productLcdCoverage.isActive, true)
+        eq(productLcdCoverage.macRegion, macRegion)
       ))
       .orderBy(desc(productLcdCoverage.effectiveDate));
   }
@@ -2134,17 +2177,18 @@ export class DatabaseStorage implements IStorage {
     }
 
     // Conservative care requirement
-    if (lcdCoverage.requiresConservativeCare) {
+    if (lcdCoverage.requiredConservativeDays && lcdCoverage.requiredConservativeDays > 0) {
       if (!applicationData.conservativeCareCompliance) {
-        violations.push('Conservative care compliance required');
+        violations.push(`Conservative care compliance required (${lcdCoverage.requiredConservativeDays} days)`);
       }
       requirements.push('conservative_care');
     }
 
     // Diagnosis code validation (simplified)
-    if (lcdCoverage.coveredDiagnosisCodes && lcdCoverage.coveredDiagnosisCodes.length > 0) {
+    const requiredDiagnoses = lcdCoverage.requiredPrimaryDiagnoses as string[] | null;
+    if (requiredDiagnoses && requiredDiagnoses.length > 0) {
       const hasValidDiagnosis = applicationData.diagnosisCodes.some(code =>
-        lcdCoverage.coveredDiagnosisCodes.includes(code)
+        requiredDiagnoses.includes(code)
       );
       if (!hasValidDiagnosis) {
         violations.push('No qualifying diagnosis codes found');
@@ -2157,8 +2201,8 @@ export class DatabaseStorage implements IStorage {
       violations,
       warnings,
       requirements,
-      priorAuthRequired: lcdCoverage.requiresPriorAuth || false,
-      maxReimbursableAmount: lcdCoverage.maxReimbursableAmount
+      priorAuthRequired: lcdCoverage.priorAuthRequired || false,
+      maxReimbursableAmount: lcdCoverage.maxReimbursableAmount || undefined
     };
   }
 
@@ -2232,8 +2276,7 @@ export class DatabaseStorage implements IStorage {
       .from(productApplications)
       .where(and(
         eq(productApplications.productId, productId),
-        eq(productApplications.episodeId, episodeId),
-        eq(productApplications.status, 'approved')
+        eq(productApplications.episodeId, episodeId)
       ));
 
     const monthStart = new Date(applicationDate.getFullYear(), applicationDate.getMonth(), 1);
@@ -2245,7 +2288,6 @@ export class DatabaseStorage implements IStorage {
       .where(and(
         eq(productApplications.productId, productId),
         eq(productApplications.patientId, patientId),
-        eq(productApplications.status, 'approved'),
         gte(productApplications.applicationDate, monthStart),
         lte(productApplications.applicationDate, applicationDate)
       ));
@@ -2256,7 +2298,6 @@ export class DatabaseStorage implements IStorage {
       .where(and(
         eq(productApplications.productId, productId),
         eq(productApplications.patientId, patientId),
-        eq(productApplications.status, 'approved'),
         gte(productApplications.applicationDate, yearStart),
         lte(productApplications.applicationDate, applicationDate)
       ));
@@ -2268,7 +2309,6 @@ export class DatabaseStorage implements IStorage {
       .where(and(
         eq(productApplications.productId, productId),
         eq(productApplications.patientId, patientId),
-        eq(productApplications.status, 'approved'),
         sql`${productApplications.applicationDate} < ${applicationDate}`
       ))
       .orderBy(desc(productApplications.applicationDate))
@@ -2314,10 +2354,10 @@ export class DatabaseStorage implements IStorage {
       applicationsThisMonth: monthApplications.length,
       applicationsThisYear: yearApplications.length,
       maxAllowed: {
-        perEpisode: lcdCoverage?.maxApplicationsPerEpisode,
-        perMonth: lcdCoverage?.maxApplicationsPerMonth,
-        perYear: lcdCoverage?.maxApplicationsPerYear,
-        minDaysBetween: lcdCoverage?.minDaysBetweenApplications
+        perEpisode: lcdCoverage?.maxApplicationsPerEpisode || undefined,
+        perMonth: lcdCoverage?.maxApplicationsPerMonth || undefined,
+        perYear: lcdCoverage?.maxApplicationsPerYear || undefined,
+        minDaysBetween: lcdCoverage?.minDaysBetweenApplications || undefined
       }
     };
   }
@@ -2364,7 +2404,7 @@ export class DatabaseStorage implements IStorage {
       const contraindications: string[] = [];
 
       // Wound type match
-      if (product.woundTypeIndications?.includes(woundType)) {
+      if (product.indicatedWoundTypes?.includes(woundType)) {
         score += 0.2;
         reasons.push('Indicated for wound type');
       }
@@ -2407,7 +2447,7 @@ export class DatabaseStorage implements IStorage {
         
         recommendations.push({
           product,
-          coverageInfo,
+          coverageInfo: coverageInfo ?? null,
           recommendationScore: Math.min(score, 1.0),
           reasons,
           contraindications,
@@ -2517,20 +2557,23 @@ export class DatabaseStorage implements IStorage {
 
   async getAnalyticsSnapshotsByTenant(tenantId: string, aggregationPeriod?: string, limit?: number): Promise<AnalyticsSnapshot[]> {
     try {
+      const conditions = [eq(analyticsSnapshots.tenantId, tenantId)];
+      
+      if (aggregationPeriod) {
+        conditions.push(eq(analyticsSnapshots.aggregationPeriod, aggregationPeriod));
+      }
+
       let query = db
         .select()
         .from(analyticsSnapshots)
-        .where(eq(analyticsSnapshots.tenantId, tenantId));
-
-      if (aggregationPeriod) {
-        query = query.where(eq(analyticsSnapshots.aggregationPeriod, aggregationPeriod));
-      }
+        .where(and(...conditions))
+        .orderBy(desc(analyticsSnapshots.snapshotDate));
 
       if (limit) {
         query = query.limit(limit);
       }
 
-      return query.orderBy(desc(analyticsSnapshots.snapshotDate));
+      return await query;
     } catch (error) {
       console.error('Error fetching analytics snapshots by tenant:', error);
       throw new Error(`Failed to fetch analytics snapshots: ${error instanceof Error ? error.message : 'Unknown error'}`);
@@ -2649,7 +2692,7 @@ export class DatabaseStorage implements IStorage {
         query = query.limit(limit);
       }
 
-      return query;
+      return await query;
     } catch (error) {
       console.error('Error fetching healing trends by tenant:', error);
       throw new Error(`Failed to fetch healing trends: ${error instanceof Error ? error.message : 'Unknown error'}`);
@@ -2724,20 +2767,23 @@ export class DatabaseStorage implements IStorage {
 
   async getPerformanceMetricsByTenant(tenantId: string, metricScope?: string, limit?: number): Promise<PerformanceMetric[]> {
     try {
+      const conditions = [eq(performanceMetrics.tenantId, tenantId)];
+      
+      if (metricScope) {
+        conditions.push(eq(performanceMetrics.metricScope, metricScope));
+      }
+
       let query = db
         .select()
         .from(performanceMetrics)
-        .where(eq(performanceMetrics.tenantId, tenantId));
-
-      if (metricScope) {
-        query = query.where(eq(performanceMetrics.metricScope, metricScope));
-      }
+        .where(and(...conditions))
+        .orderBy(desc(performanceMetrics.metricDate));
 
       if (limit) {
         query = query.limit(limit);
       }
 
-      return query.orderBy(desc(performanceMetrics.metricDate));
+      return await query;
     } catch (error) {
       console.error('Error fetching performance metrics by tenant:', error);
       throw new Error(`Failed to fetch performance metrics: ${error instanceof Error ? error.message : 'Unknown error'}`);
@@ -2756,7 +2802,7 @@ export class DatabaseStorage implements IStorage {
         query = query.limit(limit);
       }
 
-      return query;
+      return await query;
     } catch (error) {
       console.error('Error fetching performance metrics by provider:', error);
       throw new Error(`Failed to fetch performance metrics: ${error instanceof Error ? error.message : 'Unknown error'}`);
@@ -2832,20 +2878,23 @@ export class DatabaseStorage implements IStorage {
 
   async getCostAnalyticsByTenant(tenantId: string, analysisPeriod?: string, limit?: number): Promise<CostAnalytic[]> {
     try {
+      const conditions = [eq(costAnalytics.tenantId, tenantId)];
+      
+      if (analysisPeriod) {
+        conditions.push(eq(costAnalytics.analysisPeriod, analysisPeriod));
+      }
+
       let query = db
         .select()
         .from(costAnalytics)
-        .where(eq(costAnalytics.tenantId, tenantId));
-
-      if (analysisPeriod) {
-        query = query.where(eq(costAnalytics.analysisPeriod, analysisPeriod));
-      }
+        .where(and(...conditions))
+        .orderBy(desc(costAnalytics.analysisDate));
 
       if (limit) {
         query = query.limit(limit);
       }
 
-      return query.orderBy(desc(costAnalytics.analysisDate));
+      return await query;
     } catch (error) {
       console.error('Error fetching cost analytics by tenant:', error);
       throw new Error(`Failed to fetch cost analytics: ${error instanceof Error ? error.message : 'Unknown error'}`);
