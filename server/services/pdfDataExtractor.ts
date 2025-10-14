@@ -572,8 +572,9 @@ CRITICAL FIELDS (extract these first):
 ADDITIONAL FIELDS (if clearly documented):
 - Clinical notes, assessment, treatment plan
 - Conservative care details (offloading, wound care, debridement) with durations
-- Vascular studies: ABI values (numeric), TBI values (numeric), TcPO2 measurements (numeric), duplex/angiography summaries (text)
-- Clinical vascular: pulse exam findings, edema assessment, perfusion notes
+- VASCULAR DATA:
+  * Use "vascularStudies" for formal test results: ABI (rightABI/leftABI as numbers), TBI (rightTBI/leftTBI as numbers), TcPO2 (rightFoot/leftFoot as numbers), duplex/angiography summaries
+  * Use "clinicalVascularAssessment" for exam findings: pulse exam (dorsalisPedis/posteriorTibial), edema, perfusion notes
 - ICD-10 codes and problem list
 - Diabetic status (diabetic/nondiabetic/prediabetic)
 
@@ -663,14 +664,6 @@ Return JSON in this exact format:
           "frequency": "string | null"
         },
         "infectionControl": ["string"] | null,
-        "vascularAssessment": {
-          "dorsalisPedis": "string | null",
-          "posteriorTibial": "string | null",
-          "capillaryRefill": "string | null",
-          "edema": "boolean | null",
-          "varicosities": "boolean | null",
-          "ankleArmIndex": "number | null"
-        } | null,
         "glycemicControl": {
           "methods": ["string"] | null,
           "targets": ["string"] | null,
@@ -922,6 +915,9 @@ Return JSON in this exact format:
   try {
     const modelName = azureApiKey ? azureDeployment : "gpt-4o-mini";
     console.log('Using AI model:', modelName);
+    console.log('Input text length:', truncatedText.length, 'characters (~', Math.round(truncatedText.length / 4), 'tokens)');
+    
+    const extractionStartTime = Date.now();
     
     const response = await openai.chat.completions.create({
       model: modelName,
@@ -946,8 +942,12 @@ ${truncatedText}`,
         }
       ],
       response_format: { type: "json_object" },
-      temperature: 0.2, // Balanced: Low enough for medical data consistency, high enough for reasonable speed
+      temperature: 0.2,
+      max_tokens: 8000, // Increased for comprehensive multi-encounter extractions with vascular data
     });
+    
+    const extractionTime = Date.now() - extractionStartTime;
+    console.log('⚡ AI extraction completed in:', extractionTime, 'ms (', (extractionTime / 1000).toFixed(1), 'seconds)');
 
     const result = JSON.parse(response.choices[0].message.content || '{}');
     
@@ -960,9 +960,27 @@ ${truncatedText}`,
         console.log(`\nEncounter ${index + 1}:`);
         console.log('  Date:', encounter.encounterDate);
         console.log('  Wound Details:', JSON.stringify(encounter.woundDetails, null, 2));
+        
+        // VASCULAR DATA DEBUGGING
+        console.log('\n  VASCULAR DATA EXTRACTION CHECK:');
+        console.log('    vascularStudies exists?', !!encounter.vascularStudies);
+        if (encounter.vascularStudies) {
+          console.log('    vascularStudies.abi:', encounter.vascularStudies.abi);
+          console.log('    vascularStudies.tbi:', encounter.vascularStudies.tbi);
+          console.log('    vascularStudies.tcpo2:', encounter.vascularStudies.tcpo2);
+        }
+        console.log('    clinicalVascularAssessment exists?', !!encounter.clinicalVascularAssessment);
+        if (encounter.clinicalVascularAssessment) {
+          console.log('    clinicalVascularAssessment.pulses:', encounter.clinicalVascularAssessment.pulses);
+        }
+        console.log('    conservativeCare.vascularAssessment exists?', !!encounter.conservativeCare?.vascularAssessment);
+        if (encounter.conservativeCare?.vascularAssessment) {
+          console.log('    conservativeCare.vascularAssessment:', encounter.conservativeCare.vascularAssessment);
+        }
+        
         if (encounter.woundDetails?.measurements) {
           const m = encounter.woundDetails.measurements;
-          console.log('  Measurement Types:');
+          console.log('\n  Measurement Types:');
           console.log('    - length:', typeof m.length, 'value:', m.length);
           console.log('    - width:', typeof m.width, 'value:', m.width);
           console.log('    - depth:', typeof m.depth, 'value:', m.depth);

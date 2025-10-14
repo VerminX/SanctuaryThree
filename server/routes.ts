@@ -4160,9 +4160,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
           }),
           woundDetails: encounter?.woundDetails,
           conservativeCare: encounter?.conservativeCare,
+          // Include vascular data (non-PHI clinical measurements)
+          vascularStudies: encounter?.vascularStudies,
+          clinicalVascularAssessment: encounter?.clinicalVascularAssessment,
+          // Include all other clinical fields
+          treatmentDetails: encounter?.treatmentDetails,
+          primaryDiagnosis: encounter?.primaryDiagnosis,
+          icd10Codes: encounter?.icd10Codes,
+          problemList: encounter?.problemList,
+          patientEducation: encounter?.patientEducation,
+          followUpInstructions: encounter?.followUpInstructions,
+          providerRecommendations: encounter?.providerRecommendations,
           infectionStatus: encounter?.infectionStatus,
           procedureCodes: encounter?.procedureCodes,
-          vascularAssessment: encounter?.vascularAssessment,
+          vascularAssessment: encounter?.vascularAssessment, // Legacy field (deprecated)
           functionalStatus: encounter?.functionalStatus,
           diabeticStatus: encounter?.diabeticStatus,
           comorbidities: encounter?.comorbidities,
@@ -4342,6 +4353,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
           plan: encounter?.plan ? decryptPHI(encounter.plan) : '',
           woundDetails: encounter?.woundDetails ? JSON.parse(decryptPHI(encounter.woundDetails)) : {},
           conservativeCare: encounter?.conservativeCare ? JSON.parse(decryptPHI(encounter.conservativeCare)) : {},
+          // Include vascular data (non-PHI clinical measurements)
+          vascularStudies: encounter?.vascularStudies || null,
+          clinicalVascularAssessment: encounter?.clinicalVascularAssessment || null,
+          // Include other clinical fields
+          treatmentDetails: encounter?.treatmentDetails || null,
+          primaryDiagnosis: encounter?.primaryDiagnosis || null,
+          icd10Codes: encounter?.icd10Codes || null,
+          problemList: encounter?.problemList || null,
+          diabeticStatus: encounter?.diabeticStatus || null,
+          functionalStatus: encounter?.functionalStatus || null,
+          patientEducation: encounter?.patientEducation || null,
+          followUpInstructions: encounter?.followUpInstructions || null,
+          providerRecommendations: encounter?.providerRecommendations || null,
           infectionStatus: encounter?.infectionStatus || 'None',
           comorbidities: encounter?.comorbidities || [],
           originalIndex: index
