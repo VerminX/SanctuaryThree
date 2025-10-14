@@ -143,7 +143,18 @@ async function fetchCMSApiData(endpoint: string, params: Record<string, string> 
       throw new Error(`CMS API request failed: ${response.status} ${response.statusText}`);
     }
 
-    const data = await response.json();
+    // Clone response so we can read it as text if JSON parsing fails
+    const clonedResponse = response.clone();
+    
+    let data;
+    try {
+      data = await response.json();
+    } catch (jsonError) {
+      console.error('Failed to parse CMS API response as JSON:', jsonError);
+      const textResponse = await clonedResponse.text();
+      console.error('Raw response:', textResponse.substring(0, 200));
+      throw new Error(`CMS API returned invalid JSON: ${(jsonError as Error).message}`);
+    }
     return data;
   } catch (error) {
     console.error(`Error fetching from CMS API (${endpoint}):`, error);
