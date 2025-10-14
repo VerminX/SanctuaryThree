@@ -4,6 +4,11 @@ import fs from "fs";
 import path from "path";
 import { storage } from "./storage";
 import { setupAuth, isAuthenticated } from "./replitAuth";
+
+declare global {
+  var concurrencyStore: Map<string, number> | undefined;
+  var rateLimitStore: Map<string, number | { count: number; resetTime: number }> | undefined;
+}
 import { 
   insertTenantSchema, 
   insertPatientSchema, 
@@ -5563,7 +5568,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       // Rate limiting (max 5 reports per hour)
       const now = Date.now();
-      const rateData = global.rateLimitStore.get(rateLimitKey) || { count: 0, resetTime: now + 3600000 };
+      const rateData = (global.rateLimitStore.get(rateLimitKey) as { count: number; resetTime: number } | undefined) || { count: 0, resetTime: now + 3600000 };
       if (now > rateData.resetTime) {
         rateData.count = 0;
         rateData.resetTime = now + 3600000;
@@ -5654,7 +5659,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // SECURE Download generated report by ID with proper tenant authorization
+  // NOTE: Report download endpoint disabled - scheduled report feature not yet implemented
+  // The following storage methods are not implemented: getGeneratedReport, markGeneratedReportAsExpired, incrementReportDownloadCount
+  /*
   app.get('/api/reports/download/:reportId', isAuthenticated, async (req: any, res) => {
     try {
       const userId = req.user.claims.sub;
@@ -5769,6 +5776,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.status(500).json({ message: "Failed to download report" });
     }
   });
+  */
 
   // Get available report types and templates with production hardening
   app.get('/api/reports/templates', isAuthenticated, async (req: any, res) => {
@@ -5780,7 +5788,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const now = Date.now();
       // Simple in-memory rate limiting - in production use Redis
       if (!global.rateLimitStore) global.rateLimitStore = new Map();
-      const lastAccess = global.rateLimitStore.get(userKey) || 0;
+      const lastAccess = (global.rateLimitStore.get(userKey) as number | undefined) || 0;
       if (now - lastAccess < 1000) { // 1 second cooldown
         return res.status(429).json({ message: "Rate limit exceeded" });
       }
