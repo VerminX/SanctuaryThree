@@ -1093,13 +1093,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       };
 
       // Extract ICD-10 codes from encounter for enhanced policy matching
+      // Note: Diagnosis codes are stored in eligibilityChecks table, not directly on encounters
       const icd10Codes: string[] = [];
-      if (encounter.primaryDiagnosis) {
-        icd10Codes.push(encounter.primaryDiagnosis);
-      }
-      if (encounter.secondaryDiagnoses && Array.isArray(encounter.secondaryDiagnoses)) {
-        icd10Codes.push(...encounter.secondaryDiagnoses);
-      }
 
       // Build RAG context with enhanced policy selection using patient characteristics and ICD-10 codes
       const ragContext = await buildRAGContext(
@@ -1271,27 +1266,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
       };
 
       // Collect ICD-10 codes from episode and all encounters for comprehensive matching
+      // Note: Diagnosis codes are stored in eligibilityChecks table, not directly on encounters/episodes
       const icd10Codes: string[] = [];
       
-      // Add episode-level diagnoses
+      // Add episode-level diagnoses (episodes only have primaryDiagnosis, not secondaryDiagnoses)
       if (episode.primaryDiagnosis) {
         icd10Codes.push(episode.primaryDiagnosis);
       }
-      if (episode.secondaryDiagnoses && Array.isArray(episode.secondaryDiagnoses)) {
-        icd10Codes.push(...episode.secondaryDiagnoses);
-      }
       
-      // Add encounter-level diagnoses (deduplicated)
-      const uniqueCodes = new Set(icd10Codes);
-      encounters.forEach(enc => {
-        if (enc.primaryDiagnosis) {
-          uniqueCodes.add(enc.primaryDiagnosis);
-        }
-        if (enc.secondaryDiagnoses && Array.isArray(enc.secondaryDiagnoses)) {
-          enc.secondaryDiagnoses.forEach(code => uniqueCodes.add(code));
-        }
-      });
-      const allIcd10Codes = Array.from(uniqueCodes);
+      // Encounters don't have diagnosis fields - they're stored in eligibilityChecks
+      const allIcd10Codes = icd10Codes
 
       // Build RAG context with enhanced policy selection using patient characteristics and ICD-10 codes
       const ragContext = await buildRAGContext(
