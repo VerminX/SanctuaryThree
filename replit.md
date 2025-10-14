@@ -34,6 +34,7 @@ The backend is built with Node.js and Express.js using TypeScript. Drizzle ORM p
 - **Upload UX Enhancement**: Uploads page displays unique visual identifiers (counter badges #1, #2, etc., short upload IDs, formatted timestamps) to distinguish duplicate uploads, with comprehensive data-testid attributes for reliable E2E testing.
 - **API Error Handling**: Centralized error handler ensures all API endpoints return consistent JSON responses with proper status codes and error messages, improving client-side error handling and debugging.
 - **Async AI Processing**: The POST /api/upload/:uploadId/extract-data endpoint now uses asynchronous background processing, returning HTTP 202 (Accepted) immediately and processing OpenAI extraction in the background. This eliminates 30-60 second request blocking, prevents timeout issues, and provides better user experience with real-time status updates via polling.
+- **Vascular Data Integration (Critical Bug Fix - Oct 2025)**: Fixed critical bug where vascular data was not being passed to AI eligibility analysis. Both single-encounter and full-context analysis routes now correctly pass `vascularStudies` (ABI, TBI, TcPO2) and `clinicalVascularAssessment` (pulses, edema, perfusion) to OpenAI service. AI prompts explicitly instruct evaluation of vascular sufficiency against Medicare thresholds (ABI >0.7 for DFU, TBI >0.4, TcPO2 >30mmHg), ensuring LCD compliance checks include vascular assessment.
 
 ## External Dependencies
 - **CMS Integration**: api.coverage.cms.gov for real-time Medicare LCD policy integration.
