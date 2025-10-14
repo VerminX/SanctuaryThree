@@ -230,7 +230,14 @@ Respond with JSON in this exact format:
       temperature: 0, // Zero temperature for absolute determinism in medical compliance
     });
 
-    const result = JSON.parse(response.choices[0].message.content || '{}');
+    let result;
+    try {
+      result = JSON.parse(response.choices[0].message.content || '{}');
+    } catch (parseError) {
+      console.error('Failed to parse AI response as JSON:', parseError);
+      console.error('Raw AI response:', response.choices[0].message.content);
+      throw new Error('AI returned malformed JSON response: ' + (parseError as Error).message);
+    }
     
     // Validate the response structure
     if (!result.eligibility || !result.rationale || !Array.isArray(result.citations)) {
@@ -469,7 +476,14 @@ Respond with JSON in this exact format:
       temperature: 0.0, // Zero temperature for maximum consistency
     });
 
-    const result = JSON.parse(response.choices[0].message.content || '{}');
+    let result;
+    try {
+      result = JSON.parse(response.choices[0].message.content || '{}');
+    } catch (parseError) {
+      console.error('Failed to parse AI response as JSON:', parseError);
+      console.error('Raw AI response:', response.choices[0].message.content);
+      throw new Error('AI returned malformed JSON response: ' + (parseError as Error).message);
+    }
     
     // Validate the response structure
     if (!result.eligibility || !result.rationale || !Array.isArray(result.citations)) {
@@ -679,7 +693,14 @@ Respond with JSON in this exact format:
       temperature: 0, // Zero temperature for absolute determinism in medical compliance
     });
 
-    const result = JSON.parse(response.choices[0].message.content || '{}');
+    let result;
+    try {
+      result = JSON.parse(response.choices[0].message.content || '{}');
+    } catch (parseError) {
+      console.error('Failed to parse AI response as JSON:', parseError);
+      console.error('Raw AI response:', response.choices[0].message.content);
+      throw new Error('AI returned malformed JSON response: ' + (parseError as Error).message);
+    }
     
     // Validate the response structure
     if (!result.eligibility || !result.rationale || !Array.isArray(result.citations)) {
@@ -1015,7 +1036,14 @@ Respond with JSON in this exact format:
       temperature: 0, // Zero temperature for absolute determinism in medical compliance
     });
 
-    const result = JSON.parse(response.choices[0].message.content || '{}');
+    let result;
+    try {
+      result = JSON.parse(response.choices[0].message.content || '{}');
+    } catch (parseError) {
+      console.error('Failed to parse AI response as JSON:', parseError);
+      console.error('Raw AI response:', response.choices[0].message.content);
+      throw new Error('AI returned malformed JSON response: ' + (parseError as Error).message);
+    }
     
     // Validate the response structure
     if (!result.eligibility || !result.rationale || !Array.isArray(result.citations)) {
