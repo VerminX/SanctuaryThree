@@ -50,6 +50,8 @@ interface EligibilityAnalysisRequest {
   encounterNotes: string[];
   woundDetails: any;
   conservativeCare: any;
+  vascularStudies?: any;
+  clinicalVascularAssessment?: any;
   patientInfo: {
     payerType: string;
     macRegion: string;
@@ -98,7 +100,7 @@ interface EligibilityAnalysisResponse {
 }
 
 export async function analyzeEligibility(request: EligibilityAnalysisRequest): Promise<EligibilityAnalysisResponse> {
-  const { encounterNotes, woundDetails, conservativeCare, patientInfo, policyContext } = request;
+  const { encounterNotes, woundDetails, conservativeCare, vascularStudies, clinicalVascularAssessment, patientInfo, policyContext } = request;
   
   // PHASE 2: PRE-ELIGIBILITY CHECKS for single encounter analysis
   try {
@@ -192,6 +194,12 @@ CRITICAL WOUND MEASUREMENT ANALYSIS:
 - If no measurements are found, specifically state "detailed wound measurements over time" as a documentation gap
 - Consider wound size progression over time when measurements are available from multiple encounters
 
+CRITICAL VASCULAR ASSESSMENT:
+- Analyze vascular studies data (ABI >0.7 required for DFU, TBI >0.4, TcPO2 >30mmHg) if provided
+- Evaluate clinical vascular assessment findings (pulses, edema, perfusion status)
+- Identify vascular insufficiency as a coverage concern if values are below thresholds
+- Flag missing vascular documentation as a required gap for diabetic foot ulcers
+
 Selected Policy (Pre-selected by system):
 ${policyContext}
 
@@ -207,6 +215,12 @@ ${JSON.stringify(woundDetails, null, 2)}
 
 Conservative Care:
 ${JSON.stringify(conservativeCare, null, 2)}
+
+Vascular Studies:
+${vascularStudies ? JSON.stringify(vascularStudies, null, 2) : 'Not assessed'}
+
+Clinical Vascular Assessment:
+${clinicalVascularAssessment ? JSON.stringify(clinicalVascularAssessment, null, 2) : 'Not assessed'}
 
 Respond with JSON in this exact format:
 {
