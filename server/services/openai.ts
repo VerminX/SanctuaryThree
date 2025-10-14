@@ -267,7 +267,8 @@ interface FullContextAnalysisRequest {
     woundDetails: any;
     conservativeCare: any;
     procedureCodes?: any[];
-    vascularAssessment?: any;
+    vascularStudies?: any;
+    clinicalVascularAssessment?: any;
     functionalStatus?: any;
     diabeticStatus?: string | null;
   };
@@ -277,7 +278,8 @@ interface FullContextAnalysisRequest {
     woundDetails: any;
     conservativeCare: any;
     procedureCodes?: any[];
-    vascularAssessment?: any;
+    vascularStudies?: any;
+    clinicalVascularAssessment?: any;
     functionalStatus?: any;
     diabeticStatus?: string | null;
     infectionStatus?: string;
@@ -378,7 +380,8 @@ export async function analyzeEligibilityWithFullContext(request: FullContextAnal
       const encounterDate = new Date(enc.date).toISOString().split('T')[0];
       const measurements = enc.woundDetails?.measurements;
       const cptCodes = enc.procedureCodes?.map((p: any) => p.code).join(', ') || 'None';
-      const vascular = enc.vascularAssessment;
+      const vascularStudies = enc.vascularStudies;
+      const clinicalVascular = enc.clinicalVascularAssessment;
       const functional = enc.functionalStatus;
       
       return `
@@ -392,11 +395,11 @@ WOUND DETAILS:
 
 PROCEDURES/CPT CODES: ${cptCodes}
 
-VASCULAR STATUS:
-- Dorsalis Pedis: ${vascular?.dorsalisPedis || 'Not assessed'}
-- Posterior Tibial: ${vascular?.posteriorTibial || 'Not assessed'}
-- Edema: ${vascular?.edema || 'Not assessed'}
-- Capillary Refill: ${vascular?.capillaryRefill || 'Not assessed'}
+VASCULAR STUDIES:
+${vascularStudies ? JSON.stringify(vascularStudies, null, 2) : 'Not assessed'}
+
+CLINICAL VASCULAR ASSESSMENT:
+${clinicalVascular ? JSON.stringify(clinicalVascular, null, 2) : 'Not assessed'}
 
 FUNCTIONAL STATUS:
 - Mobility: ${functional?.mobility || 'Not assessed'}
@@ -420,7 +423,8 @@ COMPREHENSIVE ANALYSIS REQUIREMENTS:
 - Consider wound measurement progression over time (increasing/decreasing/stable)
 - Evaluate cumulative conservative care duration and effectiveness
 - Track all procedures performed (CPT codes) throughout the episode
-- Assess vascular status changes and functional limitations
+- CRITICAL: Assess vascular status using VASCULAR STUDIES (ABI, TBI, TcPO2) and CLINICAL VASCULAR ASSESSMENT (pulses, edema, perfusion) data
+- Evaluate functional limitations and mobility status
 - Consider both primary and secondary insurance coverage
 - Identify patterns of improvement, deterioration, or stagnation
 
@@ -439,6 +443,7 @@ CRITICAL TEMPORAL ANALYSIS:
 - Identify failed conservative treatments with specific timeframes
 - Note any procedures performed (debridements, grafts) with dates
 - Track functional decline or improvement over time
+- VASCULAR ASSESSMENT: Analyze vascular studies data (ABI >0.7 required for DFU, TBI >0.4, TcPO2 >30mmHg) and clinical findings (pulses, edema, perfusion)
 
 Selected Policy (Pre-selected by system):
 ${policyContext}
