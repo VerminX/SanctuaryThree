@@ -515,7 +515,7 @@ export class DatabaseStorage implements IStorage {
       .limit(1);
     
     if (existingById) {
-      // Update existing user by ID
+      // Update existing user by ID - this is the normal case for returning users
       const [user] = await db
         .update(users)
         .set({
@@ -530,7 +530,7 @@ export class DatabaseStorage implements IStorage {
       return user;
     }
     
-    // Try to find existing user by email
+    // Check if email is already taken by a different user ID
     const [existingByEmail] = await db
       .select()
       .from(users)
@@ -538,22 +538,15 @@ export class DatabaseStorage implements IStorage {
       .limit(1);
     
     if (existingByEmail) {
-      // Update existing user found by email
-      const [user] = await db
-        .update(users)
-        .set({
-          id: userData.id, // Update ID to match new login
-          firstName: userData.firstName,
-          lastName: userData.lastName,
-          profileImageUrl: userData.profileImageUrl,
-          updatedAt: new Date(),
-        })
-        .where(eq(users.id, existingByEmail.id))
-        .returning();
-      return user;
+      // Email conflict: same email but different ID
+      // This is a security concern - reject to prevent account hijacking
+      throw new Error(
+        `Email ${userData.email} is already associated with a different user account. ` +
+        `Please contact support to resolve this conflict.`
+      );
     }
     
-    // Insert new user
+    // Insert new user - no conflicts found
     const [user] = await db
       .insert(users)
       .values(userData)

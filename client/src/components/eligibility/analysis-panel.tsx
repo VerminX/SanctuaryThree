@@ -162,7 +162,7 @@ export default function AnalysisPanel({
           </span>
           <div className="flex items-center space-x-2">
             <div className="w-2 h-2 bg-chart-2 rounded-full"></div>
-            <span className="text-xs text-muted-foreground">OpenAI GPT-5 • HIPAA Compliant</span>
+            <span className="text-xs text-muted-foreground">OpenAI GPT-4o-mini • HIPAA Compliant</span>
           </div>
         </CardTitle>
       </CardHeader>
