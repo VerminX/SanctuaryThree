@@ -61,6 +61,27 @@ const VALID_MAC_REGIONS = [
   'J8', // WPS - IA, KS, MO, NE
 ];
 
+// Extract MAC code from full MAC region name
+// e.g., "CGS Administrators (MAC J-H)" → "JH"
+function extractMACCode(macRegion: string | null | undefined): string | null {
+  if (!macRegion) return null;
+  
+  // Pattern: "Provider Name (MAC X-Y)" or just "XY"
+  const match = macRegion.match(/\(MAC\s+([A-Z]-?[A-Z0-9])\)/i);
+  if (match) {
+    // Remove hyphen and return uppercase: "J-H" → "JH"
+    return match[1].replace('-', '').toUpperCase();
+  }
+  
+  // If already a short code (2 chars), return as-is
+  const trimmed = macRegion.trim().toUpperCase();
+  if (trimmed.length <= 3 && /^[A-Z0-9]+$/.test(trimmed)) {
+    return trimmed;
+  }
+  
+  return null;
+}
+
 // Validate MAC region parameter
 function validateMACRegion(macRegion: string | null | undefined): { valid: boolean; error?: string } {
   if (!macRegion || !macRegion.trim()) {
@@ -4263,6 +4284,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const patientData = extractedData.extractedPatientData as any;
         const encounterData = extractedData.extractedEncounterData as any;
         
+        // Get tenant's MAC region to use as fallback when PDF doesn't contain MAC region
+        const tenant = await storage.getTenant(upload.tenantId);
+        
         // Decrypt patient PHI fields
         const decryptedPatientData = {
           mrn: patientData?.mrn ? decryptPHI(patientData.mrn) : '',
@@ -4274,7 +4298,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           insuranceId: patientData?.insuranceId ? decryptPHI(patientData.insuranceId) : undefined,
           payerType: patientData?.payerType || 'Original Medicare',
           planName: patientData?.planName,
-          macRegion: patientData?.macRegion
+          macRegion: extractMACCode(patientData?.macRegion) || extractMACCode(tenant?.macRegion) || null
         };
 
         // Check if patient already exists by MRN using proper duplicate prevention
