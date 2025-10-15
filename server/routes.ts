@@ -4478,6 +4478,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
             console.log(`Skipped duplicate encounter [redacted] on [redacted]`);
           } else {
             try {
+              // Map vascular data from PDF extraction to the vascularAssessment field
+              let vascularAssessment = null;
+              if ((encounter as any).clinicalVascularAssessment || (encounter as any).vascularStudies) {
+                vascularAssessment = {
+                  ...(encounter as any).clinicalVascularAssessment,
+                  ...(encounter as any).vascularStudies
+                };
+              }
+
               // Create new encounter with proper error handling
               const newEncounter = await storage.createEncounter({
                 patientId,
@@ -4486,8 +4495,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
                 encryptedNotes: encryptEncounterNotes(encounter.notes),
                 woundDetails: encounter.woundDetails,
                 conservativeCare: encounter.conservativeCare,
+                vascularAssessment: vascularAssessment,
+                functionalStatus: (encounter as any).functionalStatus || null,
+                diabeticStatus: (encounter as any).diabeticStatus || null,
                 infectionStatus: encounter.infectionStatus,
-                comorbidities: encounter.comorbidities
+                comorbidities: encounter.comorbidities,
+                procedureCodes: (encounter as any).procedureCodes || null
               });
               
               createdEncounters.push(newEncounter);

@@ -743,19 +743,29 @@ export async function performPreEligibilityChecks(
     }
 
     // STEP 6: Documentation completeness check
-    const hasWoundMeasurements = validatorEncounters.some(enc => 
-      enc.woundDetails?.length || enc.woundDetails?.width || enc.woundDetails?.area
-    );
+    const hasWoundMeasurements = validatorEncounters.some(enc => {
+      const measurements = enc.woundDetails?.measurements;
+      return measurements && (
+        (typeof measurements.length === 'number' && measurements.length > 0) ||
+        (typeof measurements.width === 'number' && measurements.width > 0) ||
+        (typeof measurements.area === 'number' && measurements.area > 0)
+      );
+    });
 
     if (!hasWoundMeasurements) {
       policyViolations.push('Wound measurements required for coverage determination');
       failureReasons.push('Missing wound size documentation');
     }
 
-    // Check for vascular assessment documentation
-    const hasVascularAssessment = validatorEncounters.some(enc =>
-      enc.woundDetails?.vascularStatus && enc.woundDetails.vascularStatus !== 'unknown'
-    );
+    // Check for vascular assessment documentation - check the vascularAssessment field, not woundDetails
+    const hasVascularAssessment = validatorEncounters.some(enc => {
+      // Check if vascular assessment data exists in any field
+      const hasVascularStudies = enc.woundDetails?.vascularStatus && enc.woundDetails.vascularStatus !== 'unknown';
+      const hasClinicalVascular = enc.woundDetails?.clinicalVascularAssessment?.pulses;
+      const hasVascularField = enc.woundDetails?.vascularAssessment;
+      
+      return hasVascularStudies || hasClinicalVascular || hasVascularField;
+    });
 
     if (!hasVascularAssessment) {
       policyViolations.push('Vascular assessment required for wound therapy coverage');
