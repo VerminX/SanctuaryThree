@@ -1,5 +1,66 @@
 import { z } from "zod";
 
+// Helper function to map diagnosis descriptions to ICD-10 codes
+function mapProblemToICD10(description: string): string | null {
+  const descriptionLower = description.toLowerCase();
+  
+  // Map common problem descriptions to ICD-10 codes
+  const mappings: Record<string, string> = {
+    // Diabetic foot ulcer variations
+    'ulcer of left foot due to type 2 diabetes': 'E11.621',
+    'ulcer of right foot due to type 2 diabetes': 'E11.621',
+    'ulcer of foot due to type 2 diabetes': 'E11.621',
+    'diabetic foot ulcer': 'E11.621',
+    'diabetic ulcer': 'E11.621',
+    'dfu': 'E11.621',
+    'routine diabetic foot care': 'E11.621',
+    
+    // Venous ulcers
+    'venous stasis ulcer': 'I87.33',
+    'venous ulcer': 'I87.33',
+    'stasis ulcer': 'I87.33',
+    'venous insufficiency ulcer': 'I87.33',
+    'vlu': 'I87.33',
+    
+    // Pressure ulcers
+    'pressure ulcer': 'L89.9',
+    'pressure sore': 'L89.9',
+    'decubitus ulcer': 'L89.9',
+    'bedsore': 'L89.9',
+    
+    // Chronic wound
+    'chronic ulcer of lower limb': 'L97.909',
+    'non-healing wound': 'L97.909',
+    'chronic wound': 'L97.909',
+    'wound care': 'L97.909',
+    'wound healing': 'L97.909',
+    'open wound': 'L97.909'
+  };
+  
+  // Check for exact matches first
+  for (const [key, code] of Object.entries(mappings)) {
+    if (descriptionLower === key || descriptionLower.includes(key)) {
+      return code;
+    }
+  }
+  
+  // Check for partial matches with more specific patterns
+  if (descriptionLower.includes('ulcer') && descriptionLower.includes('foot') && 
+      (descriptionLower.includes('diabet') || descriptionLower.includes('type 2'))) {
+    return 'E11.621';
+  }
+  
+  if (descriptionLower.includes('ulcer') && descriptionLower.includes('venous')) {
+    return 'I87.33';
+  }
+  
+  if (descriptionLower.includes('ulcer') && descriptionLower.includes('pressure')) {
+    return 'L89.9';
+  }
+  
+  return null;
+}
+
 // Common types and interfaces
 export interface DiagnosisValidationResult {
   isValid: boolean;
@@ -8,6 +69,7 @@ export interface DiagnosisValidationResult {
   warningMessages: string[];
   auditTrail: string[];
   timestamp: string;
+  effectiveDiagnosis?: string; // The mapped ICD-10 code if the original was a text description
 }
 
 export interface ClinicalNecessityResult {
@@ -61,6 +123,7 @@ export interface DiagnosisRecommendationsResult {
 /**
  * CRITICAL FUNCTION 1: Validate Diagnosis Codes
  * Validates diagnosis codes against ICD-10 standards and Medicare requirements
+ * Now with resilience for text descriptions - attempts to map them to ICD-10 codes
  */
 export function validateDiagnosisCodes(
   primaryDiagnosis: string,
@@ -73,6 +136,7 @@ export function validateDiagnosisCodes(
   
   let validationScore = 100;
   let isValid = true;
+  let effectiveDiagnosis = primaryDiagnosis;
 
   // Validate primary diagnosis format
   if (!primaryDiagnosis || primaryDiagnosis.length < 3) {
@@ -86,9 +150,20 @@ export function validateDiagnosisCodes(
   // Validate ICD-10 pattern
   const icd10Pattern = /^[A-Z][0-9]{2}(\.[0-9A-Z]{1,4})?$/;
   if (primaryDiagnosis && !icd10Pattern.test(primaryDiagnosis)) {
-    errorMessages.push('Primary diagnosis does not match ICD-10 format');
-    validationScore -= 20;
-    isValid = false;
+    // Attempt to map the description to an ICD-10 code
+    const mappedCode = mapProblemToICD10(primaryDiagnosis);
+    
+    if (mappedCode) {
+      effectiveDiagnosis = mappedCode;
+      warningMessages.push(`Primary diagnosis was a text description. Mapped to ICD-10 code: ${mappedCode}`);
+      auditTrail.push(`Mapped diagnosis description "${primaryDiagnosis}" to ICD-10 code ${mappedCode}`);
+      validationScore -= 10; // Minor penalty for needing mapping
+    } else {
+      errorMessages.push(`Primary diagnosis does not match ICD-10 format and could not be mapped to a valid code. Please provide a valid ICD-10 code (e.g., E11.621 for diabetic foot ulcer).`);
+      validationScore -= 20;
+      isValid = false;
+      auditTrail.push(`Could not map diagnosis "${primaryDiagnosis}" to ICD-10 code`);
+    }
   }
 
   // Validate secondary diagnoses
@@ -102,15 +177,15 @@ export function validateDiagnosisCodes(
     auditTrail.push(`Validated ${secondaryDiagnoses.length} secondary diagnoses`);
   }
 
-  // Check for wound-specific codes
-  const woundCodePrefixes = ['L89', 'L97', 'L98', 'E10.6', 'E11.6', 'E13.6'];
-  const hasWoundCode = woundCodePrefixes.some(prefix => primaryDiagnosis.startsWith(prefix));
+  // Check for wound-specific codes using the effective diagnosis (which might be mapped)
+  const woundCodePrefixes = ['L89', 'L97', 'L98', 'E10.6', 'E11.6', 'E13.6', 'I87'];
+  const hasWoundCode = woundCodePrefixes.some(prefix => effectiveDiagnosis.startsWith(prefix));
   
   if (!hasWoundCode) {
     warningMessages.push('Primary diagnosis may not be wound-related');
     validationScore -= 5;
   } else {
-    auditTrail.push('Primary diagnosis identified as wound-related');
+    auditTrail.push(`Primary diagnosis identified as wound-related (using ${effectiveDiagnosis})`);
   }
 
   auditTrail.push(`Diagnosis validation completed: ${isValid ? 'VALID' : 'INVALID'} (score: ${validationScore})`);
@@ -121,7 +196,8 @@ export function validateDiagnosisCodes(
     errorMessages,
     warningMessages,
     auditTrail,
-    timestamp
+    timestamp,
+    effectiveDiagnosis: effectiveDiagnosis !== primaryDiagnosis ? effectiveDiagnosis : undefined
   };
 }
 
@@ -578,8 +654,14 @@ export async function performPreEligibilityChecks(
       policyViolations.push('Invalid ICD-10 diagnosis codes detected');
     }
 
+    // Use the mapped ICD-10 code if available, otherwise use original
+    const effectivePrimaryDiagnosis = diagnosisValidation.effectiveDiagnosis || episodeData.primaryDiagnosis;
+    if (diagnosisValidation.effectiveDiagnosis) {
+      auditTrail.push(`Using mapped ICD-10 code ${diagnosisValidation.effectiveDiagnosis} for analysis`);
+    }
+
     // STEP 2: Assess clinical necessity across all encounters
-    const allDiagnoses = [episodeData.primaryDiagnosis, ...secondaryDiagnoses].filter(Boolean);
+    const allDiagnoses = [effectivePrimaryDiagnosis, ...secondaryDiagnoses].filter(Boolean);
     
     // Aggregate wound characteristics from the most recent encounter
     const latestEncounter = validatorEncounters[validatorEncounters.length - 1];
@@ -618,7 +700,7 @@ export async function performPreEligibilityChecks(
 
     // STEP 3: Analyze diagnosis complexity
     const complexityAnalysis = analyzeDiagnosisComplexity(
-      episodeData.primaryDiagnosis,
+      effectivePrimaryDiagnosis,
       secondaryDiagnoses,
       { treatmentFailures: treatmentHistory.conservativeCareAttempts },
       woundCharacteristics
@@ -626,7 +708,7 @@ export async function performPreEligibilityChecks(
     auditTrail.push(...complexityAnalysis.auditTrail);
 
     // STEP 4: Map wound type
-    const woundTypeMapping = await mapICD10ToWoundType(episodeData.primaryDiagnosis);
+    const woundTypeMapping = await mapICD10ToWoundType(effectivePrimaryDiagnosis);
     auditTrail.push(...woundTypeMapping.auditTrail);
 
     if (woundTypeMapping.confidence < 50) {
@@ -639,7 +721,7 @@ export async function performPreEligibilityChecks(
 
     // Check for diabetic foot ulcer specific requirements
     const isDiabeticFootUlcer = woundTypeMapping.woundType === 'diabetic_foot_ulcer' ||
-                               episodeData.primaryDiagnosis.startsWith('E1') ||
+                               effectivePrimaryDiagnosis.startsWith('E1') ||
                                patientCondition.diabeticStatus === 'diabetic';
 
     if (isDiabeticFootUlcer) {

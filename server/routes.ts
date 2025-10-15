@@ -4415,7 +4415,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
         // ALWAYS create episode - use wound details if available, safe defaults if not
         const woundType = firstEncounterWithWound.woundDetails?.type || 'General Wound Care';
         const woundLocation = firstEncounterWithWound.woundDetails?.location || 'Not specified';
-        const primaryDiagnosis = firstEncounterWithWound.assessment || 'Wound care assessment';
+        
+        // Extract ICD-10 code from primaryDiagnosis object (prioritize icd10Code over description)
+        let primaryDiagnosis = 'Unknown';
+        if (firstEncounterWithWound.primaryDiagnosis?.icd10Code) {
+          primaryDiagnosis = firstEncounterWithWound.primaryDiagnosis.icd10Code;
+        } else if (firstEncounterWithWound.primaryDiagnosis?.description) {
+          // If no ICD-10 code, use description as fallback
+          primaryDiagnosis = firstEncounterWithWound.primaryDiagnosis.description;
+        }
         
         // Check for existing active episodes for this patient with similar wound characteristics
         const existingEpisodes = await storage.getEpisodesByPatient(patientId);
