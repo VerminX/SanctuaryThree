@@ -507,19 +507,56 @@ export class DatabaseStorage implements IStorage {
   }
 
   async upsertUser(userData: UpsertUser): Promise<User> {
-    const [user] = await db
-      .insert(users)
-      .values(userData)
-      .onConflictDoUpdate({
-        target: users.id,
-        set: {
+    // Try to find existing user by ID
+    const [existingById] = await db
+      .select()
+      .from(users)
+      .where(eq(users.id, userData.id))
+      .limit(1);
+    
+    if (existingById) {
+      // Update existing user by ID
+      const [user] = await db
+        .update(users)
+        .set({
           email: userData.email,
           firstName: userData.firstName,
           lastName: userData.lastName,
           profileImageUrl: userData.profileImageUrl,
           updatedAt: new Date(),
-        },
-      })
+        })
+        .where(eq(users.id, existingById.id))
+        .returning();
+      return user;
+    }
+    
+    // Try to find existing user by email
+    const [existingByEmail] = await db
+      .select()
+      .from(users)
+      .where(eq(users.email, userData.email))
+      .limit(1);
+    
+    if (existingByEmail) {
+      // Update existing user found by email
+      const [user] = await db
+        .update(users)
+        .set({
+          id: userData.id, // Update ID to match new login
+          firstName: userData.firstName,
+          lastName: userData.lastName,
+          profileImageUrl: userData.profileImageUrl,
+          updatedAt: new Date(),
+        })
+        .where(eq(users.id, existingByEmail.id))
+        .returning();
+      return user;
+    }
+    
+    // Insert new user
+    const [user] = await db
+      .insert(users)
+      .values(userData)
       .returning();
     return user;
   }
