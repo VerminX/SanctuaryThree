@@ -111,6 +111,8 @@ export async function analyzeEligibility(request: EligibilityAnalysisRequest): P
       primaryDiagnosis: woundDetails?.primaryDiagnosis || '',
       woundDetails: woundDetails,
       conservativeCare: conservativeCare,
+      clinicalVascularAssessment: clinicalVascularAssessment,
+      vascularStudies: vascularStudies,
       allText: encounterNotes.join(' '),
       diabeticStatus: woundDetails?.diabeticStatus || null // Pass diabetic status to avoid false negatives
     }];
@@ -324,6 +326,8 @@ export async function analyzeEligibilityWithFullContext(request: FullContextAnal
       primaryDiagnosis: currentEncounter.woundDetails?.primaryDiagnosis || '',
       woundDetails: encounter.woundDetails,
       conservativeCare: encounter.conservativeCare,
+      clinicalVascularAssessment: encounter.clinicalVascularAssessment,
+      vascularStudies: encounter.vascularStudies,
       allText: encounter.notes.join(' '),
       diabeticStatus: encounter.diabeticStatus ?? null // Convert undefined to null
     }));
@@ -335,6 +339,8 @@ export async function analyzeEligibilityWithFullContext(request: FullContextAnal
       primaryDiagnosis: currentEncounter.woundDetails?.primaryDiagnosis || '',
       woundDetails: currentEncounter.woundDetails,
       conservativeCare: currentEncounter.conservativeCare,
+      clinicalVascularAssessment: currentEncounter.clinicalVascularAssessment,
+      vascularStudies: currentEncounter.vascularStudies,
       allText: currentEncounter.encounterNotes.join(' '),
       diabeticStatus: currentEncounter.diabeticStatus ?? null // Convert undefined to null
     });
@@ -540,6 +546,8 @@ interface EpisodeEligibilityAnalysisRequest {
     notes: string[];
     woundDetails: any;
     conservativeCare: any;
+    clinicalVascularAssessment?: any;
+    vascularStudies?: any;
     infectionStatus: string;
     comorbidities: string[];
   }>;
@@ -562,6 +570,8 @@ export async function analyzeEpisodeEligibility(request: EpisodeEligibilityAnaly
       primaryDiagnosis: episodeInfo.primaryDiagnosis,
       woundDetails: encounter.woundDetails,
       conservativeCare: encounter.conservativeCare,
+      clinicalVascularAssessment: encounter.clinicalVascularAssessment,
+      vascularStudies: encounter.vascularStudies,
       allText: encounter.notes.join(' '),
       diabeticStatus: null // No diabetic status available in this context
     }));

@@ -620,6 +620,8 @@ export async function performPreEligibilityChecks(
     primaryDiagnosis: string;
     woundDetails: any;
     conservativeCare: any;
+    clinicalVascularAssessment?: any;
+    vascularStudies?: any;
     allText: string;
     diabeticStatus: string | null;
   }>
@@ -757,14 +759,38 @@ export async function performPreEligibilityChecks(
       failureReasons.push('Missing wound size documentation');
     }
 
-    // Check for vascular assessment documentation - check the vascularAssessment field, not woundDetails
+    // Check for vascular assessment documentation across all possible locations
     const hasVascularAssessment = validatorEncounters.some(enc => {
-      // Check if vascular assessment data exists in any field
-      const hasVascularStudies = enc.woundDetails?.vascularStatus && enc.woundDetails.vascularStatus !== 'unknown';
-      const hasClinicalVascular = enc.woundDetails?.clinicalVascularAssessment?.pulses;
-      const hasVascularField = enc.woundDetails?.vascularAssessment;
+      // Check conservative care vascular assessment (dorsalisPedis, posteriorTibial, capillaryRefill, edema, varicosities)
+      const hasConservativeCareVascular = enc.conservativeCare?.vascularAssessment && (
+        enc.conservativeCare.vascularAssessment.dorsalisPedis ||
+        enc.conservativeCare.vascularAssessment.posteriorTibial ||
+        enc.conservativeCare.vascularAssessment.capillaryRefill ||
+        enc.conservativeCare.vascularAssessment.edema !== undefined ||
+        enc.conservativeCare.vascularAssessment.varicosities !== undefined
+      );
       
-      return hasVascularStudies || hasClinicalVascular || hasVascularField;
+      // Check clinical vascular assessment (pulseExamination, perfusionAssessment, venousAssessment)
+      const hasClinicalVascular = enc.clinicalVascularAssessment && (
+        enc.clinicalVascularAssessment.pulseExamination ||
+        enc.clinicalVascularAssessment.perfusionAssessment ||
+        enc.clinicalVascularAssessment.venousAssessment
+      );
+      
+      // Check formal vascular studies (ABI, TBI, TcPO2, arterialDuplex, etc.)
+      const hasVascularStudies = enc.vascularStudies && (
+        enc.vascularStudies.abi ||
+        enc.vascularStudies.tbi ||
+        enc.vascularStudies.tcpo2 ||
+        enc.vascularStudies.arterialDuplex ||
+        enc.vascularStudies.pvr ||
+        enc.vascularStudies.angiography
+      );
+      
+      // Legacy: Check woundDetails for backward compatibility
+      const hasLegacyVascular = enc.woundDetails?.vascularStatus && enc.woundDetails.vascularStatus !== 'unknown';
+      
+      return hasConservativeCareVascular || hasClinicalVascular || hasVascularStudies || hasLegacyVascular;
     });
 
     if (!hasVascularAssessment) {
