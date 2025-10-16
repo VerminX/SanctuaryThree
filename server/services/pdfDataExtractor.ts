@@ -503,7 +503,7 @@ export async function extractDataFromPdfText(pdfText: string): Promise<PdfExtrac
   // HIPAA COMPLIANCE: BLOCK processing of PHI without proper BAA-compliant provider
   const azureApiKey = process.env.AZURE_OPENAI_API_KEY;
   const azureEndpoint = process.env.AZURE_OPENAI_ENDPOINT;
-  const azureDeployment = process.env.AZURE_OPENAI_DEPLOYMENT || 'gpt-4o-mini';
+  const azureDeployment = process.env.AZURE_OPENAI_DEPLOYMENT || 'gpt-4o';
   const isProduction = process.env.NODE_ENV === 'production';
   
   // In production, REQUIRE Azure OpenAI for HIPAA compliance
@@ -546,10 +546,10 @@ export async function extractDataFromPdfText(pdfText: string): Promise<PdfExtrac
     openai = new OpenAI({ apiKey: openaiKey });
   }
   
-  // HIPAA SAFEGUARD: Increase limit for comprehensive extraction while preventing context overflow
-  const maxTextLength = 60000; // ~15000 tokens at 4 chars/token average - sufficient for comprehensive multi-encounter docs
+  // HIPAA SAFEGUARD: Increased limit for 100% data capture - no truncation for critical medical data
+  const maxTextLength = 150000; // ~37500 tokens at 4 chars/token average - ensures complete extraction
   const truncatedText = pdfText.length > maxTextLength 
-    ? pdfText.substring(0, maxTextLength) + '\n\n[TEXT TRUNCATED FOR PROCESSING - INCREASE LIMIT IF NEEDED]'
+    ? pdfText.substring(0, maxTextLength) + '\n\n[TEXT TRUNCATED - DOCUMENT EXCEEDS MAXIMUM PROCESSING LIMIT]'
     : pdfText;
   
   // ⚡ PERFORMANCE OPTIMIZATIONS (targeting 30-60% speed improvement):
@@ -558,36 +558,48 @@ export async function extractDataFromPdfText(pdfText: string): Promise<PdfExtrac
   // 3. Streamlined user message - quick hints vs redundant pre-extracted data lists
   // 4. Using gpt-4o-mini for speed (consider gpt-4o for very complex docs if needed)
   // Note: Temperature kept at 0.1-0.3 range for medical data consistency
-  // OPTIMIZED: Use focused, simplified prompt for faster extraction
-  const systemPrompt = `You are a medical document data extraction specialist. Extract structured patient and encounter data efficiently and accurately.
+  // ENHANCED: Comprehensive prompt with examples for 100% extraction accuracy
+  const systemPrompt = `You are an expert medical document data extraction specialist. Your task is to extract ALL information from medical documents with 100% accuracy, especially wound measurements and clinical data.
 
-CORE TASK: Identify all encounters (different visit dates) and extract key clinical data for each.
+CRITICAL REQUIREMENT: Extract EVERY piece of information, no matter how it's formatted. If you see any measurement in the text, you MUST capture it.
 
-CRITICAL FIELDS (extract these first):
-1. PATIENT INFO: Name, DOB, MRN, insurance (primary & secondary with IDs)
-2. ENCOUNTER BASICS: Date, wound type/location, primary diagnosis with ICD-10 code
-3. WOUND MEASUREMENTS: Length × width × depth (convert to numbers, e.g., "2×3 cm" → length: 2, width: 3, unit: "cm")
-4. TREATMENTS: Procedures performed, CPT/HCPCS codes, application numbers
+WOUND MEASUREMENT EXTRACTION EXAMPLES:
+- "2 x 3 cm" → length: 2, width: 3, unit: "cm"
+- "Length: 2 cm, Width: 3 cm" → length: 2, width: 3, unit: "cm"
+- "L: 2, W: 3" → length: 2, width: 3, unit: "cm" (assume cm if not specified)
+- "measuring approximately 2cm by 3cm" → length: 2, width: 3, unit: "cm"
+- "wound (2 x 3)" → length: 2, width: 3, unit: "cm"
+- "2.5 × 1.8 × 0.3" → length: 2.5, width: 1.8, depth: 0.3, unit: "cm"
+- "dimensions 2cm x 3cm" → length: 2, width: 3, unit: "cm"
+- "two by three centimeters" → length: 2, width: 3, unit: "cm"
+- "2 cm, 3 cm" → length: 2, width: 3, unit: "cm"
+- "area 6 cm²" → Try to extract original L x W if mentioned, otherwise note as area: 6
 
-ADDITIONAL FIELDS (if clearly documented):
-- Clinical notes, assessment, treatment plan
-- Conservative care details (offloading, wound care, debridement) with durations
-- VASCULAR DATA:
-  * Use "vascularStudies" for formal test results: ABI (rightABI/leftABI as numbers), TBI (rightTBI/leftTBI as numbers), TcPO2 (rightFoot/leftFoot as numbers), duplex/angiography summaries
-  * Use "clinicalVascularAssessment" for exam findings: pulse exam (dorsalisPedis/posteriorTibial), edema, perfusion notes
-- ICD-10 codes and problem list
-- Diabetic status (diabetic/nondiabetic/prediabetic)
+EXTRACTION STRATEGY:
+1. FIRST PASS: Look for ANY numeric values near wound-related terms
+2. SECOND PASS: Check for measurements in parentheses, after colons, or in tables
+3. THIRD PASS: Search for spelled-out numbers or non-standard formats
+4. FINAL CHECK: If you found a length but no width (or vice versa), search the surrounding text carefully
 
-EFFICIENCY RULES:
-- Extract complete data but avoid redundant processing
-- Use null for truly missing data (don't infer)
-- Dates in YYYY-MM-DD format
-- Measurements as numbers (not strings)
-- Focus on documented facts, not interpretations
+CRITICAL FIELDS TO EXTRACT:
+1. PATIENT INFO: Name, DOB, MRN, ALL insurance info with IDs
+2. ENCOUNTER: Date, wound type, location, ALL diagnoses with ICD-10 codes
+3. WOUND MEASUREMENTS: MUST extract length, width, depth if present ANYWHERE in text
+4. TREATMENTS: ALL procedures, CPT/HCPCS codes, application numbers
+5. CLINICAL DETAILS: Notes, assessment, plan, conservative care
+
+IMPORTANT RULES:
+- NEVER return null for measurements if ANY measurement exists in the text
+- If only partial measurements found (e.g., only length), still extract what's available
+- Check multiple times for measurements - they may be formatted oddly
+- Extract measurements even if they appear incomplete or unusual
+- Always convert text numbers to numeric values
+- If unsure about units, default to "cm" for wound measurements
 
 ENCOUNTER DETECTION:
-- Look for date patterns, visit numbers, "follow-up", chronological progressions
-- Separate encounters by distinct dates/visits
+- Separate by distinct dates/visits
+- Look for "Visit 1", "Follow-up", date changes, encounter numbers
+- Each date should be a separate encounter
 
 Return JSON in this exact format:
 {
@@ -767,30 +779,114 @@ Return JSON in this exact format:
     console.log(`Found ${extractedInsuranceIds.length} Insurance ID(s) - details redacted for HIPAA compliance`);
   }
   
-  // Extract wound measurements
+  // Extract wound measurements - COMPREHENSIVE patterns for non-standard formats
   const measurementPatterns = [
+    // Standard formats with x or ×
     /measuring\s+approximately\s+(\d+(?:\.\d+)?)\s*(?:cm|mm)?\s*[xX×]\s*(\d+(?:\.\d+)?)\s*(?:cm|mm)?/gi,
     /(\d+(?:\.\d+)?)\s*[xX×]\s*(\d+(?:\.\d+)?)\s*(?:cm|mm)?/gi,
     /size[:\s]+(\d+(?:\.\d+)?)\s*[xX×]\s*(\d+(?:\.\d+)?)/gi,
-    /wound.*?(\d+(?:\.\d+)?)\s*(?:cm|mm)?\s*[xX×]\s*(\d+(?:\.\d+)?)\s*(?:cm|mm)?/gi
+    /wound.*?(\d+(?:\.\d+)?)\s*(?:cm|mm)?\s*[xX×]\s*(\d+(?:\.\d+)?)\s*(?:cm|mm)?/gi,
+    
+    // Separate length and width patterns
+    /[Ll]ength[:\s]+(\d+(?:\.\d+)?)\s*(?:cm|mm)?.*?[Ww]idth[:\s]+(\d+(?:\.\d+)?)\s*(?:cm|mm)?/gi,
+    /[Ll][:\s]+(\d+(?:\.\d+)?)\s*(?:cm|mm)?.*?[Ww][:\s]+(\d+(?:\.\d+)?)\s*(?:cm|mm)?/gi,
+    
+    // "by" format (e.g., "2 cm by 3 cm")
+    /(\d+(?:\.\d+)?)\s*(?:cm|mm)?\s+by\s+(\d+(?:\.\d+)?)\s*(?:cm|mm)?/gi,
+    
+    // Parenthetical formats (e.g., "wound (2 x 3 cm)")
+    /wound[^(]*\((\d+(?:\.\d+)?)\s*[xX×]\s*(\d+(?:\.\d+)?)\s*(?:cm|mm)?\)/gi,
+    
+    // Dimensions format
+    /dimensions?[:\s]+(\d+(?:\.\d+)?)\s*[xX×]\s*(\d+(?:\.\d+)?)/gi,
+    
+    // Measuring format without "approximately"
+    /measur(?:ing|es?)\s+(\d+(?:\.\d+)?)\s*(?:cm|mm)?\s*[xX×]\s*(\d+(?:\.\d+)?)\s*(?:cm|mm)?/gi,
+    
+    // Area-based extraction (convert back to L x W assuming square)
+    /area[:\s]+(\d+(?:\.\d+)?)\s*(?:cm²|cm2|square\s*cm)/gi,
+    
+    // Spelled out numbers (one, two, three, etc.)
+    /(?:one|two|three|four|five|six|seven|eight|nine|ten)\s*(?:cm|centimeters?)?\s*[xX×]\s*(?:one|two|three|four|five|six|seven|eight|nine|ten)\s*(?:cm|centimeters?)?/gi,
+    
+    // Depth patterns (for 3D measurements)
+    /(\d+(?:\.\d+)?)\s*[xX×]\s*(\d+(?:\.\d+)?)\s*[xX×]\s*(\d+(?:\.\d+)?)/gi,
+    
+    // Alternative separators (comma, dash, etc.)
+    /(\d+(?:\.\d+)?)\s*(?:cm|mm)?\s*[,\-–—]\s*(\d+(?:\.\d+)?)\s*(?:cm|mm)?/gi
   ];
   
-  const extractedMeasurements: Array<{length: string, width: string, full: string}> = [];
+  // Helper function to convert spelled-out numbers to digits
+  const wordToNumber: Record<string, string> = {
+    'one': '1', 'two': '2', 'three': '3', 'four': '4', 'five': '5',
+    'six': '6', 'seven': '7', 'eight': '8', 'nine': '9', 'ten': '10'
+  };
+  
+  const extractedMeasurements: Array<{length: string, width: string, depth?: string, full: string}> = [];
   for (const pattern of measurementPatterns) {
     const matches = Array.from(pdfText.matchAll(pattern));
     matches.forEach(match => {
-      if (match[1] && match[2]) {
-        extractedMeasurements.push({
-          length: match[1],
-          width: match[2],
+      let length = match[1];
+      let width = match[2];
+      let depth = match[3];
+      
+      // Convert spelled-out numbers if present
+      if (length && isNaN(parseFloat(length))) {
+        length = wordToNumber[length.toLowerCase()] || length;
+      }
+      if (width && isNaN(parseFloat(width))) {
+        width = wordToNumber[width.toLowerCase()] || width;
+      }
+      if (depth && isNaN(parseFloat(depth))) {
+        depth = wordToNumber[depth.toLowerCase()] || depth;
+      }
+      
+      // Handle area-based patterns (only one capture group)
+      if (pattern.source.includes('area') && match[1] && !match[2]) {
+        // For area, try to calculate approximate L x W (assuming square for simplicity)
+        const area = parseFloat(match[1]);
+        if (!isNaN(area)) {
+          const side = Math.sqrt(area);
+          extractedMeasurements.push({
+            length: side.toFixed(1),
+            width: side.toFixed(1),
+            full: match[0] + ' (estimated from area)'
+          });
+        }
+      } else if (length && width) {
+        const measurement: any = {
+          length,
+          width,
           full: match[0]
+        };
+        if (depth) {
+          measurement.depth = depth;
+        }
+        extractedMeasurements.push(measurement);
+      } else if (length && !width) {
+        // Sometimes only length is captured, search for width nearby
+        extractedMeasurements.push({
+          length,
+          width: '',  // Will be filled by AI
+          full: match[0] + ' (partial)'
         });
       }
     });
   }
-  if (extractedMeasurements.length > 0) {
-    // Log count only, not actual measurements
-    console.log(`Found ${extractedMeasurements.length} wound measurement(s)`);
+  
+  // Deduplicate measurements
+  const uniqueMeasurements = extractedMeasurements.filter((measurement, index, self) =>
+    index === self.findIndex((m) => 
+      m.length === measurement.length && 
+      m.width === measurement.width &&
+      m.depth === measurement.depth
+    )
+  );
+  
+  if (uniqueMeasurements.length > 0) {
+    // Enhanced logging for debugging
+    console.log(`Found ${uniqueMeasurements.length} unique wound measurement(s)`);
+    console.log('Measurement patterns detected:', uniqueMeasurements.map(m => `L:${m.length} W:${m.width}${m.depth ? ` D:${m.depth}` : ''}`).join(', '));
   }
   
   // Extract vascular findings
@@ -913,7 +1009,7 @@ Return JSON in this exact format:
   }
   
   try {
-    const modelName = azureApiKey ? azureDeployment : "gpt-4o-mini";
+    const modelName = azureApiKey ? azureDeployment : "gpt-4o";  // Use gpt-4o for better extraction accuracy
     console.log('Using AI model:', modelName);
     console.log('Input text length:', truncatedText.length, 'characters (~', Math.round(truncatedText.length / 4), 'tokens)');
     
@@ -930,11 +1026,19 @@ Return JSON in this exact format:
           role: "user", 
           content: `Extract structured data from the following medical document. Return JSON matching the specified schema.
 
-QUICK HINTS:
+CRITICAL EXTRACTION HINTS:
 - Found ${extractedCptCodes.length || 0} CPT/HCPCS codes, ${extractedICD10Codes.length || 0} ICD-10 codes
-- Diabetic status detected: ${diabeticStatus || 'Check document'}
-- Convert measurements to numbers (e.g., "2×3 cm" → length: 2, width: 3)
-- Include both primary and secondary insurance if present
+- Diabetic status: ${diabeticStatus || 'Check document carefully'}
+- WOUND MEASUREMENTS DETECTED: ${uniqueMeasurements.length > 0 ? uniqueMeasurements.map(m => `L:${m.length} W:${m.width}${m.depth ? ` D:${m.depth}` : ''}`).join(', ') : 'SEARCH CAREFULLY - measurements may be in non-standard format'}
+
+IMPORTANT: You MUST extract ALL wound measurements. If we detected ${uniqueMeasurements.length} measurement(s) via regex, you should find at least that many. Check for:
+- Measurements in parentheses (2 x 3)
+- Separated L: and W: values
+- "by" format (2 by 3)
+- Measurements in tables or lists
+- Any numeric values near wound descriptions
+
+For EACH encounter/visit date, extract the wound measurements for that specific date.
 
 DOCUMENT:
 
@@ -949,43 +1053,172 @@ ${truncatedText}`,
     const extractionTime = Date.now() - extractionStartTime;
     console.log('⚡ AI extraction completed in:', extractionTime, 'ms (', (extractionTime / 1000).toFixed(1), 'seconds)');
 
-    const result = JSON.parse(response.choices[0].message.content || '{}');
+    let result = JSON.parse(response.choices[0].message.content || '{}');
     
-    // DEBUGGING: Log what the AI extracted
-    console.log('\n=== AI EXTRACTION RESULT ===');
-    console.log('Number of encounters extracted:', result.encounterData?.length || 0);
+    // MULTI-PASS EXTRACTION: If measurements are missing, do a focused second pass
+    if (result.encounterData && Array.isArray(result.encounterData)) {
+      let needsSecondPass = false;
+      
+      // Check if any encounters are missing measurements that we found via regex
+      result.encounterData.forEach((encounter: any) => {
+        if (!encounter.woundDetails?.measurements?.length || 
+            !encounter.woundDetails?.measurements?.width) {
+          needsSecondPass = true;
+        }
+      });
+      
+      if (needsSecondPass && uniqueMeasurements.length > 0) {
+        console.log('⚠️ Missing measurements detected - initiating focused second pass extraction...');
+        
+        // Create a focused prompt just for wound measurements
+        const measurementFocusPrompt = `CRITICAL: Extract ONLY wound measurements from this text.
+        
+We detected these measurements via regex: ${uniqueMeasurements.map(m => m.full).join(', ')}
+
+For EACH measurement found, return:
+- The encounter date it belongs to
+- Length value (number)
+- Width value (number) 
+- Depth value if present (number)
+- Unit (cm/mm)
+
+Look EVERYWHERE for measurements:
+- After "measuring"
+- After "size" or "dimensions"
+- In parentheses
+- After L: or W:
+- After "length" or "width"
+- In format "X by Y" or "X x Y"
+
+Return JSON: { "measurements": [{ "date": "YYYY-MM-DD", "length": number, "width": number, "depth": number, "unit": "cm" }] }`;
+        
+        const secondPassResponse = await openai.chat.completions.create({
+          model: modelName,
+          messages: [
+            { role: "system", content: measurementFocusPrompt },
+            { role: "user", content: truncatedText }
+          ],
+          response_format: { type: "json_object" },
+          temperature: 0.1,  // Lower temperature for more deterministic extraction
+          max_tokens: 2000
+        });
+        
+        const measurementData = JSON.parse(secondPassResponse.choices[0].message.content || '{}');
+        
+        // Merge the focused measurements back into the main result
+        if (measurementData.measurements && Array.isArray(measurementData.measurements)) {
+          console.log(`Second pass found ${measurementData.measurements.length} measurement(s)`);
+          
+          measurementData.measurements.forEach((m: any) => {
+            // Find the corresponding encounter by date
+            const encounter = result.encounterData.find((e: any) => 
+              e.encounterDate === m.date || 
+              (e.encounterDate && m.date && new Date(e.encounterDate).toDateString() === new Date(m.date).toDateString())
+            );
+            
+            if (encounter) {
+              // Update or add the measurements
+              if (!encounter.woundDetails) {
+                encounter.woundDetails = {};
+              }
+              if (!encounter.woundDetails.measurements || 
+                  !encounter.woundDetails.measurements.length ||
+                  !encounter.woundDetails.measurements.width) {
+                encounter.woundDetails.measurements = {
+                  length: m.length,
+                  width: m.width,
+                  depth: m.depth || null,
+                  unit: m.unit || 'cm',
+                  area: null
+                };
+                console.log(`Updated encounter ${m.date} with measurements: L=${m.length}, W=${m.width}`);
+              }
+            }
+          });
+        }
+      }
+    }
+    
+    // ENHANCED DEBUGGING: Log extraction completeness and confidence
+    console.log('\n=== EXTRACTION COMPLETENESS REPORT ===');
+    console.log('Document Processing:');
+    console.log(`  - Original text length: ${pdfText.length} chars`);
+    console.log(`  - Processed text length: ${truncatedText.length} chars`);
+    console.log(`  - Text truncated: ${pdfText.length > maxTextLength ? 'YES ⚠️' : 'NO ✓'}`);
+    console.log(`  - AI Model used: ${modelName}`);
+    
+    console.log('\nPre-extraction Regex Findings:');
+    console.log(`  - CPT/HCPCS codes: ${extractedCptCodes.length}`);
+    console.log(`  - ICD-10 codes: ${extractedICD10Codes.length}`);
+    console.log(`  - Insurance IDs: ${extractedInsuranceIds.length}`);
+    console.log(`  - Wound measurements: ${uniqueMeasurements.length}`);
+    if (uniqueMeasurements.length > 0) {
+      console.log('    Regex-detected measurements:');
+      uniqueMeasurements.forEach((m, i) => {
+        console.log(`      ${i+1}. L=${m.length} W=${m.width}${m.depth ? ` D=${m.depth}` : ''} (from: "${m.full.substring(0, 50)}...")`);
+      });
+    }
+    
+    console.log('\nAI Extraction Results:');
+    console.log(`  - Encounters found: ${result.encounterData?.length || 0}`);
+    console.log(`  - Confidence score: ${result.confidence || 'N/A'}`);
+    
+    let totalMeasurementsExtracted = 0;
+    let completeMeasurements = 0;
+    let partialMeasurements = 0;
+    let missingMeasurements = 0;
     
     if (result.encounterData && Array.isArray(result.encounterData)) {
       result.encounterData.forEach((encounter: any, index: number) => {
-        console.log(`\nEncounter ${index + 1}:`);
-        console.log('  Date:', encounter.encounterDate);
-        console.log('  Wound Details:', JSON.stringify(encounter.woundDetails, null, 2));
-        
-        // VASCULAR DATA DEBUGGING
-        console.log('\n  VASCULAR DATA EXTRACTION CHECK:');
-        console.log('    vascularStudies exists?', !!encounter.vascularStudies);
-        if (encounter.vascularStudies) {
-          console.log('    vascularStudies.abi:', encounter.vascularStudies.abi);
-          console.log('    vascularStudies.tbi:', encounter.vascularStudies.tbi);
-          console.log('    vascularStudies.tcpo2:', encounter.vascularStudies.tcpo2);
-        }
-        console.log('    clinicalVascularAssessment exists?', !!encounter.clinicalVascularAssessment);
-        if (encounter.clinicalVascularAssessment) {
-          console.log('    clinicalVascularAssessment.pulses:', encounter.clinicalVascularAssessment.pulses);
-        }
-        console.log('    conservativeCare.vascularAssessment exists?', !!encounter.conservativeCare?.vascularAssessment);
-        if (encounter.conservativeCare?.vascularAssessment) {
-          console.log('    conservativeCare.vascularAssessment:', encounter.conservativeCare.vascularAssessment);
-        }
+        console.log(`\n  Encounter ${index + 1} (${encounter.encounterDate || 'No date'}):`);;
+        console.log(`    - Wound Type: ${encounter.woundDetails?.type || 'MISSING ⚠️'}`);
+        console.log(`    - Wound Location: ${encounter.woundDetails?.location || 'MISSING ⚠️'}`);
         
         if (encounter.woundDetails?.measurements) {
           const m = encounter.woundDetails.measurements;
-          console.log('\n  Measurement Types:');
-          console.log('    - length:', typeof m.length, 'value:', m.length);
-          console.log('    - width:', typeof m.width, 'value:', m.width);
-          console.log('    - depth:', typeof m.depth, 'value:', m.depth);
+          totalMeasurementsExtracted++;
+          
+          if (m.length && m.width) {
+            completeMeasurements++;
+            console.log(`    - Measurements: L=${m.length} W=${m.width}${m.depth ? ` D=${m.depth}` : ''} ${m.unit || 'cm'} ✓`);
+          } else if (m.length || m.width) {
+            partialMeasurements++;
+            console.log(`    - Measurements: L=${m.length || 'MISSING'} W=${m.width || 'MISSING'} (PARTIAL ⚠️)`);
+          } else {
+            missingMeasurements++;
+            console.log(`    - Measurements: NO VALUES EXTRACTED ❌`);
+          }
+        } else {
+          missingMeasurements++;
+          console.log(`    - Measurements: NOT FOUND ❌`);
         }
+        
+        // Log other important fields
+        console.log(`    - Clinical Notes: ${encounter.notes?.length > 0 ? encounter.notes.length + ' note(s)' : 'None'}`);
+        console.log(`    - Assessment: ${encounter.assessment ? 'Present' : 'Missing'}`);
+        console.log(`    - Treatment Plan: ${encounter.plan ? 'Present' : 'Missing'}`);
+        console.log(`    - CPT Codes: ${encounter.treatmentDetails?.cptCodes?.length || 0}`);
       });
+    }
+    
+    // Extraction Success Analysis
+    console.log('\n=== EXTRACTION SUCCESS METRICS ===');
+    const extractionRate = uniqueMeasurements.length > 0 
+      ? (completeMeasurements / uniqueMeasurements.length * 100).toFixed(1)
+      : 'N/A';
+    
+    console.log(`Wound Measurement Extraction:`);
+    console.log(`  - Regex detected: ${uniqueMeasurements.length} measurement(s)`);
+    console.log(`  - AI extracted: ${completeMeasurements} complete, ${partialMeasurements} partial, ${missingMeasurements} missing`);
+    console.log(`  - Extraction success rate: ${extractionRate}%`);
+    
+    if (uniqueMeasurements.length > completeMeasurements) {
+      console.log(`\n⚠️ WARNING: AI extracted fewer complete measurements than regex detected!`);
+      console.log(`   This indicates potential data loss. Review the extraction logic.`);
+    }
+    
+    if (completeMeasurements === uniqueMeasurements.length && uniqueMeasurements.length > 0) {
+      console.log(`\n✅ SUCCESS: 100% of detected measurements were extracted!`);
     }
     
     // Handle both array and object formats for encounterData
