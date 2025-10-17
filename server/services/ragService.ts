@@ -285,10 +285,26 @@ export async function selectBestPolicy(params: SelectBestPolicyParams): Promise<
       };
     }
 
+    // 1.5. Deduplicate policies by LCD ID - always prefer the entry with longest content (valid over placeholder)
+    const policyMap = new Map<string, PolicySource>();
+    allPolicies.forEach(policy => {
+      const existing = policyMap.get(policy.lcdId);
+      if (!existing || policy.content.length > existing.content.length) {
+        policyMap.set(policy.lcdId, policy);
+      }
+    });
+    const deduplicatedPolicies = Array.from(policyMap.values());
+    
+    if (deduplicatedPolicies.length < allPolicies.length) {
+      const duplicatesRemoved = allPolicies.length - deduplicatedPolicies.length;
+      console.log(`🔄 Deduplicated ${duplicatesRemoved} policy entries by LCD ID (kept longest content versions)`);
+      filtersApplied.push('deduplication');
+    }
+
     // 2. Filter for wound care relevance and exclude superseded policies
     filtersApplied.push('wound_care_relevance', 'superseded_exclusion');
     let relevantPolicies = filterSupersededPolicies(
-      allPolicies.filter(policy => isWoundCareRelevant(policy, woundType, woundLocation, icd10Codes))
+      deduplicatedPolicies.filter(policy => isWoundCareRelevant(policy, woundType, woundLocation, icd10Codes))
     );
 
     // 2.5. Filter out placeholder policies - CRITICAL: Only select policies with real LCD content
@@ -450,7 +466,7 @@ export async function selectBestPolicy(params: SelectBestPolicyParams): Promise<
       
       // Try to find any current wound-care policy (with proper filtering, excluding placeholders)
       const currentWoundCarePolicies = filterSupersededPolicies(
-        allPolicies.filter(p => 
+        deduplicatedPolicies.filter(p => 
           p.status === 'current' && 
           isWoundCareRelevant(p, woundType, woundLocation, icd10Codes) &&
           !isPlaceholder(p)
@@ -471,7 +487,7 @@ export async function selectBestPolicy(params: SelectBestPolicyParams): Promise<
       } else {
         // Try nearest future wound-care policy (with proper filtering, excluding placeholders)
         const futurePolicies = filterSupersededPolicies(
-          allPolicies.filter(p => 
+          deduplicatedPolicies.filter(p => 
             p.status === 'future' && 
             isWoundCareRelevant(p, woundType, woundLocation, icd10Codes) &&
             !isPlaceholder(p)
@@ -488,7 +504,7 @@ export async function selectBestPolicy(params: SelectBestPolicyParams): Promise<
         } else {
           // Try most recent proposed wound-care policy (with proper filtering, excluding placeholders)
           const proposedPolicies = filterSupersededPolicies(
-            allPolicies.filter(p => 
+            deduplicatedPolicies.filter(p => 
               p.status === 'proposed' && 
               isWoundCareRelevant(p, woundType, woundLocation, icd10Codes) &&
               !isPlaceholder(p)
@@ -506,7 +522,7 @@ export async function selectBestPolicy(params: SelectBestPolicyParams): Promise<
             // Final fallback: Try general wound care without specific wound type (excluding placeholders)
             filtersApplied.push('general_wound_care_fallback');
             const generalWoundCarePolicies = filterSupersededPolicies(
-              allPolicies.filter(p => {
+              deduplicatedPolicies.filter(p => {
                 const lowerTitle = p.title.toLowerCase();
                 const lowerContent = p.content.toLowerCase();
                 // Look for any general wound care terms and exclude placeholders
@@ -583,7 +599,7 @@ export async function selectBestPolicy(params: SelectBestPolicyParams): Promise<
     return {
       policy: selectedPolicy,
       audit: {
-        considered: allPolicies.length,
+        considered: deduplicatedPolicies.length,
         filtersApplied,
         scored: scoredPolicies,
         selectedReason,
