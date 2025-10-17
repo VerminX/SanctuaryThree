@@ -215,18 +215,20 @@ function isWoundCareRelevant(
   const titleLower = policy.title.toLowerCase();
   const contentLower = policy.content.toLowerCase();
   
-  // EXCLUSION FILTER: Immediately reject non-wound-care policies
-  // These are medical procedures/diagnostics that should NEVER match wound care
-  const exclusionTerms = [
-    'cerebral', 'brain', 'computed tomography', 'ct scan', 'mri', 'magnetic resonance',
-    'perfusion analysis', 'neurological', 'neuro', 'cranial', 'head imaging',
-    'cardiac', 'heart', 'coronary', 'vascular imaging', 'angiography',
-    'mammography', 'breast imaging', 'colonoscopy', 'endoscopy'
+  // EXCLUSION FILTER: Reject clearly non-wound-care policies by checking TITLE only
+  // Only check title to avoid false positives from diagnostic mentions in policy content
+  const titleExclusionPatterns = [
+    'cerebral perfusion', 'computed tomography', 'ct scan', 'mri scan', 'magnetic resonance imaging',
+    'brain imaging', 'neurological', 'cranial', 
+    'cardiac catheterization', 'coronary angiography',
+    'mammography', 'breast imaging', 'colonoscopy', 'endoscopy',
+    'bone density', 'dexa scan', 'pet scan', 'nuclear medicine'
   ];
   
-  for (const term of exclusionTerms) {
-    if (titleLower.includes(term) || contentLower.includes(term)) {
-      return false; // Immediately exclude
+  for (const pattern of titleExclusionPatterns) {
+    if (titleLower.includes(pattern)) {
+      console.log(`🚫 Excluded policy "${policy.title}" (LCD ${policy.lcdId}) - title contains non-wound-care pattern: "${pattern}"`);
+      return false; // Immediately exclude based on title
     }
   }
   
