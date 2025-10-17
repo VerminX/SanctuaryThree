@@ -4,6 +4,41 @@ import { IStorage } from "../storage";
 import { decryptEncounterNotes } from "./encryption";
 import { performPreEligibilityChecks } from "./eligibilityValidator";
 
+// Helper function to split combined vascularAssessment back into separate fields
+// PDF extraction combines clinicalVascularAssessment and vascularStudies into a single field,
+// but the AI analysis expects them separately
+function splitVascularData(vascularAssessment: any) {
+  if (!vascularAssessment) {
+    return { vascularStudies: null, clinicalVascularAssessment: null };
+  }
+  
+  const clinicalFields = {
+    edema: vascularAssessment.edema,
+    pulses: vascularAssessment.pulses,
+    perfusionNotes: vascularAssessment.perfusionNotes,
+    varicosities: vascularAssessment.varicosities,
+    capillaryRefill: vascularAssessment.capillaryRefill
+  };
+  
+  const studyFields = {
+    abi: vascularAssessment.abi,
+    tbi: vascularAssessment.tbi,
+    tcpo2: vascularAssessment.tcpo2,
+    duplexSummary: vascularAssessment.duplexSummary,
+    angiographySummary: vascularAssessment.angiographySummary,
+    interpretation: vascularAssessment.interpretation
+  };
+  
+  // Only return non-empty objects
+  const hasClinicalData = Object.values(clinicalFields).some(v => v != null);
+  const hasStudyData = Object.values(studyFields).some(v => v != null);
+  
+  return {
+    clinicalVascularAssessment: hasClinicalData ? clinicalFields : null,
+    vascularStudies: hasStudyData ? studyFields : null
+  };
+}
+
 // HIPAA COMPLIANCE: Configure OpenAI client with proper provider enforcement
 function createOpenAIClient() {
   const azureApiKey = process.env.AZURE_OPENAI_API_KEY;
@@ -1177,12 +1212,17 @@ export async function prepareAndAnalyzeEpisodeWithFullHistory(
             ? encounter.date 
             : new Date(encounter.date);
 
+          // Split vascular assessment data from combined field
+          const vascularData = splitVascularData((encounter as any).vascularAssessment);
+
           return {
             id: encounter.id,
             date: encounterDate,
             notes: await decryptEncounterNotes(encounter.encryptedNotes as string[], encounter.id),
             woundDetails: encounter.woundDetails,
             conservativeCare: encounter.conservativeCare,
+            vascularStudies: vascularData.vascularStudies,
+            clinicalVascularAssessment: vascularData.clinicalVascularAssessment,
             infectionStatus: encounter.infectionStatus,
             comorbidities: encounter.comorbidities,
           };

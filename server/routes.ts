@@ -99,6 +99,41 @@ function validateMACRegion(macRegion: string | null | undefined): { valid: boole
   return { valid: true };
 }
 
+// Helper function to split combined vascularAssessment back into separate fields
+// PDF extraction combines clinicalVascularAssessment and vascularStudies into a single field,
+// but the AI analysis expects them separately
+function splitVascularData(vascularAssessment: any) {
+  if (!vascularAssessment) {
+    return { vascularStudies: null, clinicalVascularAssessment: null };
+  }
+  
+  const clinicalFields = {
+    edema: vascularAssessment.edema,
+    pulses: vascularAssessment.pulses,
+    perfusionNotes: vascularAssessment.perfusionNotes,
+    varicosities: vascularAssessment.varicosities,
+    capillaryRefill: vascularAssessment.capillaryRefill
+  };
+  
+  const studyFields = {
+    abi: vascularAssessment.abi,
+    tbi: vascularAssessment.tbi,
+    tcpo2: vascularAssessment.tcpo2,
+    duplexSummary: vascularAssessment.duplexSummary,
+    angiographySummary: vascularAssessment.angiographySummary,
+    interpretation: vascularAssessment.interpretation
+  };
+  
+  // Only return non-empty objects
+  const hasClinicalData = Object.values(clinicalFields).some(v => v != null);
+  const hasStudyData = Object.values(studyFields).some(v => v != null);
+  
+  return {
+    clinicalVascularAssessment: hasClinicalData ? clinicalFields : null,
+    vascularStudies: hasStudyData ? studyFields : null
+  };
+}
+
 // Helper function to track user activity (HIPAA-compliant, no PHI in descriptions)
 async function trackActivity(
   tenantId: string,
@@ -1153,14 +1188,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
           .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
           .map(async (enc) => {
             const decryptedNotes = await decryptEncounterNotes(enc.encryptedNotes as string[], enc.id);
+            const vascularData = splitVascularData((enc as any).vascularAssessment);
             return {
               date: enc.date,
               notes: decryptedNotes,
               woundDetails: enc.woundDetails,
               conservativeCare: enc.conservativeCare,
               procedureCodes: (enc as any).procedureCodes || [],
-              vascularStudies: (enc as any).vascularStudies || null,
-              clinicalVascularAssessment: (enc as any).clinicalVascularAssessment || null,
+              vascularStudies: vascularData.vascularStudies,
+              clinicalVascularAssessment: vascularData.clinicalVascularAssessment,
               functionalStatus: (enc as any).functionalStatus || {},
               diabeticStatus: (enc as any).diabeticStatus || null,
               infectionStatus: enc.infectionStatus,
@@ -1171,14 +1207,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // Perform AI eligibility analysis with COMPLETE episode context
       const { analyzeEligibilityWithFullContext } = await import('./services/openai');
+      const currentVascularData = splitVascularData((encounter as any).vascularAssessment);
       const analysisResult = await analyzeEligibilityWithFullContext({
         currentEncounter: {
           encounterNotes: await decryptEncounterNotes(encounter.encryptedNotes as string[], encounter.id),
           woundDetails: encounter.woundDetails,
           conservativeCare: encounter.conservativeCare,
           procedureCodes: (encounter as any).procedureCodes || [],
-          vascularStudies: (encounter as any).vascularStudies || null,
-          clinicalVascularAssessment: (encounter as any).clinicalVascularAssessment || null,
+          vascularStudies: currentVascularData.vascularStudies,
+          clinicalVascularAssessment: currentVascularData.clinicalVascularAssessment,
           functionalStatus: (encounter as any).functionalStatus || {},
           diabeticStatus: (encounter as any).diabeticStatus || null,
         },
