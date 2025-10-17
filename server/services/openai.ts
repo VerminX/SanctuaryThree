@@ -137,6 +137,26 @@ interface EligibilityAnalysisResponse {
 export async function analyzeEligibility(request: EligibilityAnalysisRequest): Promise<EligibilityAnalysisResponse> {
   const { encounterNotes, woundDetails, conservativeCare, vascularStudies, clinicalVascularAssessment, patientInfo, policyContext } = request;
   
+  // Extract policy info from policyContext for use in responses
+  // Policy context format: "LCD: {title} ({lcdId})\nMAC: {mac}\n..."
+  let policyLcdId = 'LCD';
+  let policyTitle = 'Medicare LCD';
+  let policyUrl = 'https://www.cms.gov/medicare-coverage-database/';
+  
+  try {
+    const firstLine = policyContext.split('\n')[0];
+    const lcdMatch = firstLine.match(/LCD:\s*(.+?)\s*\((\w+)\)/);
+    if (lcdMatch) {
+      policyTitle = lcdMatch[1].trim();
+      policyLcdId = lcdMatch[2].trim();
+      // Strip all leading letters from LCD ID for CMS URL (e.g., L39806 -> 39806, DL39806 -> 39806)
+      const numericLcdId = policyLcdId.replace(/^[A-Za-z]+/, '');
+      policyUrl = `https://www.cms.gov/medicare-coverage-database/view/lcd.aspx?lcdid=${numericLcdId}`;
+    }
+  } catch (parseError) {
+    console.warn('Could not parse policy info from context, using defaults:', parseError);
+  }
+  
   // PHASE 2: PRE-ELIGIBILITY CHECKS for single encounter analysis
   try {
     // Transform single encounter data to validator format, including diabetic status
@@ -163,23 +183,23 @@ export async function analyzeEligibility(request: EligibilityAnalysisRequest): P
 
     const preCheckResult = await performPreEligibilityChecks(episodeData, validatorEncounters);
     
-    // If pre-checks return definitive failure, return immediately
+    // If pre-checks return definitive failure, return immediately with ACTUAL policy info
     if (!preCheckResult.overallEligible) {
-      console.log('Pre-eligibility check failed in single encounter analysis - returning definitive NO');
+      console.log(`Pre-eligibility check failed in single encounter analysis - returning definitive NO for ${policyLcdId}`);
       
       return {
         eligibility: "No",
-        rationale: `Medicare LCD L39806 violation: ${preCheckResult.failureReasons.join('; ')}`,
+        rationale: `Medicare ${policyLcdId} violation: ${preCheckResult.failureReasons.join('; ')}`,
         requiredDocumentationGaps: preCheckResult.failureReasons,
         citations: [{
-          title: "Medicare LCD L39806 - Skin Substitutes",
-          url: "https://www.cms.gov/medicare-coverage-database/view/lcd.aspx?lcdid=39806",
+          title: policyTitle,
+          url: policyUrl,
           section: "Coverage Indications, Limitations, and/or Medical Necessity",
-          effectiveDate: "2023-09-01"
+          effectiveDate: new Date().toISOString().split('T')[0]
         }],
         letterBullets: [
           `Policy violation identified: ${preCheckResult.failureReasons[0]}`,
-          "Request does not meet Medicare LCD L39806 coverage criteria",
+          `Request does not meet Medicare ${policyLcdId} coverage criteria`,
           "CTP application is not medically necessary under current guidelines"
         ],
         preEligibilityCheck: {
@@ -352,6 +372,25 @@ interface FullContextAnalysisRequest {
 export async function analyzeEligibilityWithFullContext(request: FullContextAnalysisRequest): Promise<EligibilityAnalysisResponse> {
   const { currentEncounter, episodeContext, patientInfo, policyContext } = request;
   
+  // Extract policy info from policyContext for use in responses
+  let policyLcdId = 'LCD';
+  let policyTitle = 'Medicare LCD';
+  let policyUrl = 'https://www.cms.gov/medicare-coverage-database/';
+  
+  try {
+    const firstLine = policyContext.split('\n')[0];
+    const lcdMatch = firstLine.match(/LCD:\s*(.+?)\s*\((\w+)\)/);
+    if (lcdMatch) {
+      policyTitle = lcdMatch[1].trim();
+      policyLcdId = lcdMatch[2].trim();
+      // Strip all leading letters from LCD ID for CMS URL (e.g., L39806 -> 39806, DL39806 -> 39806)
+      const numericLcdId = policyLcdId.replace(/^[A-Za-z]+/, '');
+      policyUrl = `https://www.cms.gov/medicare-coverage-database/view/lcd.aspx?lcdid=${numericLcdId}`;
+    }
+  } catch (parseError) {
+    console.warn('Could not parse policy info from context, using defaults:', parseError);
+  }
+  
   // PHASE 2: PRE-ELIGIBILITY CHECKS for full context analysis
   try {
     // Transform episode context to validator format, including diabetic status
@@ -391,23 +430,23 @@ export async function analyzeEligibilityWithFullContext(request: FullContextAnal
 
     const preCheckResult = await performPreEligibilityChecks(episodeData, validatorEncounters);
     
-    // If pre-checks return definitive failure, return immediately
+    // If pre-checks return definitive failure, return immediately with ACTUAL policy info
     if (!preCheckResult.overallEligible) {
-      console.log('Pre-eligibility check failed in full context analysis - returning definitive NO');
+      console.log(`Pre-eligibility check failed in full context analysis - returning definitive NO for ${policyLcdId}`);
       
       return {
         eligibility: "No",
-        rationale: `Medicare LCD L39806 violation: ${preCheckResult.failureReasons.join('; ')}`,
+        rationale: `Medicare ${policyLcdId} violation: ${preCheckResult.failureReasons.join('; ')}`,
         requiredDocumentationGaps: preCheckResult.failureReasons,
         citations: [{
-          title: "Medicare LCD L39806 - Skin Substitutes",
-          url: "https://www.cms.gov/medicare-coverage-database/view/lcd.aspx?lcdid=39806",
+          title: policyTitle,
+          url: policyUrl,
           section: "Coverage Indications, Limitations, and/or Medical Necessity",
-          effectiveDate: "2023-09-01"
+          effectiveDate: new Date().toISOString().split('T')[0]
         }],
         letterBullets: [
           `Policy violation identified: ${preCheckResult.failureReasons[0]}`,
-          "Request does not meet Medicare LCD L39806 coverage criteria",
+          `Request does not meet Medicare ${policyLcdId} coverage criteria`,
           "CTP application is not medically necessary under current guidelines"
         ],
         preEligibilityCheck: {
@@ -596,6 +635,25 @@ interface EpisodeEligibilityAnalysisRequest {
 export async function analyzeEpisodeEligibility(request: EpisodeEligibilityAnalysisRequest): Promise<EligibilityAnalysisResponse> {
   const { episodeInfo, encounters, patientInfo, policyContext } = request;
   
+  // Extract policy info from policyContext for use in responses
+  let policyLcdId = 'LCD';
+  let policyTitle = 'Medicare LCD';
+  let policyUrl = 'https://www.cms.gov/medicare-coverage-database/';
+  
+  try {
+    const firstLine = policyContext.split('\n')[0];
+    const lcdMatch = firstLine.match(/LCD:\s*(.+?)\s*\((\w+)\)/);
+    if (lcdMatch) {
+      policyTitle = lcdMatch[1].trim();
+      policyLcdId = lcdMatch[2].trim();
+      // Strip all leading letters from LCD ID for CMS URL (e.g., L39806 -> 39806, DL39806 -> 39806)
+      const numericLcdId = policyLcdId.replace(/^[A-Za-z]+/, '');
+      policyUrl = `https://www.cms.gov/medicare-coverage-database/view/lcd.aspx?lcdid=${numericLcdId}`;
+    }
+  } catch (parseError) {
+    console.warn('Could not parse policy info from context, using defaults:', parseError);
+  }
+  
   // PHASE 2: PRE-ELIGIBILITY CHECKS for episode analysis
   try {
     // Transform encounters to validator format
@@ -622,23 +680,23 @@ export async function analyzeEpisodeEligibility(request: EpisodeEligibilityAnaly
 
     const preCheckResult = await performPreEligibilityChecks(episodeData, validatorEncounters);
     
-    // If pre-checks return definitive failure, return immediately
+    // If pre-checks return definitive failure, return immediately with ACTUAL policy info
     if (!preCheckResult.overallEligible) {
-      console.log('Pre-eligibility check failed in episode analysis - returning definitive NO');
+      console.log(`Pre-eligibility check failed in episode analysis - returning definitive NO for ${policyLcdId}`);
       
       return {
         eligibility: "No",
-        rationale: `Medicare LCD L39806 violation: ${preCheckResult.failureReasons.join('; ')}`,
+        rationale: `Medicare ${policyLcdId} violation: ${preCheckResult.failureReasons.join('; ')}`,
         requiredDocumentationGaps: preCheckResult.failureReasons,
         citations: [{
-          title: "Medicare LCD L39806 - Skin Substitutes",
-          url: "https://www.cms.gov/medicare-coverage-database/view/lcd.aspx?lcdid=39806",
+          title: policyTitle,
+          url: policyUrl,
           section: "Coverage Indications, Limitations, and/or Medical Necessity",
-          effectiveDate: "2023-09-01"
+          effectiveDate: new Date().toISOString().split('T')[0]
         }],
         letterBullets: [
           `Policy violation identified: ${preCheckResult.failureReasons[0]}`,
-          "Request does not meet Medicare LCD L39806 coverage criteria",
+          `Request does not meet Medicare ${policyLcdId} coverage criteria`,
           "CTP application is not medically necessary under current guidelines"
         ],
         preEligibilityCheck: {
@@ -825,6 +883,8 @@ interface EpisodeWithDecryptedHistory {
     notes: string[]; // Decrypted notes ready for analysis
     woundDetails: any;
     conservativeCare: any;
+    vascularStudies?: any; // Split from vascularAssessment
+    clinicalVascularAssessment?: any; // Split from vascularAssessment
     infectionStatus: string | null;
     comorbidities: any;
   }>;
@@ -848,6 +908,25 @@ interface EpisodeWithDecryptedHistory {
 // Enhanced episode eligibility analysis with full patient history - THIS IS NOW THE DEFAULT
 export async function analyzeEpisodeEligibilityWithFullHistory(request: EnhancedEpisodeAnalysisRequest): Promise<EligibilityAnalysisResponse> {
   const { targetEpisode, allPatientEpisodes, patientEligibilityHistory, patientInfo, policyContext } = request;
+  
+  // Extract policy info from policyContext for use in responses
+  let policyLcdId = 'LCD';
+  let policyTitle = 'Medicare LCD';
+  let policyUrl = 'https://www.cms.gov/medicare-coverage-database/';
+  
+  try {
+    const firstLine = policyContext.split('\n')[0];
+    const lcdMatch = firstLine.match(/LCD:\s*(.+?)\s*\((\w+)\)/);
+    if (lcdMatch) {
+      policyTitle = lcdMatch[1].trim();
+      policyLcdId = lcdMatch[2].trim();
+      // Strip all leading letters from LCD ID for CMS URL (e.g., L39806 -> 39806, DL39806 -> 39806)
+      const numericLcdId = policyLcdId.replace(/^[A-Za-z]+/, '');
+      policyUrl = `https://www.cms.gov/medicare-coverage-database/view/lcd.aspx?lcdid=${numericLcdId}`;
+    }
+  } catch (parseError) {
+    console.warn('Could not parse policy info from context, using defaults:', parseError);
+  }
   
   // PHASE 2: PRE-ELIGIBILITY CHECKS - Gate obvious policy violations before AI analysis
   try {
@@ -873,23 +952,23 @@ export async function analyzeEpisodeEligibilityWithFullHistory(request: Enhanced
     };
     const preCheckResult = await performPreEligibilityChecks(episodeData, validatorEncounters);
     
-    // If pre-checks return definitive failure, return immediately without AI analysis
+    // If pre-checks return definitive failure, return immediately with ACTUAL policy info
     if (!preCheckResult.overallEligible) {
-      console.log('Pre-eligibility check failed - returning definitive NO without AI analysis');
+      console.log(`Pre-eligibility check failed - returning definitive NO for ${policyLcdId} without AI analysis`);
       
       return {
         eligibility: "No",
-        rationale: `Medicare LCD L39806 violation: ${preCheckResult.failureReasons.join('; ')}`,
+        rationale: `Medicare ${policyLcdId} violation: ${preCheckResult.failureReasons.join('; ')}`,
         requiredDocumentationGaps: preCheckResult.failureReasons,
         citations: [{
-          title: "Medicare LCD L39806 - Skin Substitutes",
-          url: "https://www.cms.gov/medicare-coverage-database/view/lcd.aspx?lcdid=39806",
+          title: policyTitle,
+          url: policyUrl,
           section: "Coverage Indications, Limitations, and/or Medical Necessity",
-          effectiveDate: "2023-09-01"
+          effectiveDate: new Date().toISOString().split('T')[0]
         }],
         letterBullets: [
           `Policy violation identified: ${preCheckResult.failureReasons[0]}`,
-          "Request does not meet Medicare LCD L39806 coverage criteria",
+          `Request does not meet Medicare ${policyLcdId} coverage criteria`,
           "CTP application is not medically necessary under current guidelines"
         ],
         preEligibilityCheck: {
