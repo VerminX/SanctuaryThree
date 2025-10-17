@@ -212,6 +212,24 @@ function isWoundCareRelevant(
   woundLocation?: string,
   icd10Codes?: string[]
 ): boolean {
+  const titleLower = policy.title.toLowerCase();
+  const contentLower = policy.content.toLowerCase();
+  
+  // EXCLUSION FILTER: Immediately reject non-wound-care policies
+  // These are medical procedures/diagnostics that should NEVER match wound care
+  const exclusionTerms = [
+    'cerebral', 'brain', 'computed tomography', 'ct scan', 'mri', 'magnetic resonance',
+    'perfusion analysis', 'neurological', 'neuro', 'cranial', 'head imaging',
+    'cardiac', 'heart', 'coronary', 'vascular imaging', 'angiography',
+    'mammography', 'breast imaging', 'colonoscopy', 'endoscopy'
+  ];
+  
+  for (const term of exclusionTerms) {
+    if (titleLower.includes(term) || contentLower.includes(term)) {
+      return false; // Immediately exclude
+    }
+  }
+  
   const woundCareKeywords: Set<string> = new Set();
   
   // Add LCD-specific terms
@@ -241,9 +259,6 @@ function isWoundCareRelevant(
       ['lower extremity', 'shin', 'calf', 'ankle'].forEach(term => woundCareKeywords.add(term));
     }
   }
-
-  const titleLower = policy.title.toLowerCase();
-  const contentLower = policy.content.toLowerCase();
   
   // Check if any keyword matches
   return Array.from(woundCareKeywords).some(keyword => 
