@@ -204,14 +204,7 @@ export default function AnalysisPanel({
                   <SelectContent>
                     {episodes.map((episode) => (
                       <SelectItem key={episode.id} value={episode.id}>
-                        <div className="flex items-center justify-between w-full">
-                          <span>
-                            {episode.patientName} - {episode.woundType} at {episode.woundLocation}
-                          </span>
-                          <div className="text-xs text-muted-foreground ml-2">
-                            {new Date(episode.episodeStartDate).toLocaleDateString()} • {episode.encounterCount} encounters
-                          </div>
-                        </div>
+                        {episode.patientName} - {episode.woundType} at {episode.woundLocation} ({new Date(episode.episodeStartDate).toLocaleDateString()} • {episode.encounterCount} encounters)
                       </SelectItem>
                     ))}
                   </SelectContent>

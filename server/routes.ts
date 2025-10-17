@@ -476,6 +476,130 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Tenant-aware list routes (auto-detect tenant from authenticated user)
+  app.get('/api/patients', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      
+      // Get user's tenants
+      const tenants = await storage.getTenantsByUser(userId);
+      if (tenants.length === 0) {
+        return res.status(404).json({ message: "No tenants found for user" });
+      }
+
+      // Use first tenant (most apps are single-tenant)
+      const tenantId = tenants[0].id;
+      
+      const patients = await storage.getPatientsByTenant(tenantId);
+      
+      // RESILIENT DECRYPTION: Handle corrupted patient records gracefully
+      const decryptionResults = patients.map(patient => safeDecryptPatientData(patient));
+      const decryptedPatients = decryptionResults.map(result => result.patientData);
+      const failedDecryptions = decryptionResults.filter(result => result.decryptionError);
+      
+      // Log summary of decryption issues for admin review
+      if (failedDecryptions.length > 0) {
+        console.warn(`PATIENT DECRYPTION WARNING: ${failedDecryptions.length} out of ${patients.length} patients have corrupted encrypted data:`, 
+          failedDecryptions.map(r => ({ id: r.patientData.id }))
+        );
+      }
+
+      // Log audit event
+      await storage.createAuditLog({
+        tenantId,
+        userId,
+        action: 'VIEW_PATIENTS',
+        entity: 'Patient',
+        entityId: 'LIST',
+        ipAddress: req.ip,
+        userAgent: req.get('User-Agent'),
+        previousHash: '',
+      });
+
+      res.json(decryptedPatients);
+    } catch (error) {
+      console.error("Error fetching patients:", error);
+      res.status(500).json({ message: "Failed to fetch patients" });
+    }
+  });
+
+  app.get('/api/episodes', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      
+      // Get user's tenants
+      const tenants = await storage.getTenantsByUser(userId);
+      if (tenants.length === 0) {
+        return res.status(404).json({ message: "No tenants found for user" });
+      }
+
+      // Use first tenant (most apps are single-tenant)
+      const tenantId = tenants[0].id;
+      
+      const episodesWithPatients = await storage.getAllEpisodesWithPatientsByTenant(tenantId);
+
+      // Log audit event
+      await storage.createAuditLog({
+        tenantId,
+        userId,
+        action: 'VIEW_BULK_EPISODES',
+        entity: 'Episode',
+        entityId: `bulk-${tenantId}`,
+        ipAddress: req.ip,
+        userAgent: req.get('User-Agent'),
+        previousHash: '',
+      });
+
+      res.json(episodesWithPatients);
+    } catch (error) {
+      console.error("Error fetching episodes:", error);
+      res.status(500).json({ message: "Failed to fetch episodes" });
+    }
+  });
+
+  app.get('/api/encounters', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      
+      // Get user's tenants
+      const tenants = await storage.getTenantsByUser(userId);
+      if (tenants.length === 0) {
+        return res.status(404).json({ message: "No tenants found for user" });
+      }
+
+      // Use first tenant (most apps are single-tenant)
+      const tenantId = tenants[0].id;
+      
+      const encountersWithPatients = await storage.getAllEncountersWithPatientsByTenant(tenantId);
+      
+      // Decrypt encounter notes and remove encrypted notes from response for data minimization
+      const encountersWithDecryptedNotes = await Promise.all(encountersWithPatients.map(async encounter => {
+        const { encryptedNotes, ...encounterData } = encounter;
+        return {
+          ...encounterData,
+          notes: encryptedNotes ? await decryptEncounterNotes(encryptedNotes as string[], encounter.id) : [],
+        };
+      }));
+
+      // Log audit event
+      await storage.createAuditLog({
+        tenantId,
+        userId,
+        action: 'VIEW_BULK_ENCOUNTERS',
+        entity: 'Encounter',
+        entityId: `bulk-${tenantId}`,
+        ipAddress: req.ip,
+        userAgent: req.get('User-Agent'),
+        previousHash: '',
+      });
+
+      res.json(encountersWithDecryptedNotes);
+    } catch (error) {
+      console.error("Error fetching encounters:", error);
+      res.status(500).json({ message: "Failed to fetch encounters" });
+    }
+  });
+
   // Patient routes
   app.post('/api/tenants/:tenantId/patients', isAuthenticated, async (req: any, res) => {
     try {
