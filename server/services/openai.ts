@@ -183,33 +183,11 @@ export async function analyzeEligibility(request: EligibilityAnalysisRequest): P
 
     const preCheckResult = await performPreEligibilityChecks(episodeData, validatorEncounters);
     
-    // If pre-checks return definitive failure, return immediately with ACTUAL policy info
+    // Log pre-check issues but DO NOT block AI analysis - let AI make nuanced determinations
     if (!preCheckResult.overallEligible) {
-      console.log(`Pre-eligibility check failed in single encounter analysis - returning definitive NO for ${policyLcdId}`);
-      
-      return {
-        eligibility: "No",
-        rationale: `Medicare ${policyLcdId} violation: ${preCheckResult.failureReasons.join('; ')}`,
-        requiredDocumentationGaps: preCheckResult.failureReasons,
-        citations: [{
-          title: policyTitle,
-          url: policyUrl,
-          section: "Coverage Indications, Limitations, and/or Medical Necessity",
-          effectiveDate: new Date().toISOString().split('T')[0]
-        }],
-        letterBullets: [
-          `Policy violation identified: ${preCheckResult.failureReasons[0]}`,
-          `Request does not meet Medicare ${policyLcdId} coverage criteria`,
-          "CTP application is not medically necessary under current guidelines"
-        ],
-        preEligibilityCheck: {
-          performed: true,
-          result: "NOT_ELIGIBLE",
-          determinationSource: "PRE_CHECK",
-          auditTrail: preCheckResult.auditTrail,
-          policyViolations: preCheckResult.policyViolations
-        }
-      };
+      console.log(`⚠️ Pre-eligibility check identified concerns for ${policyLcdId}:`, preCheckResult.failureReasons);
+      console.log('→ Proceeding to AI analysis for comprehensive evaluation...');
+      // Continue to AI analysis instead of returning early
     }
   } catch (preCheckError) {
     console.warn('Pre-eligibility check failed with error in single encounter analysis:', preCheckError);
@@ -430,33 +408,11 @@ export async function analyzeEligibilityWithFullContext(request: FullContextAnal
 
     const preCheckResult = await performPreEligibilityChecks(episodeData, validatorEncounters);
     
-    // If pre-checks return definitive failure, return immediately with ACTUAL policy info
+    // Log pre-check issues but DO NOT block AI analysis - let AI make nuanced determinations
     if (!preCheckResult.overallEligible) {
-      console.log(`Pre-eligibility check failed in full context analysis - returning definitive NO for ${policyLcdId}`);
-      
-      return {
-        eligibility: "No",
-        rationale: `Medicare ${policyLcdId} violation: ${preCheckResult.failureReasons.join('; ')}`,
-        requiredDocumentationGaps: preCheckResult.failureReasons,
-        citations: [{
-          title: policyTitle,
-          url: policyUrl,
-          section: "Coverage Indications, Limitations, and/or Medical Necessity",
-          effectiveDate: new Date().toISOString().split('T')[0]
-        }],
-        letterBullets: [
-          `Policy violation identified: ${preCheckResult.failureReasons[0]}`,
-          `Request does not meet Medicare ${policyLcdId} coverage criteria`,
-          "CTP application is not medically necessary under current guidelines"
-        ],
-        preEligibilityCheck: {
-          performed: true,
-          result: "NOT_ELIGIBLE",
-          determinationSource: "PRE_CHECK",
-          auditTrail: preCheckResult.auditTrail,
-          policyViolations: preCheckResult.policyViolations
-        }
-      };
+      console.log(`⚠️ Pre-eligibility check identified concerns for ${policyLcdId}:`, preCheckResult.failureReasons);
+      console.log('→ Proceeding to AI analysis for comprehensive evaluation...');
+      // Continue to AI analysis instead of returning early
     }
     
     console.log('Pre-eligibility checks passed or inconclusive in full context analysis - proceeding with AI analysis');
@@ -680,33 +636,11 @@ export async function analyzeEpisodeEligibility(request: EpisodeEligibilityAnaly
 
     const preCheckResult = await performPreEligibilityChecks(episodeData, validatorEncounters);
     
-    // If pre-checks return definitive failure, return immediately with ACTUAL policy info
+    // Log pre-check issues but DO NOT block AI analysis - let AI make nuanced determinations
     if (!preCheckResult.overallEligible) {
-      console.log(`Pre-eligibility check failed in episode analysis - returning definitive NO for ${policyLcdId}`);
-      
-      return {
-        eligibility: "No",
-        rationale: `Medicare ${policyLcdId} violation: ${preCheckResult.failureReasons.join('; ')}`,
-        requiredDocumentationGaps: preCheckResult.failureReasons,
-        citations: [{
-          title: policyTitle,
-          url: policyUrl,
-          section: "Coverage Indications, Limitations, and/or Medical Necessity",
-          effectiveDate: new Date().toISOString().split('T')[0]
-        }],
-        letterBullets: [
-          `Policy violation identified: ${preCheckResult.failureReasons[0]}`,
-          `Request does not meet Medicare ${policyLcdId} coverage criteria`,
-          "CTP application is not medically necessary under current guidelines"
-        ],
-        preEligibilityCheck: {
-          performed: true,
-          result: "NOT_ELIGIBLE",
-          determinationSource: "PRE_CHECK",
-          auditTrail: preCheckResult.auditTrail,
-          policyViolations: preCheckResult.policyViolations
-        }
-      };
+      console.log(`⚠️ Pre-eligibility check identified concerns for ${policyLcdId}:`, preCheckResult.failureReasons);
+      console.log('→ Proceeding to AI analysis for comprehensive evaluation...');
+      // Continue to AI analysis instead of returning early
     }
     
     console.log('Pre-eligibility checks passed or inconclusive in episode analysis - proceeding with AI analysis');
@@ -952,33 +886,11 @@ export async function analyzeEpisodeEligibilityWithFullHistory(request: Enhanced
     };
     const preCheckResult = await performPreEligibilityChecks(episodeData, validatorEncounters);
     
-    // If pre-checks return definitive failure, return immediately with ACTUAL policy info
+    // Log pre-check issues but DO NOT block AI analysis - let AI make nuanced determinations
     if (!preCheckResult.overallEligible) {
-      console.log(`Pre-eligibility check failed - returning definitive NO for ${policyLcdId} without AI analysis`);
-      
-      return {
-        eligibility: "No",
-        rationale: `Medicare ${policyLcdId} violation: ${preCheckResult.failureReasons.join('; ')}`,
-        requiredDocumentationGaps: preCheckResult.failureReasons,
-        citations: [{
-          title: policyTitle,
-          url: policyUrl,
-          section: "Coverage Indications, Limitations, and/or Medical Necessity",
-          effectiveDate: new Date().toISOString().split('T')[0]
-        }],
-        letterBullets: [
-          `Policy violation identified: ${preCheckResult.failureReasons[0]}`,
-          `Request does not meet Medicare ${policyLcdId} coverage criteria`,
-          "CTP application is not medically necessary under current guidelines"
-        ],
-        preEligibilityCheck: {
-          performed: true,
-          result: "NOT_ELIGIBLE",
-          determinationSource: "PRE_CHECK",
-          auditTrail: preCheckResult.auditTrail,
-          policyViolations: preCheckResult.policyViolations
-        }
-      };
+      console.log(`⚠️ Pre-eligibility check identified concerns for ${policyLcdId}:`, preCheckResult.failureReasons);
+      console.log('→ Proceeding to AI analysis for comprehensive evaluation...');
+      // Continue to AI analysis instead of returning early
     }
     
     // Pre-checks passed or inconclusive - proceed with AI analysis
