@@ -1232,6 +1232,95 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // PATCH endpoint for updating encounters (mirrors PUT functionality for RESTful compatibility)
+  app.patch('/api/encounters/:encounterId', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const { encounterId } = req.params;
+      
+      const encounter = await storage.getEncounter(encounterId);
+      if (!encounter) {
+        return res.status(404).json({ message: "Encounter not found" });
+      }
+
+      const patient = await storage.getPatient(encounter.patientId);
+      if (!patient) {
+        return res.status(404).json({ message: "Patient not found" });
+      }
+
+      // Verify user has access to tenant
+      const userTenantRole = await storage.getUserTenantRole(userId, patient.tenantId);
+      if (!userTenantRole) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+
+      // Custom validation schema that handles string dates and plain notes
+      const encounterRequestSchema = z.object({
+        date: z.string().or(z.date()).transform((val) => {
+          return typeof val === 'string' ? new Date(val) : val;
+        }).optional(),
+        notes: z.array(z.string()).optional(),
+        woundDetails: z.any().optional(), // JSONB field
+        conservativeCare: z.any().optional(), // JSONB field
+        infectionStatus: z.string().optional(),
+        comorbidities: z.any().optional(), // JSONB field
+        attachmentMetadata: z.any().optional(), // JSONB field
+        episodeId: z.string().uuid().nullable().optional(), // Allow assigning/unassigning episodes
+      });
+      
+      const { notes, ...encounterData } = encounterRequestSchema.parse(req.body);
+      
+      // HIPAA CRITICAL: Validate episode belongs to same patient to prevent cross-patient data mixing
+      if (encounterData.episodeId) {
+        const episode = await storage.getEpisode(encounterData.episodeId);
+        if (!episode) {
+          return res.status(404).json({ message: "Episode not found" });
+        }
+        if (episode.patientId !== encounter.patientId) {
+          return res.status(400).json({ 
+            message: "Episode does not belong to the same patient as this encounter",
+            error: "PATIENT_BOUNDARY_VIOLATION"
+          });
+        }
+      }
+      
+      // Only encrypt notes if they are provided
+      const updateData: any = { ...encounterData };
+      if (notes && notes.length > 0) {
+        updateData.encryptedNotes = encryptEncounterNotes(notes);
+      }
+      
+      // Update encounter
+      const updatedEncounter = await storage.updateEncounter(encounterId, updateData);
+
+      // Log audit event
+      await storage.createAuditLog({
+        tenantId: patient.tenantId,
+        userId,
+        action: 'UPDATE_ENCOUNTER',
+        entity: 'Encounter',
+        entityId: encounterId,
+        ipAddress: req.ip,
+        userAgent: req.get('User-Agent'),
+        previousHash: '',
+      });
+
+      // Track recent activity
+      await trackActivity(patient.tenantId, userId, 'Updated encounter', 'Encounter', encounterId, 'Patient Encounter');
+
+      res.json({
+        ...updatedEncounter,
+        notes: await decryptEncounterNotes(
+          Array.isArray(updatedEncounter.encryptedNotes) ? updatedEncounter.encryptedNotes as string[] : [],
+          updatedEncounter.id
+        ),
+      });
+    } catch (error) {
+      console.error("Error updating encounter:", error);
+      res.status(500).json({ message: "Failed to update encounter" });
+    }
+  });
+
   // Eligibility analysis routes
   app.post('/api/encounters/:encounterId/analyze-eligibility', isAuthenticated, async (req: any, res) => {
     try {
