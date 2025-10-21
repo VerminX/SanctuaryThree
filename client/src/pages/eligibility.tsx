@@ -10,15 +10,7 @@ import AnalysisPanel from "@/components/eligibility/analysis-panel";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { SearchCheck, Brain, CheckCircle, AlertTriangle, XCircle } from "lucide-react";
-
-const MAC_REGIONS = [
-  { code: "JE", label: "Noridian Healthcare Solutions (MAC J-E)" },
-  { code: "JH", label: "CGS Administrators (MAC J-H)" },
-  { code: "JL", label: "Novitas Solutions (MAC J-L)" },
-  { code: "JN", label: "First Coast Service Options (MAC J-N)" },
-  { code: "JJ", label: "Palmetto GBA (MAC J-J)" },
-  { code: "J5", label: "Wisconsin Physicians Service (MAC J-5)" },
-];
+import { MAC_REGIONS } from "@/constants/macRegions";
 
 export default function Eligibility() {
   const { toast } = useToast();
@@ -505,3 +497,4 @@ export default function Eligibility() {
     </div>
   );
 }
+

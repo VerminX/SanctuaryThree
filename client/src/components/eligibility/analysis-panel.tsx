@@ -95,7 +95,7 @@ interface AnalysisPanelProps {
     status: string;
     encounterCount: number;
   }>;
-  macRegions: Array<{ code: string; label: string }>;
+  macRegions: ReadonlyArray<{ code: string; label: string }>;
   onAnalyze: (params: { 
     mode: 'episode' | 'encounter'; 
     id: string; 

@@ -4,6 +4,7 @@ import fs from "fs";
 import path from "path";
 import { storage } from "./storage";
 import { setupAuth, isAuthenticated } from "./replitAuth";
+import { VALID_MAC_REGIONS, validateMACRegion } from "./services/macRegionValidation";
 
 declare global {
   var concurrencyStore: Map<string, number> | undefined;
@@ -46,21 +47,6 @@ import { ICD10_DATABASE, getCodeByCode, validateICD10Format, searchICD10Codes } 
 import { z } from "zod";
 import { format as formatDate } from "date-fns";
 
-// Valid Medicare MAC regions for eligibility analysis
-const VALID_MAC_REGIONS = [
-  'JE', // Noridian - CA, NV, HI, AS, GU
-  'JF', // Noridian - AK, WA, OR, ID, MT, WY, ND, SD, UT, AZ
-  'J5', // WPS - WI (Wisconsin Physicians Service)
-  'J6', // NGS - NY, PR, VI
-  'JH', // CGS - KY, OH
-  'JJ', // Palmetto - SC, NC, WV, VA, TN, GA, AL
-  'JK', // WPS - WI, IL, IN, MI, MN
-  'JL', // WPS - MO, KS
-  'JM', // NGS - LA, MS, AR, CO, TX, OK, NM
-  'JN', // First Coast - FL
-  'J8', // WPS - IA, KS, MO, NE
-];
-
 // Extract MAC code from full MAC region name
 // e.g., "CGS Administrators (MAC J-H)" → "JH"
 function extractMACCode(macRegion: string | null | undefined): string | null {
@@ -80,23 +66,6 @@ function extractMACCode(macRegion: string | null | undefined): string | null {
   }
   
   return null;
-}
-
-// Validate MAC region parameter
-function validateMACRegion(macRegion: string | null | undefined): { valid: boolean; error?: string } {
-  if (!macRegion || !macRegion.trim()) {
-    return { valid: false, error: "MAC region is required" };
-  }
-  
-  const normalizedRegion = macRegion.trim().toUpperCase();
-  if (!VALID_MAC_REGIONS.includes(normalizedRegion)) {
-    return { 
-      valid: false, 
-      error: `Invalid MAC region: ${macRegion}. Must be one of: ${VALID_MAC_REGIONS.join(', ')}` 
-    };
-  }
-  
-  return { valid: true };
 }
 
 // Helper function to split combined vascularAssessment back into separate fields
