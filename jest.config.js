@@ -2,10 +2,10 @@
 export default {
   preset: 'ts-jest',
   testEnvironment: 'node',
-  roots: ['<rootDir>/server', '<rootDir>/shared'],
+  roots: ['<rootDir>/server', '<rootDir>/shared', '<rootDir>/client/src'],
   testMatch: ['**/__tests__/**/*.test.ts'],
   transform: {
-    '^.+\\.ts$': 'ts-jest',
+    '^.+\\.(ts|tsx)$': 'ts-jest',
   },
   clearMocks: true,
   collectCoverageFrom: [
@@ -17,6 +17,7 @@ export default {
     '!shared/**/*.test.ts',
   ],
   moduleNameMapper: {
-    '^@shared/(.*)$': '<rootDir>/shared/$1'
+    '^@shared/(.*)$': '<rootDir>/shared/$1',
+    '^@/(.*)$': '<rootDir>/client/src/$1'
   }
 };
