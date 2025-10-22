@@ -1,41 +1,12 @@
 import { z } from "zod";
+import { getProblemICD10Mappings } from "@shared/config/rules";
 
 // Helper function to map diagnosis descriptions to ICD-10 codes
 function mapProblemToICD10(description: string): string | null {
   const descriptionLower = description.toLowerCase();
-  
+
   // Map common problem descriptions to ICD-10 codes
-  const mappings: Record<string, string> = {
-    // Diabetic foot ulcer variations
-    'ulcer of left foot due to type 2 diabetes': 'E11.621',
-    'ulcer of right foot due to type 2 diabetes': 'E11.621',
-    'ulcer of foot due to type 2 diabetes': 'E11.621',
-    'diabetic foot ulcer': 'E11.621',
-    'diabetic ulcer': 'E11.621',
-    'dfu': 'E11.621',
-    'routine diabetic foot care': 'E11.621',
-    
-    // Venous ulcers
-    'venous stasis ulcer': 'I87.33',
-    'venous ulcer': 'I87.33',
-    'stasis ulcer': 'I87.33',
-    'venous insufficiency ulcer': 'I87.33',
-    'vlu': 'I87.33',
-    
-    // Pressure ulcers
-    'pressure ulcer': 'L89.9',
-    'pressure sore': 'L89.9',
-    'decubitus ulcer': 'L89.9',
-    'bedsore': 'L89.9',
-    
-    // Chronic wound
-    'chronic ulcer of lower limb': 'L97.909',
-    'non-healing wound': 'L97.909',
-    'chronic wound': 'L97.909',
-    'wound care': 'L97.909',
-    'wound healing': 'L97.909',
-    'open wound': 'L97.909'
-  };
+  const mappings = getProblemICD10Mappings();
   
   // Check for exact matches first
   for (const [key, code] of Object.entries(mappings)) {
