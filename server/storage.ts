@@ -73,13 +73,11 @@ import {
 } from "@shared/schema";
 import { db } from "./db";
 import { eq, and, desc, asc, or, lte, gte, sql, inArray } from "drizzle-orm";
-import crypto from "crypto";
-import { 
-  encryptSignatureData, 
-  decryptSignatureData, 
-  encryptDocumentContent, 
-  decryptDocumentContent 
-} from "./services/encryption";
+import { createPatientContext, type PatientContext } from "./storage/patients";
+import { createDocumentContext, type DocumentContext } from "./storage/documents";
+import { createAnalyticsContext, type AnalyticsContext } from "./storage/analytics";
+import { createAuditContext, type AuditContext } from "./storage/audit";
+import { defaultStorageDependencies, type StorageDependencies } from "./storage/dependencies";
 
 // Interface for storage operations
 export interface IStorage {
@@ -477,28 +475,16 @@ export interface IStorage {
 }
 
 export class DatabaseStorage implements IStorage {
+  private readonly patientContext: PatientContext;
+  private readonly documentContext: DocumentContext;
+  private readonly analyticsContext: AnalyticsContext;
+  private readonly auditContext: AuditContext;
 
-  // ENHANCED STATE MACHINE: Define valid document state transitions
-  private readonly validStateTransitions: Record<string, string[]> = {
-    'draft': ['pending_approval'],
-    'pending_approval': ['approved', 'rejected'],
-    'approved': ['signed'],
-    'rejected': [], // Terminal state
-    'signed': [] // Terminal state
-  };
-
-  // ENHANCED STATE MACHINE: Validate state transition
-  private validateStateTransition(currentStatus: string, newStatus: string): { isValid: boolean; error?: string } {
-    const allowedTransitions = this.validStateTransitions[currentStatus] || [];
-    
-    if (!allowedTransitions.includes(newStatus)) {
-      return {
-        isValid: false,
-        error: `Invalid state transition from '${currentStatus}' to '${newStatus}'. Allowed transitions: [${allowedTransitions.join(', ')}]`
-      };
-    }
-    
-    return { isValid: true };
+  constructor(private readonly deps: StorageDependencies = defaultStorageDependencies) {
+    this.patientContext = createPatientContext(this.deps);
+    this.documentContext = createDocumentContext(this.deps);
+    this.analyticsContext = createAnalyticsContext(this.deps);
+    this.auditContext = createAuditContext(this.deps);
   }
   // User operations (IMPORTANT) these user operations are mandatory for Replit Auth.
   async getUser(id: string): Promise<User | undefined> {
@@ -595,439 +581,135 @@ export class DatabaseStorage implements IStorage {
 
   // Patient operations
   async createPatient(patient: InsertPatient): Promise<Patient> {
-    // Check for duplicates before creating
-    const isDuplicate = await this.checkPatientDuplicate(patient.mrn, patient.tenantId);
-    if (isDuplicate) {
-      throw new Error(`Patient with MRN ${patient.mrn} already exists in this tenant`);
-    }
-    
-    const [newPatient] = await db.insert(patients).values(patient).returning();
-    return newPatient;
+    return this.patientContext.createPatient(patient);
   }
 
   async getPatient(id: string): Promise<Patient | undefined> {
-    const [patient] = await db.select().from(patients).where(eq(patients.id, id));
-    return patient;
+    return this.patientContext.getPatient(id);
   }
 
   async getPatientsByTenant(tenantId: string): Promise<Patient[]> {
-    return await db
-      .select()
-      .from(patients)
-      .where(eq(patients.tenantId, tenantId))
-      .orderBy(desc(patients.createdAt));
+    return this.patientContext.getPatientsByTenant(tenantId);
   }
 
   async updatePatient(id: string, patient: Partial<InsertPatient>): Promise<Patient> {
-    const [updatedPatient] = await db
-      .update(patients)
-      .set({ ...patient, updatedAt: new Date() })
-      .where(eq(patients.id, id))
-      .returning();
-    return updatedPatient;
+    return this.patientContext.updatePatient(id, patient);
   }
 
-  // Patient duplicate checking
   async getPatientByMrnAndTenant(mrn: string, tenantId: string): Promise<Patient | undefined> {
-    const [patient] = await db
-      .select()
-      .from(patients)
-      .where(and(eq(patients.mrn, mrn), eq(patients.tenantId, tenantId)));
-    return patient;
+    return this.patientContext.getPatientByMrnAndTenant(mrn, tenantId);
   }
 
   async checkPatientDuplicate(mrn: string, tenantId: string): Promise<boolean> {
-    const existingPatient = await this.getPatientByMrnAndTenant(mrn, tenantId);
-    return !!existingPatient;
+    return this.patientContext.checkPatientDuplicate(mrn, tenantId);
   }
 
-  // Encounter operations
   async createEncounter(encounter: InsertEncounter): Promise<Encounter> {
-    // Check for duplicates before creating
-    const isDuplicate = await this.checkEncounterDuplicate(encounter.patientId, encounter.date);
-    if (isDuplicate) {
-      throw new Error(`Encounter already exists for patient ${encounter.patientId} on ${this.formatEncounterDate(encounter.date)}`);
-    }
-    
-    const [newEncounter] = await db.insert(encounters).values(encounter).returning();
-    return newEncounter;
+    return this.patientContext.createEncounter(encounter);
   }
 
   async getEncounter(id: string): Promise<Encounter | undefined> {
-    const [encounter] = await db.select().from(encounters).where(eq(encounters.id, id));
-    return encounter;
+    return this.patientContext.getEncounter(id);
   }
 
   async getEncountersByPatient(patientId: string): Promise<Encounter[]> {
-    return await db
-      .select()
-      .from(encounters)
-      .where(eq(encounters.patientId, patientId))
-      .orderBy(desc(encounters.date));
+    return this.patientContext.getEncountersByPatient(patientId);
   }
 
   async updateEncounter(id: string, encounter: Partial<InsertEncounter>): Promise<Encounter> {
-    const [updatedEncounter] = await db
-      .update(encounters)
-      .set({ ...encounter, updatedAt: new Date() })
-      .where(eq(encounters.id, id))
-      .returning();
-    return updatedEncounter;
+    return this.patientContext.updateEncounter(id, encounter);
   }
 
-  // Encounter duplicate checking
   async getEncounterByPatientAndDate(patientId: string, encounterDate: string): Promise<Encounter | undefined> {
-    // Find encounters on the same calendar day (YYYY-MM-DD)
-    const [encounter] = await db
-      .select()
-      .from(encounters)
-      .where(and(
-        eq(encounters.patientId, patientId),
-        sql`DATE(${encounters.date}) = ${encounterDate}`
-      ));
-    return encounter;
+    return this.patientContext.getEncounterByPatientAndDate(patientId, encounterDate);
   }
 
   async checkEncounterDuplicate(patientId: string, date: Date): Promise<boolean> {
-    const encounterDate = this.formatEncounterDate(date);
-    const existingEncounter = await this.getEncounterByPatientAndDate(patientId, encounterDate);
-    return !!existingEncounter;
+    return this.patientContext.checkEncounterDuplicate(patientId, date);
   }
 
-  // Helper method to format date as YYYY-MM-DD
-  private formatEncounterDate(date: Date): string {
-    return date.toISOString().split('T')[0];
-  }
-
-  // De-duplication methods
   async findDuplicatePatients(): Promise<{ tenantId: string; mrn: string; patientIds: string[] }[]> {
-    const duplicates = await db
-      .select({
-        tenantId: patients.tenantId,
-        mrn: patients.mrn,
-        patientIds: sql<string>`STRING_AGG(${patients.id}::text, ',')`,
-        count: sql<number>`COUNT(*)`
-      })
-      .from(patients)
-      .groupBy(patients.tenantId, patients.mrn)
-      .having(sql`COUNT(*) > 1`);
-
-    return duplicates.map(d => ({
-      tenantId: d.tenantId,
-      mrn: d.mrn,
-      patientIds: d.patientIds.split(',')
-    }));
+    return this.patientContext.findDuplicatePatients();
   }
 
   async getDuplicatePatientDetails(tenantId: string, mrn: string): Promise<Patient[]> {
-    return await db
-      .select()
-      .from(patients)
-      .where(and(eq(patients.tenantId, tenantId), eq(patients.mrn, mrn)))
-      .orderBy(patients.createdAt); // Oldest first
+    return this.patientContext.getDuplicatePatientDetails(tenantId, mrn);
   }
 
   async moveEncountersToPatient(fromPatientId: string, toPatientId: string): Promise<number> {
-    const result = await db
-      .update(encounters)
-      .set({ patientId: toPatientId })
-      .where(eq(encounters.patientId, fromPatientId));
-    return result.rowCount || 0;
+    return this.patientContext.moveEncountersToPatient(fromPatientId, toPatientId);
   }
 
   async moveEpisodesToPatient(fromPatientId: string, toPatientId: string): Promise<number> {
-    const result = await db
-      .update(episodes)
-      .set({ patientId: toPatientId })
-      .where(eq(episodes.patientId, fromPatientId));
-    return result.rowCount || 0;
+    return this.patientContext.moveEpisodesToPatient(fromPatientId, toPatientId);
   }
 
   async deletePatient(patientId: string): Promise<void> {
-    await db.delete(patients).where(eq(patients.id, patientId));
+    return this.patientContext.deletePatient(patientId);
   }
 
   async deduplicatePatients(): Promise<{ mergedGroups: number; removedPatients: number; preservedData: { encounters: number; episodes: number } }> {
-    const duplicateGroups = await this.findDuplicatePatients();
-    let removedPatients = 0;
-    let totalEncountersMoved = 0;
-    let totalEpisodesMoved = 0;
-
-    for (const group of duplicateGroups) {
-      const duplicatePatients = await this.getDuplicatePatientDetails(group.tenantId, group.mrn);
-      
-      if (duplicatePatients.length <= 1) continue;
-
-      // Keep the oldest patient (first in the ordered list)
-      const keepPatient = duplicatePatients[0];
-      const duplicatesToRemove = duplicatePatients.slice(1);
-
-      // Move all encounters and episodes from duplicates to the kept patient
-      for (const duplicate of duplicatesToRemove) {
-        const encountsMoved = await this.moveEncountersToPatient(duplicate.id, keepPatient.id);
-        const episodesMoved = await this.moveEpisodesToPatient(duplicate.id, keepPatient.id);
-        
-        totalEncountersMoved += encountsMoved;
-        totalEpisodesMoved += episodesMoved;
-
-        // Delete the duplicate patient
-        await this.deletePatient(duplicate.id);
-        removedPatients++;
-      }
-    }
-
-    return {
-      mergedGroups: duplicateGroups.length,
-      removedPatients,
-      preservedData: {
-        encounters: totalEncountersMoved,
-        episodes: totalEpisodesMoved
-      }
-    };
+    return this.patientContext.deduplicatePatients();
   }
 
-  // Episode operations
   async createEpisode(episode: InsertEpisode): Promise<Episode> {
-    const [newEpisode] = await db.insert(episodes).values(episode).returning();
-    return newEpisode;
+    return this.patientContext.createEpisode(episode);
   }
 
   async getEpisode(id: string): Promise<Episode | undefined> {
-    const [episode] = await db.select().from(episodes).where(eq(episodes.id, id));
-    return episode;
+    return this.patientContext.getEpisode(id);
   }
 
   async getEpisodesByPatient(patientId: string): Promise<Episode[]> {
-    return await db
-      .select()
-      .from(episodes)
-      .where(eq(episodes.patientId, patientId))
-      .orderBy(desc(episodes.episodeStartDate));
+    return this.patientContext.getEpisodesByPatient(patientId);
   }
 
   async updateEpisode(id: string, episode: Partial<InsertEpisode>): Promise<Episode> {
-    const [updatedEpisode] = await db
-      .update(episodes)
-      .set({ ...episode, updatedAt: new Date() })
-      .where(eq(episodes.id, id))
-      .returning();
-    return updatedEpisode;
+    return this.patientContext.updateEpisode(id, episode);
   }
 
   async deleteEpisode(id: string): Promise<void> {
-    await db.delete(episodes).where(eq(episodes.id, id));
+    return this.patientContext.deleteEpisode(id);
   }
 
   async getEncountersByEpisode(episodeId: string): Promise<Encounter[]> {
-    return await db
-      .select()
-      .from(encounters)
-      .where(eq(encounters.episodeId, episodeId))
-      .orderBy(desc(encounters.date));
+    return this.patientContext.getEncountersByEpisode(episodeId);
   }
 
   async getEligibilityChecksByEpisode(episodeId: string): Promise<EligibilityCheck[]> {
-    return await db
-      .select()
-      .from(eligibilityChecks)
-      .where(eq(eligibilityChecks.episodeId, episodeId))
-      .orderBy(desc(eligibilityChecks.createdAt));
+    return this.patientContext.getEligibilityChecksByEpisode(episodeId);
   }
 
   async getDocumentsByEpisode(episodeId: string): Promise<Document[]> {
-    return await db
-      .select()
-      .from(documents)
-      .where(eq(documents.episodeId, episodeId))
-      .orderBy(desc(documents.createdAt));
+    return this.patientContext.getDocumentsByEpisode(episodeId);
   }
 
-  // Bulk operations for performance optimization
-  async getAllEncountersWithPatientsByTenant(tenantId: string): Promise<Array<Encounter & { patientName: string; patientId: string; patient: any; }>> {
-    const { safeDecryptPatientData } = await import('./services/encryption');
-    
-    const encounterResults = await db
-      .select({
-        encounter: encounters,
-        patient: patients
-      })
-      .from(encounters)
-      .innerJoin(patients, eq(encounters.patientId, patients.id))
-      .where(eq(patients.tenantId, tenantId))
-      .orderBy(desc(encounters.date));
-
-    return encounterResults.map(row => {
-      const { patientData, decryptionError } = safeDecryptPatientData(row.patient);
-      return {
-        ...row.encounter,
-        patientName: `${patientData.firstName} ${patientData.lastName}`.trim(),
-        patient: {
-          id: patientData.id,
-          firstName: patientData.firstName,
-          lastName: patientData.lastName,
-          mrn: patientData.mrn,
-          _decryptionFailed: decryptionError
-        }
-      };
-    });
+  async getAllEncountersWithPatientsByTenant(tenantId: string): Promise<Array<Encounter & { patientName: string; patientId: string; patient: any }>> {
+    return this.patientContext.getAllEncountersWithPatientsByTenant(tenantId);
   }
 
-  async getAllEpisodesWithPatientsByTenant(tenantId: string): Promise<Array<Episode & { patientName: string; patientId: string; encounterCount: number; }>> {
-    const { safeDecryptPatientData } = await import('./services/encryption');
-    
-    try {
-      // Simplified query to reduce connection timeout risk
-      // First get episodes with patients
-      const episodeResults = await db
-        .select({
-          episode: episodes,
-          patient: patients
-        })
-        .from(episodes)
-        .innerJoin(patients, eq(episodes.patientId, patients.id))
-        .where(eq(patients.tenantId, tenantId))
-        .orderBy(desc(episodes.episodeStartDate));
-
-      // Then get encounter counts in a separate query to avoid complex subquery timeouts
-      const episodeIds = episodeResults.map(row => row.episode.id);
-      const encounterCounts = episodeIds.length > 0 ? await db
-        .select({
-          episodeId: encounters.episodeId,
-          count: sql<number>`COUNT(*)`.as('count')
-        })
-        .from(encounters)
-        .where(inArray(encounters.episodeId, episodeIds))
-        .groupBy(encounters.episodeId) : [];
-
-      // Create lookup map for encounter counts
-      const countMap = new Map(
-        encounterCounts.map(row => [row.episodeId, row.count])
-      );
-
-      return episodeResults.map(row => {
-        const { patientData } = safeDecryptPatientData(row.patient);
-        return {
-          ...row.episode,
-          patientName: `${patientData.firstName} ${patientData.lastName}`.trim(),
-          encounterCount: countMap.get(row.episode.id) || 0,
-        };
-      });
-    } catch (error) {
-      console.error('Database error in getAllEpisodesWithPatientsByTenant:', error);
-      throw new Error(`Failed to fetch episodes with patients: ${(error as Error).message}`);
-    }
+  async getAllEpisodesWithPatientsByTenant(tenantId: string): Promise<Array<Episode & { patientName: string; patientId: string; encounterCount: number }>> {
+    return this.patientContext.getAllEpisodesWithPatientsByTenant(tenantId);
   }
 
-  // Bulk endpoint for Documents page performance optimization
-  async getAllPatientsWithEligibilityByTenant(tenantId: string): Promise<Array<{
-    id: string;
-    name: string;
-    mrn: string;
-    eligibilityChecks: Array<EligibilityCheck>;
-  }>> {
-    const { safeDecryptPatientData } = await import('./services/encryption');
-    
-    // Get all patients for the tenant
-    const tenantPatients = await db
-      .select()
-      .from(patients)
-      .where(eq(patients.tenantId, tenantId));
-
-    // Get all encounters for these patients
-    const patientIds = tenantPatients.map(p => p.id);
-    if (patientIds.length === 0) return [];
-
-    const allEncounters = await db
-      .select()
-      .from(encounters)
-      .where(inArray(encounters.patientId, patientIds));
-
-    // Get all eligibility checks for these encounters
-    const encounterIds = allEncounters.map(e => e.id);
-    const allEligibilityChecks = encounterIds.length > 0 ? await db
-      .select()
-      .from(eligibilityChecks)
-      .where(inArray(eligibilityChecks.encounterId, encounterIds)) : [];
-
-    // Build the result by grouping eligibility checks by patient
-    return tenantPatients.map(patient => {
-      const { patientData, decryptionError } = safeDecryptPatientData(patient);
-      
-      if (decryptionError) {
-        return {
-          id: patient.id,
-          name: '[DECRYPTION ERROR]',
-          mrn: '[ENCRYPTED]',
-          eligibilityChecks: [],
-        };
-      }
-
-      // Get patient's encounters
-      const patientEncounters = allEncounters.filter(e => e.patientId === patient.id);
-      const patientEncounterIds = patientEncounters.map(e => e.id);
-      
-      // Get eligibility checks for patient's encounters
-      const patientEligibilityChecks = allEligibilityChecks.filter(check => 
-        patientEncounterIds.includes(check.encounterId)
-      );
-
-      return {
-        id: patient.id,
-        name: `${patientData.firstName} ${patientData.lastName}`.trim(),
-        mrn: patientData.mrn || '',
-        eligibilityChecks: patientEligibilityChecks,
-      };
-    });
+  async getAllPatientsWithEligibilityByTenant(tenantId: string): Promise<Array<{ id: string; name: string; mrn: string; eligibilityChecks: EligibilityCheck[] }>> {
+    return this.patientContext.getAllPatientsWithEligibilityByTenant(tenantId);
   }
 
-  // Bulk endpoint for Documents page - get all patients with their documents
-  async getAllPatientsWithDocumentsByTenant(tenantId: string): Promise<Array<{
-    id: string;
-    name: string;
-    mrn: string;
-    documents: Array<any>;
-  }>> {
-    const { safeDecryptPatientData } = await import('./services/encryption');
-    
-    // Get all patients for the tenant
-    const tenantPatients = await db
-      .select()
-      .from(patients)
-      .where(eq(patients.tenantId, tenantId));
+  async getAllPatientsWithDocumentsByTenant(tenantId: string): Promise<Array<{ id: string; name: string; mrn: string; documents: Document[] }>> {
+    return this.patientContext.getAllPatientsWithDocumentsByTenant(tenantId);
+  }
 
-    // Get all documents for these patients
-    const patientIds = tenantPatients.map(p => p.id);
-    if (patientIds.length === 0) return [];
+  async getPatientEligibilityHistory(patientId: string): Promise<EligibilityCheck[]> {
+    return this.patientContext.getPatientEligibilityHistory(patientId);
+  }
 
-    const allDocuments = await db
-      .select()
-      .from(documents)
-      .where(inArray(documents.patientId, patientIds))
-      .orderBy(desc(documents.createdAt));
+  async getEpisodeWithEnrichedHistory(episodeId: string): Promise<EpisodeWithFullHistory> {
+    return this.patientContext.getEpisodeWithEnrichedHistory(episodeId);
+  }
 
-    // Build the result by grouping documents by patient
-    return tenantPatients.map(patient => {
-      const { patientData, decryptionError } = safeDecryptPatientData(patient);
-      
-      if (decryptionError) {
-        return {
-          id: patient.id,
-          name: '[DECRYPTION ERROR]',
-          mrn: '[ENCRYPTED]',
-          documents: [],
-        };
-      }
-
-      // Get patient's documents
-      const patientDocuments = allDocuments.filter(doc => doc.patientId === patient.id);
-
-      return {
-        id: patient.id,
-        name: `${patientData.firstName} ${patientData.lastName}`.trim(),
-        mrn: patientData.mrn || '',
-        documents: patientDocuments,
-      };
-    });
+  async getPatientEpisodesWithHistory(patientId: string): Promise<EpisodeWithFullHistory[]> {
+    return this.patientContext.getPatientEpisodesWithHistory(patientId);
   }
 
   // Policy operations
@@ -1608,143 +1290,55 @@ export class DatabaseStorage implements IStorage {
     };
   }
 
-  // Enhanced Document operations with version control
+  // Document operations
   async createDocument(document: InsertDocument): Promise<Document> {
-    const [newDocument] = await db.insert(documents).values(document).returning();
-    return newDocument;
+    return this.documentContext.createDocument(document);
   }
 
   async getDocument(id: string): Promise<Document | undefined> {
-    const [document] = await db.select().from(documents).where(eq(documents.id, id));
-    return document;
+    return this.documentContext.getDocument(id);
   }
 
   async getDocumentsByPatient(patientId: string): Promise<Document[]> {
-    return await db
-      .select()
-      .from(documents)
-      .where(eq(documents.patientId, patientId))
-      .orderBy(desc(documents.createdAt));
+    return this.documentContext.getDocumentsByPatient(patientId);
   }
 
   async updateDocument(id: string, updates: Partial<Document>): Promise<Document> {
-    // STATE MACHINE ENFORCEMENT: Validate status transitions if status is being updated
-    if (updates.status) {
-      const currentDocument = await this.getDocument(id);
-      if (!currentDocument) {
-        throw new Error('Document not found');
-      }
-      
-      const validation = this.validateStateTransition(currentDocument.status, updates.status);
-      if (!validation.isValid) {
-        throw new Error(`STATE_TRANSITION_ERROR: ${validation.error}`);
-      }
-    }
-
-    const [updatedDocument] = await db
-      .update(documents)
-      .set({ ...updates, updatedAt: new Date() })
-      .where(eq(documents.id, id))
-      .returning();
-    return updatedDocument;
+    return this.documentContext.updateDocument(id, updates);
   }
 
-  // Document Version operations
   async createDocumentVersion(version: InsertDocumentVersion): Promise<DocumentVersion> {
-    // CRITICAL HIPAA FIX: Encrypt document content before storage (may contain PHI)
-    const encryptedVersion = {
-      ...version,
-      content: encryptDocumentContent(version.content),
-    };
-    
-    const [newVersion] = await db.insert(documentVersions).values(encryptedVersion).returning();
-    
-    // Return decrypted content to caller (for API response)
-    return {
-      ...newVersion,
-      content: decryptDocumentContent(newVersion.content),
-    };
+    return this.documentContext.createDocumentVersion(version);
   }
 
   async getDocumentVersions(documentId: string): Promise<DocumentVersion[]> {
-    const versions = await db
-      .select()
-      .from(documentVersions)
-      .where(eq(documentVersions.documentId, documentId))
-      .orderBy(desc(documentVersions.version));
-    
-    // CRITICAL HIPAA FIX: Decrypt document content for authorized users
-    return versions.map(version => ({
-      ...version,
-      content: decryptDocumentContent(version.content),
-    }));
+    return this.documentContext.getDocumentVersions(documentId);
   }
 
   async getDocumentVersion(versionId: string): Promise<DocumentVersion | undefined> {
-    const [version] = await db.select().from(documentVersions).where(eq(documentVersions.id, versionId));
-    
-    if (!version) return undefined;
-    
-    // CRITICAL HIPAA FIX: Decrypt document content for authorized users
-    return {
-      ...version,
-      content: decryptDocumentContent(version.content),
-    };
+    return this.documentContext.getDocumentVersion(versionId);
   }
 
   async getCurrentDocumentVersion(documentId: string): Promise<DocumentVersion | undefined> {
-    // Get the document's current version number
-    const document = await this.getDocument(documentId);
-    if (!document) return undefined;
-
-    const [currentVersion] = await db
-      .select()
-      .from(documentVersions)
-      .where(
-        and(
-          eq(documentVersions.documentId, documentId),
-          eq(documentVersions.version, document.currentVersion)
-        )
-      );
-    
-    if (!currentVersion) return undefined;
-    
-    // CRITICAL HIPAA FIX: Decrypt document content for authorized users
-    return {
-      ...currentVersion,
-      content: decryptDocumentContent(currentVersion.content),
-    };
+    return this.documentContext.getCurrentDocumentVersion(documentId);
   }
 
-  // Document Approval operations
   async createDocumentApproval(approval: InsertDocumentApproval): Promise<DocumentApproval> {
-    const [newApproval] = await db.insert(documentApprovals).values(approval).returning();
-    return newApproval;
+    return this.documentContext.createDocumentApproval(approval);
   }
 
   async getDocumentApprovals(documentId: string): Promise<DocumentApproval[]> {
-    return await db
-      .select()
-      .from(documentApprovals)
-      .where(eq(documentApprovals.documentId, documentId))
-      .orderBy(desc(documentApprovals.createdAt));
+    return this.documentContext.getDocumentApprovals(documentId);
   }
 
   async getDocumentApproval(approvalId: string): Promise<DocumentApproval | undefined> {
-    const [approval] = await db.select().from(documentApprovals).where(eq(documentApprovals.id, approvalId));
-    return approval;
+    return this.documentContext.getDocumentApproval(approvalId);
   }
 
   async updateDocumentApproval(approvalId: string, updates: Partial<DocumentApproval>): Promise<DocumentApproval> {
-    const [updatedApproval] = await db
-      .update(documentApprovals)
-      .set({ ...updates, reviewedAt: new Date() })
-      .where(eq(documentApprovals.id, approvalId))
-      .returning();
-    return updatedApproval;
+    return this.documentContext.updateDocumentApproval(approvalId, updates);
   }
 
-  // SECURITY FIX: Atomic approval processing with transaction and audit logging
   async processDocumentApproval(approvalId: string, updates: {
     status: 'approved' | 'rejected';
     comments?: string;
@@ -1753,121 +1347,23 @@ export class DatabaseStorage implements IStorage {
     ipAddress?: string;
     userAgent?: string;
   }): Promise<DocumentApproval> {
-    return await db.transaction(async (tx) => {
-      // Update the approval record
-      const [updatedApproval] = await tx
-        .update(documentApprovals)
-        .set({
-          status: updates.status,
-          comments: updates.comments,
-          approverUserId: updates.approverUserId,
-          reviewedAt: new Date(),
-        })
-        .where(eq(documentApprovals.id, approvalId))
-        .returning();
-
-      if (!updatedApproval) {
-        throw new Error('Approval not found');
-      }
-
-      // Update document status atomically
-      await tx
-        .update(documents)
-        .set({
-          status: updates.status === 'approved' ? 'approved' : 'rejected',
-          updatedAt: new Date(),
-        })
-        .where(eq(documents.id, updatedApproval.documentId));
-
-      // Create audit log atomically
-      const auditData = {
-        tenantId: updates.tenantId,
-        userId: updates.approverUserId,
-        action: updates.status === 'approved' ? 'APPROVE_DOCUMENT' : 'REJECT_DOCUMENT',
-        entity: 'DocumentApproval',
-        entityId: updatedApproval.id,
-        ipAddress: updates.ipAddress || '',
-        userAgent: updates.userAgent || '',
-        previousHash: '',
-      };
-      
-      const currentHash = this.generateAuditHash(auditData);
-      await tx.insert(auditLogs).values({ ...auditData, currentHash });
-
-      return updatedApproval;
-    });
+    return this.documentContext.processDocumentApproval(approvalId, updates);
   }
 
   async getPendingApprovals(userId: string, tenantId: string, role?: string): Promise<DocumentApproval[]> {
-    // SECURITY FIX: Enforce tenant isolation by joining through documents->patients
-    const conditions = [
-      eq(documentApprovals.status, 'pending'),
-      eq(patients.tenantId, tenantId) // Critical: filter by tenant
-    ];
-    
-    if (role) {
-      conditions.push(eq(documentApprovals.approverRole, role));
-    }
-    
-    return await db
-      .select({
-        id: documentApprovals.id,
-        documentId: documentApprovals.documentId,
-        versionId: documentApprovals.versionId,
-        approverRole: documentApprovals.approverRole,
-        approverUserId: documentApprovals.approverUserId,
-        status: documentApprovals.status,
-        comments: documentApprovals.comments,
-        reviewedAt: documentApprovals.reviewedAt,
-        createdAt: documentApprovals.createdAt,
-      })
-      .from(documentApprovals)
-      .innerJoin(documents, eq(documentApprovals.documentId, documents.id))
-      .innerJoin(patients, eq(documents.patientId, patients.id))
-      .where(and(...conditions))
-      .orderBy(desc(documentApprovals.createdAt));
+    return this.documentContext.getPendingApprovals(userId, tenantId, role);
   }
 
-  // Electronic Signature operations
   async createDocumentSignature(signature: InsertDocumentSignature): Promise<DocumentSignature> {
-    // CRITICAL HIPAA FIX: Encrypt signature data before storage
-    const encryptedSignature = signature.signatureData 
-      ? { ...signature, signatureData: encryptSignatureData(signature.signatureData) }
-      : signature;
-    
-    const [newSignature] = await db.insert(documentSignatures).values(encryptedSignature).returning();
-    
-    // Return decrypted signature data to caller (for API response)
-    return {
-      ...newSignature,
-      signatureData: newSignature.signatureData ? decryptSignatureData(newSignature.signatureData) : null,
-    };
+    return this.documentContext.createDocumentSignature(signature);
   }
 
   async getDocumentSignatures(documentId: string): Promise<DocumentSignature[]> {
-    const signatures = await db
-      .select()
-      .from(documentSignatures)
-      .where(eq(documentSignatures.documentId, documentId))
-      .orderBy(desc(documentSignatures.signedAt));
-    
-    // CRITICAL HIPAA FIX: Decrypt signature data for authorized users
-    return signatures.map(signature => ({
-      ...signature,
-      signatureData: signature.signatureData ? decryptSignatureData(signature.signatureData) : null,
-    }));
+    return this.documentContext.getDocumentSignatures(documentId);
   }
 
   async getDocumentSignature(signatureId: string): Promise<DocumentSignature | undefined> {
-    const [signature] = await db.select().from(documentSignatures).where(eq(documentSignatures.id, signatureId));
-    
-    if (!signature) return undefined;
-    
-    // CRITICAL HIPAA FIX: Decrypt signature data for authorized users
-    return {
-      ...signature,
-      signatureData: signature.signatureData ? decryptSignatureData(signature.signatureData) : null,
-    };
+    return this.documentContext.getDocumentSignature(signatureId);
   }
 
   // Recent Activity operations
@@ -1887,26 +1383,11 @@ export class DatabaseStorage implements IStorage {
 
   // Audit operations
   async createAuditLog(log: InsertAuditLog): Promise<AuditLog> {
-    // Generate cryptographic hash for audit chain integrity
-    const currentHash = this.generateAuditHash(log);
-    const auditWithHash = { ...log, currentHash };
-    
-    const [newLog] = await db.insert(auditLogs).values(auditWithHash).returning();
-    return newLog;
+    return this.auditContext.createAuditLog(log);
   }
 
   async getAuditLogsByTenant(tenantId: string, limit: number = 100): Promise<AuditLog[]> {
-    return await db
-      .select()
-      .from(auditLogs)
-      .where(eq(auditLogs.tenantId, tenantId))
-      .orderBy(desc(auditLogs.timestamp))
-      .limit(limit);
-  }
-
-  private generateAuditHash(log: InsertAuditLog): string {
-    const data = `${log.tenantId}:${log.userId}:${log.action}:${log.entity}:${log.entityId}:${Date.now()}`;
-    return crypto.createHash('sha256').update(data).digest('hex');
+    return this.auditContext.getAuditLogsByTenant(tenantId, limit);
   }
 
   // File Upload operations
@@ -2040,6 +1521,755 @@ export class DatabaseStorage implements IStorage {
   // ===============================================================================
   // PRODUCT APPLICATION WORKFLOW STORAGE IMPLEMENTATIONS
   // ===============================================================================
+
+  // Product Catalog operations
+  async searchProducts(filters: {
+    category?: string;
+    woundTypes?: string[];
+    hcpcsCode?: string;
+    manufacturerName?: string;
+    isActive?: boolean;
+    clinicalEvidenceLevel?: string;
+  }): Promise<Product[]> {
+    let query = db.select().from(products);
+    
+    const conditions = [];
+    
+    if (filters.isActive !== undefined) {
+      conditions.push(eq(products.isActive, filters.isActive));
+    }
+    
+    if (filters.category) {
+      conditions.push(eq(products.productCategory, filters.category));
+    }
+    
+    if (filters.hcpcsCode) {
+      conditions.push(eq(products.primaryHcpcsCode, filters.hcpcsCode));
+    }
+    
+    if (filters.manufacturerName) {
+      conditions.push(eq(products.manufacturerName, filters.manufacturerName));
+    }
+    
+    if (filters.clinicalEvidenceLevel) {
+      conditions.push(eq(products.clinicalEvidenceLevel, filters.clinicalEvidenceLevel));
+    }
+    
+    // For wound types, we need to check if any of the requested wound types match the product indications
+    if (filters.woundTypes && filters.woundTypes.length > 0) {
+      // This is a simplified implementation - in reality we'd need more complex array matching
+      conditions.push(sql`${products.indicatedWoundTypes} && ${filters.woundTypes}`);
+    }
+    
+    if (conditions.length > 0) {
+      query = query.where(and(...conditions));
+    }
+    
+    return await query.orderBy(asc(products.productName));
+  }
+
+  async getProduct(id: string): Promise<Product | undefined> {
+    const [product] = await db.select().from(products).where(eq(products.id, id));
+    return product;
+  }
+
+  async getProductsByHcpcs(hcpcsCode: string): Promise<Product[]> {
+    return await db
+      .select()
+      .from(products)
+      .where(eq(products.primaryHcpcsCode, hcpcsCode));
+  }
+
+  async getProductsByWoundType(woundType: string): Promise<Product[]> {
+    return await db
+      .select()
+      .from(products)
+      .where(sql`${products.indicatedWoundTypes} @> ${[woundType]}`);
+  }
+
+  async getProductsByManufacturer(manufacturerName: string): Promise<Product[]> {
+    return await db
+      .select()
+      .from(products)
+      .where(eq(products.manufacturerName, manufacturerName));
+  }
+
+  // Product LCD Coverage operations
+  async getProductLcdCoverage(productId: string, macRegion: string): Promise<ProductLcdCoverage | undefined> {
+    const [coverage] = await db
+      .select()
+      .from(productLcdCoverage)
+      .where(and(
+        eq(productLcdCoverage.productId, productId),
+        eq(productLcdCoverage.macRegion, macRegion)
+      ));
+    return coverage;
+  }
+
+  async getActiveLcdCoverageByProduct(productId: string, macRegion: string): Promise<ProductLcdCoverage[]> {
+    return await db
+      .select()
+      .from(productLcdCoverage)
+      .where(and(
+        eq(productLcdCoverage.productId, productId),
+        eq(productLcdCoverage.macRegion, macRegion)
+      ))
+      .orderBy(desc(productLcdCoverage.effectiveDate));
+  }
+
+  async validateProductCoverage(
+    productId: string,
+    episodeId: string,
+    applicationData: {
+      woundSize?: number;
+      woundDepth?: number;
+      diagnosisCodes: string[];
+      conservativeCareCompliance?: boolean;
+      conservativeCareDays?: number;
+    }
+  ): Promise<{
+    isCovered: boolean;
+    coverageLevel: string;
+    violations: string[];
+    warnings: string[];
+    requirements: string[];
+    priorAuthRequired: boolean;
+    maxReimbursableAmount?: number;
+  }> {
+    // Get episode and patient data
+    const episode = await this.getEpisode(episodeId);
+    if (!episode) {
+      return {
+        isCovered: false,
+        coverageLevel: 'none',
+        violations: ['Episode not found'],
+        warnings: [],
+        requirements: [],
+        priorAuthRequired: false
+      };
+    }
+
+    const patient = await this.getPatient(episode.patientId);
+    if (!patient) {
+      return {
+        isCovered: false,
+        coverageLevel: 'none',
+        violations: ['Patient not found'],
+        warnings: [],
+        requirements: [],
+        priorAuthRequired: false
+      };
+    }
+
+    // Get LCD coverage for patient's MAC region
+    const lcdCoverage = await this.getProductLcdCoverage(productId, patient.macRegion || '');
+    if (!lcdCoverage) {
+      return {
+        isCovered: false,
+        coverageLevel: 'none',
+        violations: ['No LCD coverage found for MAC region ' + patient.macRegion],
+        warnings: [],
+        requirements: [],
+        priorAuthRequired: false
+      };
+    }
+
+    const violations: string[] = [];
+    const warnings: string[] = [];
+    const requirements: string[] = [];
+
+    // Size validations
+    if (applicationData.woundSize && lcdCoverage.minWoundSize && applicationData.woundSize < lcdCoverage.minWoundSize) {
+      violations.push(`Wound size ${applicationData.woundSize} cm² is below minimum requirement of ${lcdCoverage.minWoundSize} cm²`);
+    }
+
+    if (applicationData.woundSize && lcdCoverage.maxWoundSize && applicationData.woundSize > lcdCoverage.maxWoundSize) {
+      violations.push(`Wound size ${applicationData.woundSize} cm² exceeds maximum limit of ${lcdCoverage.maxWoundSize} cm²`);
+    }
+
+    // Conservative care requirement
+    if (lcdCoverage.requiredConservativeDays && lcdCoverage.requiredConservativeDays > 0) {
+      if (!applicationData.conservativeCareCompliance) {
+        violations.push(`Conservative care compliance required (${lcdCoverage.requiredConservativeDays} days)`);
+      }
+      requirements.push('conservative_care');
+    }
+
+    // Diagnosis code validation (simplified)
+    const requiredDiagnoses = lcdCoverage.requiredPrimaryDiagnoses as string[] | null;
+    if (requiredDiagnoses && requiredDiagnoses.length > 0) {
+      const hasValidDiagnosis = applicationData.diagnosisCodes.some(code =>
+        requiredDiagnoses.includes(code)
+      );
+      if (!hasValidDiagnosis) {
+        violations.push('No qualifying diagnosis codes found');
+      }
+    }
+
+    return {
+      isCovered: violations.length === 0,
+      coverageLevel: violations.length === 0 ? 'full' : 'none',
+      violations,
+      warnings,
+      requirements,
+      priorAuthRequired: lcdCoverage.priorAuthRequired || false,
+      maxReimbursableAmount: lcdCoverage.maxReimbursableAmount || undefined
+    };
+  }
+
+  // Product Application operations  
+  async createProductApplication(application: InsertProductApplication): Promise<ProductApplication> {
+    const [newApplication] = await db.insert(productApplications).values(application).returning();
+    return newApplication;
+  }
+
+  async getProductApplication(id: string): Promise<ProductApplication | undefined> {
+    const [application] = await db.select().from(productApplications).where(eq(productApplications.id, id));
+    return application;
+  }
+
+  async getProductApplicationsByEpisode(episodeId: string): Promise<ProductApplication[]> {
+    return await db
+      .select()
+      .from(productApplications)
+      .where(eq(productApplications.episodeId, episodeId))
+      .orderBy(desc(productApplications.applicationDate));
+  }
+
+  async getProductApplicationsByPatient(patientId: string): Promise<ProductApplication[]> {
+    return await db
+      .select()
+      .from(productApplications)
+      .where(eq(productApplications.patientId, patientId))
+      .orderBy(desc(productApplications.applicationDate));
+  }
+
+  async updateProductApplication(id: string, updates: Partial<InsertProductApplication>): Promise<ProductApplication> {
+    const [updated] = await db
+      .update(productApplications)
+      .set({ ...updates, updatedAt: new Date() })
+      .where(eq(productApplications.id, id))
+      .returning();
+    return updated;
+  }
+
+  // Product frequency validation
+  async validateProductApplicationFrequency(
+    productId: string,
+    patientId: string,
+    episodeId: string,
+    applicationDate: Date
+  ): Promise<{
+    isValid: boolean;
+    violations: string[];
+    lastApplicationDate?: Date;
+    daysSinceLastApplication?: number;
+    applicationsThisEpisode: number;
+    applicationsThisMonth: number;
+    applicationsThisYear: number;
+    maxAllowed: {
+      perEpisode?: number;
+      perMonth?: number;
+      perYear?: number;
+      minDaysBetween?: number;
+    };
+  }> {
+    // Get patient MAC region for LCD coverage
+    const patient = await this.getPatient(patientId);
+    const macRegion = patient?.macRegion || '';
+    
+    // Get LCD coverage limits
+    const lcdCoverage = await this.getProductLcdCoverage(productId, macRegion);
+    
+    // Count existing applications
+    const episodeApplications = await db
+      .select()
+      .from(productApplications)
+      .where(and(
+        eq(productApplications.productId, productId),
+        eq(productApplications.episodeId, episodeId)
+      ));
+
+    const monthStart = new Date(applicationDate.getFullYear(), applicationDate.getMonth(), 1);
+    const yearStart = new Date(applicationDate.getFullYear(), 0, 1);
+
+    const monthApplications = await db
+      .select()
+      .from(productApplications)
+      .where(and(
+        eq(productApplications.productId, productId),
+        eq(productApplications.patientId, patientId),
+        gte(productApplications.applicationDate, monthStart),
+        lte(productApplications.applicationDate, applicationDate)
+      ));
+
+    const yearApplications = await db
+      .select()
+      .from(productApplications)
+      .where(and(
+        eq(productApplications.productId, productId),
+        eq(productApplications.patientId, patientId),
+        gte(productApplications.applicationDate, yearStart),
+        lte(productApplications.applicationDate, applicationDate)
+      ));
+
+    // Find most recent application
+    const lastApplication = await db
+      .select()
+      .from(productApplications)
+      .where(and(
+        eq(productApplications.productId, productId),
+        eq(productApplications.patientId, patientId),
+        sql`${productApplications.applicationDate} < ${applicationDate}`
+      ))
+      .orderBy(desc(productApplications.applicationDate))
+      .limit(1);
+
+    const violations: string[] = [];
+    let lastApplicationDate: Date | undefined;
+    let daysSinceLastApplication: number | undefined;
+
+    if (lastApplication.length > 0) {
+      lastApplicationDate = lastApplication[0].applicationDate;
+      daysSinceLastApplication = Math.floor(
+        (applicationDate.getTime() - lastApplicationDate.getTime()) / (1000 * 60 * 60 * 24)
+      );
+
+      // Check minimum days between applications
+      if (lcdCoverage?.minDaysBetweenApplications && daysSinceLastApplication < lcdCoverage.minDaysBetweenApplications) {
+        violations.push(`Minimum ${lcdCoverage.minDaysBetweenApplications} days required between applications`);
+      }
+    }
+
+    // Check episode limit
+    if (lcdCoverage?.maxApplicationsPerEpisode && episodeApplications.length >= lcdCoverage.maxApplicationsPerEpisode) {
+      violations.push(`Maximum ${lcdCoverage.maxApplicationsPerEpisode} applications per episode exceeded`);
+    }
+
+    // Check monthly limit
+    if (lcdCoverage?.maxApplicationsPerMonth && monthApplications.length >= lcdCoverage.maxApplicationsPerMonth) {
+      violations.push(`Maximum ${lcdCoverage.maxApplicationsPerMonth} applications per month exceeded`);
+    }
+
+    // Check yearly limit
+    if (lcdCoverage?.maxApplicationsPerYear && yearApplications.length >= lcdCoverage.maxApplicationsPerYear) {
+      violations.push(`Maximum ${lcdCoverage.maxApplicationsPerYear} applications per year exceeded`);
+    }
+
+    return {
+      isValid: violations.length === 0,
+      violations,
+      lastApplicationDate,
+      daysSinceLastApplication,
+      applicationsThisEpisode: episodeApplications.length,
+      applicationsThisMonth: monthApplications.length,
+      applicationsThisYear: yearApplications.length,
+      maxAllowed: {
+        perEpisode: lcdCoverage?.maxApplicationsPerEpisode || undefined,
+        perMonth: lcdCoverage?.maxApplicationsPerMonth || undefined,
+        perYear: lcdCoverage?.maxApplicationsPerYear || undefined,
+        minDaysBetween: lcdCoverage?.minDaysBetweenApplications || undefined
+      }
+    };
+  }
+
+  // Clinical Decision Support
+  async getProductRecommendations(
+    woundType: string,
+    woundSize: number,
+    diagnosisCodes: string[],
+    patientFactors?: {
+      age?: number;
+      diabetic?: boolean;
+      immunocompromised?: boolean;
+      previousProducts?: string[];
+    }
+  ): Promise<Array<{
+    product: Product;
+    coverageInfo: ProductLcdCoverage | null;
+    recommendationScore: number;
+    reasons: string[];
+    contraindications: string[];
+    clinicalEvidence: string;
+    successRate: number;
+    costEffectiveness: number;
+  }>> {
+    // Get products that match wound type
+    const suitableProducts = await this.getProductsByWoundType(woundType);
+    
+    const recommendations: Array<{
+      product: Product;
+      coverageInfo: ProductLcdCoverage | null;
+      recommendationScore: number;
+      reasons: string[];
+      contraindications: string[];
+      clinicalEvidence: string;
+      successRate: number;
+      costEffectiveness: number;
+    }> = [];
+
+    for (const product of suitableProducts) {
+      // This is a simplified scoring algorithm
+      let score = 0.5; // Base score
+      const reasons: string[] = [];
+      const contraindications: string[] = [];
+
+      // Wound type match
+      if (product.indicatedWoundTypes?.includes(woundType)) {
+        score += 0.2;
+        reasons.push('Indicated for wound type');
+      }
+
+      // Evidence level scoring
+      switch (product.clinicalEvidenceLevel) {
+        case 'high':
+          score += 0.2;
+          break;
+        case 'moderate':
+          score += 0.1;
+          break;
+        case 'low':
+          score += 0.05;
+          break;
+      }
+
+      // Size appropriateness (simplified)
+      if (woundSize >= 2 && woundSize <= 25) {
+        score += 0.1;
+        reasons.push('Appropriate for wound size');
+      }
+
+      // Patient factors
+      if (patientFactors?.diabetic && product.productName.toLowerCase().includes('diabetic')) {
+        score += 0.1;
+        reasons.push('Specifically indicated for diabetic wounds');
+      }
+
+      // Avoid previously failed products
+      if (patientFactors?.previousProducts?.includes(product.id)) {
+        score -= 0.2;
+        contraindications.push('Previously used without success');
+      }
+
+      // Only include products with reasonable scores
+      if (score > 0.4) {
+        // Get coverage info (simplified - using first MAC region)
+        const coverageInfo = await this.getProductLcdCoverage(product.id, 'MAC_A');
+        
+        recommendations.push({
+          product,
+          coverageInfo: coverageInfo ?? null,
+          recommendationScore: Math.min(score, 1.0),
+          reasons,
+          contraindications,
+          clinicalEvidence: product.clinicalEvidenceLevel || 'Not specified',
+          successRate: Math.random() * 0.3 + 0.6, // Simplified success rate
+          costEffectiveness: Math.random() * 0.4 + 0.6 // Simplified cost effectiveness
+        });
+      }
+    }
+
+    // Sort by recommendation score
+    return recommendations.sort((a, b) => b.recommendationScore - a.recommendationScore);
+  }
+
+  // Conservative Care Integration
+  async checkConservativeCareCompliance(episodeId: string, requiredDays: number): Promise<{
+    isCompliant: boolean;
+    daysCompleted: number;
+    missingTreatments: string[];
+    compliancePercentage: number;
+    eligibleDate?: Date;
+  }> {
+    // Get all encounters for the episode
+    const encounters = await this.getEncountersByEpisode(episodeId);
+    
+    if (encounters.length === 0) {
+      return {
+        isCompliant: false,
+        daysCompleted: 0,
+        missingTreatments: ['No encounters documented'],
+        compliancePercentage: 0
+      };
+    }
+
+    // Sort encounters by date
+    const sortedEncounters = encounters.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+    
+    // Check conservative care treatments
+    const conservativeCareEncounters = encounters.filter(encounter => {
+      const conservativeCare = encounter.conservativeCare as any;
+      return conservativeCare && (
+        conservativeCare.offloading ||
+        conservativeCare.woundCleansing ||
+        conservativeCare.debridement ||
+        conservativeCare.moistureManagement ||
+        conservativeCare.infectionControl
+      );
+    });
+
+    const daysCompleted = conservativeCareEncounters.length * 7; // Assuming weekly encounters
+    const compliancePercentage = Math.min((daysCompleted / requiredDays) * 100, 100);
+    
+    const missingTreatments: string[] = [];
+    
+    // Check for required treatments
+    const hasOffloading = conservativeCareEncounters.some(e => (e.conservativeCare as any)?.offloading);
+    const hasWoundCare = conservativeCareEncounters.some(e => (e.conservativeCare as any)?.woundCleansing);
+    const hasDebridement = conservativeCareEncounters.some(e => (e.conservativeCare as any)?.debridement);
+    
+    if (!hasOffloading) missingTreatments.push('Offloading');
+    if (!hasWoundCare) missingTreatments.push('Wound cleansing');
+    if (!hasDebridement) missingTreatments.push('Debridement');
+
+    // Calculate eligible date if not yet compliant
+    let eligibleDate: Date | undefined;
+    if (daysCompleted < requiredDays && sortedEncounters.length > 0) {
+      const firstEncounterDate = sortedEncounters[0].date;
+      eligibleDate = new Date(firstEncounterDate.getTime() + requiredDays * 24 * 60 * 60 * 1000);
+    }
+
+    return {
+      isCompliant: daysCompleted >= requiredDays && missingTreatments.length === 0,
+      daysCompleted,
+      missingTreatments,
+      compliancePercentage,
+      eligibleDate
+    };
+  }
+
+  // ===============================================================================
+  // ANALYTICS OPERATIONS - PHASE 5.2: CLINICAL METRICS & PERFORMANCE TRACKING
+  // ===============================================================================
+
+  // Analytics operations
+  async createAnalyticsSnapshot(snapshot: InsertAnalyticsSnapshot): Promise<AnalyticsSnapshot> {
+    return this.analyticsContext.createAnalyticsSnapshot(snapshot);
+  }
+
+  async getAnalyticsSnapshot(id: string): Promise<AnalyticsSnapshot | undefined> {
+    return this.analyticsContext.getAnalyticsSnapshot(id);
+  }
+
+  async getAnalyticsSnapshotsByTenant(tenantId: string, aggregationPeriod?: string, limit?: number): Promise<AnalyticsSnapshot[]> {
+    return this.analyticsContext.getAnalyticsSnapshotsByTenant(tenantId, aggregationPeriod, limit);
+  }
+
+  async getAnalyticsSnapshotsByDateRange(tenantId: string, startDate: Date, endDate: Date, aggregationPeriod: string): Promise<AnalyticsSnapshot[]> {
+    return this.analyticsContext.getAnalyticsSnapshotsByDateRange(tenantId, startDate, endDate, aggregationPeriod);
+  }
+
+  async updateAnalyticsSnapshot(id: string, updates: Partial<InsertAnalyticsSnapshot>): Promise<AnalyticsSnapshot> {
+    return this.analyticsContext.updateAnalyticsSnapshot(id, updates);
+  }
+
+  async deleteAnalyticsSnapshot(id: string): Promise<void> {
+    return this.analyticsContext.deleteAnalyticsSnapshot(id);
+  }
+
+  async getLatestAnalyticsSnapshot(tenantId: string, aggregationPeriod: string): Promise<AnalyticsSnapshot | undefined> {
+    return this.analyticsContext.getLatestAnalyticsSnapshot(tenantId, aggregationPeriod);
+  }
+
+  async createHealingTrend(trend: InsertHealingTrend): Promise<HealingTrend> {
+    return this.analyticsContext.createHealingTrend(trend);
+  }
+
+  async getHealingTrend(id: string): Promise<HealingTrend | undefined> {
+    return this.analyticsContext.getHealingTrend(id);
+  }
+
+  async getHealingTrendsByEpisode(episodeId: string): Promise<HealingTrend[]> {
+    return this.analyticsContext.getHealingTrendsByEpisode(episodeId);
+  }
+
+  async getHealingTrendsByTenant(tenantId: string, limit?: number): Promise<HealingTrend[]> {
+    return this.analyticsContext.getHealingTrendsByTenant(tenantId, limit);
+  }
+
+  async getHealingTrendsByDateRange(tenantId: string, startDate: Date, endDate: Date): Promise<HealingTrend[]> {
+    return this.analyticsContext.getHealingTrendsByDateRange(tenantId, startDate, endDate);
+  }
+
+  async updateHealingTrend(id: string, updates: Partial<InsertHealingTrend>): Promise<HealingTrend> {
+    return this.analyticsContext.updateHealingTrend(id, updates);
+  }
+
+  async deleteHealingTrend(id: string): Promise<void> {
+    return this.analyticsContext.deleteHealingTrend(id);
+  }
+
+  async getHealingTrendsByPatient(patientId: string): Promise<HealingTrend[]> {
+    return this.analyticsContext.getHealingTrendsByPatient(patientId);
+  }
+
+  async getEpisodeHealingTrajectory(episodeId: string): Promise<HealingTrend[]> {
+    return this.analyticsContext.getEpisodeHealingTrajectory(episodeId);
+  }
+
+  async createPerformanceMetric(metric: InsertPerformanceMetric): Promise<PerformanceMetric> {
+    return this.analyticsContext.createPerformanceMetric(metric);
+  }
+
+  async getPerformanceMetric(id: string): Promise<PerformanceMetric | undefined> {
+    return this.analyticsContext.getPerformanceMetric(id);
+  }
+
+  async getPerformanceMetricsByTenant(tenantId: string, metricScope?: string, limit?: number): Promise<PerformanceMetric[]> {
+    return this.analyticsContext.getPerformanceMetricsByTenant(tenantId, metricScope, limit);
+  }
+
+  async getPerformanceMetricsByProvider(providerId: string, limit?: number): Promise<PerformanceMetric[]> {
+    return this.analyticsContext.getPerformanceMetricsByProvider(providerId, limit);
+  }
+
+  async getPerformanceMetricsByDateRange(tenantId: string, startDate: Date, endDate: Date, metricPeriod: string): Promise<PerformanceMetric[]> {
+    return this.analyticsContext.getPerformanceMetricsByDateRange(tenantId, startDate, endDate, metricPeriod);
+  }
+
+  async updatePerformanceMetric(id: string, updates: Partial<InsertPerformanceMetric>): Promise<PerformanceMetric> {
+    return this.analyticsContext.updatePerformanceMetric(id, updates);
+  }
+
+  async deletePerformanceMetric(id: string): Promise<void> {
+    return this.analyticsContext.deletePerformanceMetric(id);
+  }
+
+  async getProviderPerformanceComparison(tenantId: string, metricPeriod: string, limit?: number): Promise<PerformanceMetric[]> {
+    return this.analyticsContext.getProviderPerformanceComparison(tenantId, metricPeriod, limit);
+  }
+
+  async getPerformanceTrends(tenantId: string, metricType: string, periods: number): Promise<PerformanceMetric[]> {
+    return this.analyticsContext.getPerformanceTrends(tenantId, metricType, periods);
+  }
+
+  async createCostAnalytic(cost: InsertCostAnalytic): Promise<CostAnalytic> {
+    return this.analyticsContext.createCostAnalytic(cost);
+  }
+
+  async getCostAnalytic(id: string): Promise<CostAnalytic | undefined> {
+    return this.analyticsContext.getCostAnalytic(id);
+  }
+
+  async getCostAnalyticsByTenant(tenantId: string, analysisPeriod?: string, limit?: number): Promise<CostAnalytic[]> {
+    return this.analyticsContext.getCostAnalyticsByTenant(tenantId, analysisPeriod, limit);
+  }
+
+  async getCostAnalyticsByEpisode(episodeId: string): Promise<CostAnalytic[]> {
+    return this.analyticsContext.getCostAnalyticsByEpisode(episodeId);
+  }
+
+  async getCostAnalyticsByDateRange(tenantId: string, startDate: Date, endDate: Date): Promise<CostAnalytic[]> {
+    return this.analyticsContext.getCostAnalyticsByDateRange(tenantId, startDate, endDate);
+  }
+
+  async updateCostAnalytic(id: string, updates: Partial<InsertCostAnalytic>): Promise<CostAnalytic> {
+    return this.analyticsContext.updateCostAnalytic(id, updates);
+  }
+
+  async deleteCostAnalytic(id: string): Promise<void> {
+    return this.analyticsContext.deleteCostAnalytic(id);
+  }
+
+  async getCostAnalyticsByPatient(patientId: string): Promise<CostAnalytic[]> {
+    return this.analyticsContext.getCostAnalyticsByPatient(patientId);
+  }
+
+  async getTenantCostSummary(tenantId: string, startDate: Date, endDate: Date): Promise<{ totalCosts: number; totalReimbursement: number; netMargin: number; episodeCount: number; averageCostPerEpisode: number }> {
+    return this.analyticsContext.getTenantCostSummary(tenantId, startDate, endDate);
+  }
+
+  async getCostEfficiencyMetrics(tenantId: string, period: string): Promise<CostAnalytic[]> {
+    return this.analyticsContext.getCostEfficiencyMetrics(tenantId, period);
+  }
+
+  async createComplianceTracking(compliance: InsertComplianceTracking): Promise<ComplianceTracking> {
+    return this.analyticsContext.createComplianceTracking(compliance);
+  }
+
+  async getComplianceTracking(id: string): Promise<ComplianceTracking | undefined> {
+    return this.analyticsContext.getComplianceTracking(id);
+  }
+
+  async getComplianceTrackingByTenant(tenantId: string, assessmentType?: string, limit?: number): Promise<ComplianceTracking[]> {
+    return this.analyticsContext.getComplianceTrackingByTenant(tenantId, assessmentType, limit);
+  }
+
+  async getComplianceTrackingByEpisode(episodeId: string): Promise<ComplianceTracking[]> {
+    return this.analyticsContext.getComplianceTrackingByEpisode(episodeId);
+  }
+
+  async getComplianceTrackingByDateRange(tenantId: string, startDate: Date, endDate: Date): Promise<ComplianceTracking[]> {
+    return this.analyticsContext.getComplianceTrackingByDateRange(tenantId, startDate, endDate);
+  }
+
+  async updateComplianceTracking(id: string, updates: Partial<InsertComplianceTracking>): Promise<ComplianceTracking> {
+    return this.analyticsContext.updateComplianceTracking(id, updates);
+  }
+
+  async deleteComplianceTracking(id: string): Promise<void> {
+    return this.analyticsContext.deleteComplianceTracking(id);
+  }
+
+  async getComplianceTrackingByEligibilityCheck(eligibilityCheckId: string): Promise<ComplianceTracking[]> {
+    return this.analyticsContext.getComplianceTrackingByEligibilityCheck(eligibilityCheckId);
+  }
+
+  async getTenantComplianceSummary(tenantId: string, startDate: Date, endDate: Date): Promise<{ overallComplianceRate: number; medicareComplianceRate: number; criticalViolations: number; minorViolations: number; assessmentCount: number }> {
+    return this.analyticsContext.getTenantComplianceSummary(tenantId, startDate, endDate);
+  }
+
+  async getComplianceRiskAnalysis(tenantId: string): Promise<ComplianceTracking[]> {
+    return this.analyticsContext.getComplianceRiskAnalysis(tenantId);
+  }
+
+  async calculateTenantAnalyticsSnapshot(tenantId: string, snapshotDate: Date, aggregationPeriod: string): Promise<AnalyticsSnapshot> {
+    return this.analyticsContext.calculateTenantAnalyticsSnapshot(tenantId, snapshotDate, aggregationPeriod);
+  }
+
+  async calculateEpisodeHealingTrends(episodeId: string): Promise<HealingTrend[]> {
+    return this.analyticsContext.calculateEpisodeHealingTrends(episodeId);
+  }
+
+  async calculateProviderPerformanceMetrics(providerId: string, metricDate: Date, metricPeriod: string): Promise<PerformanceMetric> {
+    return this.analyticsContext.calculateProviderPerformanceMetrics(providerId, metricDate, metricPeriod);
+  }
+
+  async calculateEpisodeCostAnalytics(episodeId: string): Promise<CostAnalytic> {
+    return this.analyticsContext.calculateEpisodeCostAnalytics(episodeId);
+  }
+
+  async assessEpisodeCompliance(episodeId: string): Promise<ComplianceTracking> {
+    return this.analyticsContext.assessEpisodeCompliance(episodeId);
+  }
+
+  async bulkCreateAnalyticsSnapshots(snapshots: InsertAnalyticsSnapshot[]): Promise<AnalyticsSnapshot[]> {
+    return this.analyticsContext.bulkCreateAnalyticsSnapshots(snapshots);
+  }
+
+  async bulkCreateHealingTrends(trends: InsertHealingTrend[]): Promise<HealingTrend[]> {
+    return this.analyticsContext.bulkCreateHealingTrends(trends);
+  }
+
+  async bulkCreatePerformanceMetrics(metrics: InsertPerformanceMetric[]): Promise<PerformanceMetric[]> {
+    return this.analyticsContext.bulkCreatePerformanceMetrics(metrics);
+  }
+
+  async bulkCreateCostAnalytics(costs: InsertCostAnalytic[]): Promise<CostAnalytic[]> {
+    return this.analyticsContext.bulkCreateCostAnalytics(costs);
+  }
+
+  async bulkCreateComplianceTracking(compliance: InsertComplianceTracking[]): Promise<ComplianceTracking[]> {
+    return this.analyticsContext.bulkCreateComplianceTracking(compliance);
+  }
+
+  async getTenantAnalyticsDashboard(tenantId: string, period: string): Promise<{ currentMetrics: AnalyticsSnapshot | undefined; healingTrends: HealingTrend[]; performanceMetrics: PerformanceMetric[]; costSummary: CostAnalytic[]; complianceStatus: ComplianceTracking[] }> {
+    return this.analyticsContext.getTenantAnalyticsDashboard(tenantId, period);
+  }
+
+  async getProviderAnalyticsDashboard(providerId: string, tenantId: string, period: string): Promise<{ performanceMetrics: PerformanceMetric[]; healingOutcomes: HealingTrend[]; costEfficiency: CostAnalytic[]; complianceRecord: ComplianceTracking[] }> {
+    return this.analyticsContext.getProviderAnalyticsDashboard(providerId, tenantId, period);
+  }
 
   // Product Catalog operations
   async searchProducts(filters: {
