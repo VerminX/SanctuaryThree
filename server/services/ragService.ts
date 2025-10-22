@@ -1,6 +1,7 @@
 import { storage } from '../storage';
 import { PolicySource } from '@shared/schema';
 import { getICD10WoundMappings, getLCDSpecificTerms, getWoundTypeSynonyms } from '@shared/config/rules';
+import { healthMonitor } from './healthMonitoring';
 
 // Configurable scoring weights for easy tuning
 const SCORING_WEIGHTS = {
@@ -243,6 +244,12 @@ export async function selectBestPolicy(params: SelectBestPolicyParams): Promise<
     const allPolicies = await storage.getCurrentAndFuturePoliciesByMAC(macRegion, 90);
     
     if (allPolicies.length === 0) {
+      healthMonitor.recordPolicyFallback({
+        fallbackType: 'no_policies_available',
+        fallbackStageCount: 1,
+        consideredPolicies: 0,
+        macRegion
+      });
       return {
         policy: null,
         audit: {
@@ -566,19 +573,37 @@ export async function selectBestPolicy(params: SelectBestPolicyParams): Promise<
       }
     }
 
+    const auditResult = {
+      considered: deduplicatedPolicies.length,
+      filtersApplied,
+      scored: scoredPolicies,
+      selectedReason,
+      fallbackUsed
+    };
+
+    if (fallbackUsed) {
+      const fallbackStageCount = Math.max(1, filtersApplied.filter(step => step.includes('fallback')).length);
+      healthMonitor.recordPolicyFallback({
+        fallbackType: fallbackUsed,
+        fallbackStageCount,
+        consideredPolicies: auditResult.considered,
+        macRegion
+      });
+    }
+
     return {
       policy: selectedPolicy,
-      audit: {
-        considered: deduplicatedPolicies.length,
-        filtersApplied,
-        scored: scoredPolicies,
-        selectedReason,
-        fallbackUsed
-      }
+      audit: auditResult
     };
 
   } catch (error) {
     console.error('Error in selectBestPolicy:', error);
+    healthMonitor.recordPolicyFallback({
+      fallbackType: 'error_occurred',
+      fallbackStageCount: 1,
+      consideredPolicies: 0,
+      macRegion
+    });
     return {
       policy: null,
       audit: {

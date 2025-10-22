@@ -5,6 +5,33 @@
 
 import { DatabaseStorage } from '../storage.js';
 
+type DiagnosisSource = 'primary' | 'secondary';
+type FallbackDepthBucket = 'stage_0' | 'stage_1' | 'stage_2' | 'stage_3_plus';
+type FallbackConsideredBucket = 'policies_0' | 'policies_1_2' | 'policies_3_5' | 'policies_6_plus';
+type DescriptionLengthBucket = 'empty' | 'short' | 'medium' | 'long' | 'very_long';
+
+interface PolicyFallbackMetrics {
+  total: number;
+  byType: Record<string, number>;
+  byMacRegion: Record<string, number>;
+  depthHistogram: Record<FallbackDepthBucket, number>;
+  consideredHistogram: Record<FallbackConsideredBucket, number>;
+  recentTimestamps: number[];
+}
+
+interface UnmatchedDiagnosisMetrics {
+  total: number;
+  bySource: Record<DiagnosisSource, number>;
+  byFormat: Record<'text_description' | 'invalid_format' | 'icd10_like', number>;
+  descriptionLengthHistogram: Record<DescriptionLengthBucket, number>;
+  recentTimestamps: number[];
+}
+
+interface EligibilityMetrics {
+  policyFallbacks: PolicyFallbackMetrics;
+  unmatchedDiagnoses: UnmatchedDiagnosisMetrics;
+}
+
 interface HealthMetrics {
   database: {
     isConnected: boolean;
@@ -25,6 +52,7 @@ interface HealthMetrics {
     memoryUsage: NodeJS.MemoryUsage;
     timestamp: Date;
   };
+  eligibility: EligibilityMetrics;
 }
 
 interface DatabaseConnectionTest {
@@ -65,11 +93,48 @@ class HealthMonitoringService {
         uptime: process.uptime(),
         memoryUsage: process.memoryUsage(),
         timestamp: new Date()
-      }
+      },
+      eligibility: this.createInitialEligibilityMetrics()
     };
 
     // Start background monitoring
     this.startHealthChecks();
+  }
+
+  private createInitialEligibilityMetrics(): EligibilityMetrics {
+    return {
+      policyFallbacks: {
+        total: 0,
+        byType: {},
+        byMacRegion: {},
+        depthHistogram: {
+          stage_0: 0,
+          stage_1: 0,
+          stage_2: 0,
+          stage_3_plus: 0
+        },
+        consideredHistogram: {
+          policies_0: 0,
+          policies_1_2: 0,
+          policies_3_5: 0,
+          policies_6_plus: 0
+        },
+        recentTimestamps: []
+      },
+      unmatchedDiagnoses: {
+        total: 0,
+        bySource: { primary: 0, secondary: 0 },
+        byFormat: { text_description: 0, invalid_format: 0, icd10_like: 0 },
+        descriptionLengthHistogram: {
+          empty: 0,
+          short: 0,
+          medium: 0,
+          long: 0,
+          very_long: 0
+        },
+        recentTimestamps: []
+      }
+    };
   }
 
   /**
@@ -148,6 +213,52 @@ class HealthMonitoringService {
     this.updateCorruptionMetrics();
   }
 
+  recordPolicyFallback(event: { fallbackType: string; fallbackStageCount: number; consideredPolicies: number; macRegion?: string | null }): void {
+    const metrics = this.metrics.eligibility.policyFallbacks;
+    const sanitizedType = this.sanitizeMetricLabel(event.fallbackType);
+    const sanitizedMac = this.sanitizeMacRegion(event.macRegion);
+
+    metrics.total += 1;
+    this.incrementCount(metrics.byType, sanitizedType);
+    this.incrementCount(metrics.byMacRegion, sanitizedMac);
+
+    const stageCount = Number.isFinite(event.fallbackStageCount)
+      ? Math.max(1, Math.round(event.fallbackStageCount))
+      : 1;
+    const depthBucket = this.mapFallbackDepth(stageCount);
+    this.incrementCount(metrics.depthHistogram, depthBucket);
+
+    const considered = Number.isFinite(event.consideredPolicies)
+      ? Math.max(0, Math.round(event.consideredPolicies))
+      : 0;
+    const consideredBucket = this.mapConsideredBucket(considered);
+    this.incrementCount(metrics.consideredHistogram, consideredBucket);
+
+    metrics.recentTimestamps.push(Date.now());
+    this.trimRecent(metrics.recentTimestamps);
+  }
+
+  recordUnmatchedDiagnosis(event: { source: DiagnosisSource; descriptionLength: number; format: 'text_description' | 'invalid_format' | 'icd10_like' }): void {
+    const metrics = this.metrics.eligibility.unmatchedDiagnoses;
+
+    metrics.total += 1;
+    this.incrementCount(metrics.bySource, event.source);
+    this.incrementCount(metrics.byFormat, event.format);
+
+    const length = Number.isFinite(event.descriptionLength)
+      ? Math.max(0, Math.round(event.descriptionLength))
+      : 0;
+    const bucket = this.mapDescriptionLengthBucket(length);
+    this.incrementCount(metrics.descriptionLengthHistogram, bucket);
+
+    metrics.recentTimestamps.push(Date.now());
+    this.trimRecent(metrics.recentTimestamps);
+  }
+
+  resetEligibilityTelemetry(): void {
+    this.metrics.eligibility = this.createInitialEligibilityMetrics();
+  }
+
   /**
    * Gets current health status
    */
@@ -181,6 +292,16 @@ class HealthMonitoringService {
       issues.push(`High memory usage: ${memUsageMB.toFixed(0)}MB`);
     }
 
+    const fallbackLastHour = this.countRecent(this.metrics.eligibility.policyFallbacks.recentTimestamps, 60 * 60 * 1000);
+    if (fallbackLastHour > 3) {
+      issues.push(`Policy selection fallback triggered ${fallbackLastHour} times in the last hour`);
+    }
+
+    const unmatchedLastHour = this.countRecent(this.metrics.eligibility.unmatchedDiagnoses.recentTimestamps, 60 * 60 * 1000);
+    if (unmatchedLastHour > 5) {
+      issues.push(`Unmatched diagnosis entries detected (${unmatchedLastHour} in the last hour)`);
+    }
+
     let status: 'healthy' | 'degraded' | 'unhealthy';
     if (issues.length === 0) {
       status = 'healthy';
@@ -199,7 +320,7 @@ class HealthMonitoringService {
   generateHealthReport(): string {
     const health = this.getHealthStatus();
     const simple = this.getSimpleHealthCheck();
-    
+
     const report = [
       `System Health Report - ${health.system.timestamp.toISOString()}`,
       '='.repeat(60),
@@ -226,11 +347,90 @@ class HealthMonitoringService {
       `  Memory Usage: ${(health.system.memoryUsage.heapUsed / 1024 / 1024).toFixed(1)}MB`,
       `  Memory Peak: ${(health.system.memoryUsage.heapTotal / 1024 / 1024).toFixed(1)}MB`,
       '',
+      'Eligibility & Policy Selection Metrics:',
+      `  Policy Fallbacks (total): ${health.eligibility.policyFallbacks.total}`,
+      `  Policy Fallbacks (last hour): ${this.countRecent(health.eligibility.policyFallbacks.recentTimestamps, 60 * 60 * 1000)}`,
+      `  Most common fallback: ${this.getTopKey(health.eligibility.policyFallbacks.byType)}`,
+      `  Unmatched Diagnoses (total): ${health.eligibility.unmatchedDiagnoses.total}`,
+      `  Unmatched Diagnoses (last hour): ${this.countRecent(health.eligibility.unmatchedDiagnoses.recentTimestamps, 60 * 60 * 1000)}`,
+      `  Primary vs Secondary unmatched: ${health.eligibility.unmatchedDiagnoses.bySource.primary}/${health.eligibility.unmatchedDiagnoses.bySource.secondary}`,
+      '',
       'Recent Database Errors:',
       ...health.database.recentErrors.slice(-5).map((error, index) => `  ${index + 1}. ${error}`)
     ];
 
     return report.join('\n');
+  }
+
+  private incrementCount<T extends string>(map: Record<T, number>, key: T): void;
+  private incrementCount(map: Record<string, number>, key: string): void;
+  private incrementCount(map: Record<string, number>, key: string): void {
+    // eslint-disable-next-line no-param-reassign
+    map[key] = (map[key] ?? 0) + 1;
+  }
+
+  private sanitizeMetricLabel(label: string): string {
+    const normalized = label.trim().toLowerCase().replace(/[^a-z0-9]+/g, '_');
+    const sanitized = normalized.replace(/^_+|_+$/g, '');
+    return sanitized || 'unknown';
+  }
+
+  private sanitizeMacRegion(macRegion?: string | null): string {
+    if (!macRegion) {
+      return 'UNKNOWN';
+    }
+
+    const normalized = macRegion.toUpperCase().replace(/[^A-Z0-9]/g, '');
+    if (!normalized) {
+      return 'UNKNOWN';
+    }
+
+    return normalized.slice(0, 12);
+  }
+
+  private mapFallbackDepth(count: number): FallbackDepthBucket {
+    if (count <= 0) return 'stage_0';
+    if (count === 1) return 'stage_1';
+    if (count === 2) return 'stage_2';
+    return 'stage_3_plus';
+  }
+
+  private mapConsideredBucket(count: number): FallbackConsideredBucket {
+    if (count <= 0) return 'policies_0';
+    if (count <= 2) return 'policies_1_2';
+    if (count <= 5) return 'policies_3_5';
+    return 'policies_6_plus';
+  }
+
+  private mapDescriptionLengthBucket(length: number): DescriptionLengthBucket {
+    if (length <= 0) return 'empty';
+    if (length <= 10) return 'short';
+    if (length <= 30) return 'medium';
+    if (length <= 60) return 'long';
+    return 'very_long';
+  }
+
+  private trimRecent(list: number[], limit = 100): void {
+    if (list.length > limit) {
+      list.splice(0, list.length - limit);
+    }
+  }
+
+  private countRecent(list: number[], windowMs: number): number {
+    const now = Date.now();
+    return list.filter(ts => now - ts <= windowMs).length;
+  }
+
+  private getTopKey(map: Record<string, number>): string {
+    let topKey = 'none';
+    let topValue = 0;
+    for (const [key, value] of Object.entries(map)) {
+      if (value > topValue) {
+        topKey = key;
+        topValue = value;
+      }
+    }
+    return topKey;
   }
 
   private startHealthChecks(): void {
