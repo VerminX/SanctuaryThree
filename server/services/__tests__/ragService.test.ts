@@ -16,6 +16,7 @@ jest.mock('../../storage', () => ({
 // Import after mocking
 import { selectBestPolicy } from '../ragService';
 import { storage } from '../../storage';
+import { healthMonitor } from '../healthMonitoring';
 
 // Type the mock after import
 const mockStorage = storage as jest.Mocked<typeof storage>;
@@ -51,6 +52,7 @@ describe('selectBestPolicy', () => {
     // Mock current date to September 20, 2025
     jest.useFakeTimers();
     jest.setSystemTime(new Date('2025-09-20'));
+    healthMonitor.resetEligibilityTelemetry();
   });
 
   afterEach(() => {
@@ -334,6 +336,25 @@ describe('selectBestPolicy', () => {
       expect(result.audit.selectedReason).toContain('No policies found for MAC region: X');
       expect(result.audit.fallbackUsed).toBe('no_policies_available');
       expect(result.audit.considered).toBe(0);
+    });
+
+    test('should record telemetry metrics when fallback path is used', async () => {
+      mockStorage.getCurrentAndFuturePoliciesByMAC.mockResolvedValue([]);
+
+      const result = await selectBestPolicy({
+        macRegion: 'Palmetto GBA',
+        woundType: 'dfu'
+      });
+
+      expect(result.audit.fallbackUsed).toBe('no_policies_available');
+
+      const eligibilityMetrics = healthMonitor.getHealthStatus().eligibility;
+      expect(eligibilityMetrics.policyFallbacks.total).toBe(1);
+      expect(Object.values(eligibilityMetrics.policyFallbacks.byType).reduce((sum, value) => sum + value, 0)).toBe(1);
+      expect(eligibilityMetrics.policyFallbacks.recentTimestamps.length).toBe(1);
+      expect(
+        Object.values(eligibilityMetrics.policyFallbacks.depthHistogram).reduce((sum, value) => sum + value, 0)
+      ).toBe(1);
     });
 
     test('should return null when no wound-care relevant policies found', async () => {

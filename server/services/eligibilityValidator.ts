@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { getProblemICD10Mappings } from "@shared/config/rules";
+import { healthMonitor } from "./healthMonitoring";
 
 // Helper function to map diagnosis descriptions to ICD-10 codes
 function mapProblemToICD10(description: string): string | null {
@@ -114,6 +115,11 @@ export function validateDiagnosisCodes(
     errorMessages.push('Primary diagnosis code is required and must be at least 3 characters');
     validationScore -= 30;
     isValid = false;
+    healthMonitor.recordUnmatchedDiagnosis({
+      source: 'primary',
+      descriptionLength: primaryDiagnosis ? primaryDiagnosis.length : 0,
+      format: 'invalid_format'
+    });
   } else {
     auditTrail.push(`Primary diagnosis ${primaryDiagnosis} format validated`);
   }
@@ -134,6 +140,11 @@ export function validateDiagnosisCodes(
       validationScore -= 20;
       isValid = false;
       auditTrail.push(`Could not map diagnosis "${primaryDiagnosis}" to ICD-10 code`);
+      healthMonitor.recordUnmatchedDiagnosis({
+        source: 'primary',
+        descriptionLength: primaryDiagnosis.length,
+        format: 'text_description'
+      });
     }
   }
 
@@ -143,6 +154,11 @@ export function validateDiagnosisCodes(
       if (!icd10Pattern.test(code)) {
         errorMessages.push(`Secondary diagnosis ${index + 1} (${code}) does not match ICD-10 format`);
         validationScore -= 10;
+        healthMonitor.recordUnmatchedDiagnosis({
+          source: 'secondary',
+          descriptionLength: code ? code.length : 0,
+          format: 'invalid_format'
+        });
       }
     });
     auditTrail.push(`Validated ${secondaryDiagnoses.length} secondary diagnoses`);
