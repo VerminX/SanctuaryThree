@@ -1,7 +1,7 @@
 import express, { type Request, Response, NextFunction } from "express";
 import { registerRoutes } from "./routes";
-import { setupVite, serveStatic, log } from "./vite";
-import { scheduledPolicyUpdate } from "./services/policyUpdater";
+import { setupVite, serveStatic } from "./vite";
+import { handleServerStarted } from "./startup";
 
 const app = express();
 app.use(express.json());
@@ -37,7 +37,7 @@ app.use((req, res, next) => {
   next();
 });
 
-(async () => {
+export const serverReady = (async () => {
   const server = await registerRoutes(app);
 
   // API-specific error handler to ensure JSON responses
@@ -75,52 +75,40 @@ app.use((req, res, next) => {
   // this serves both the API and the client.
   // It is the only port that is not firewalled.
   const port = parseInt(process.env.PORT || '5000', 10);
-  server.listen({
-    port,
-    host: "0.0.0.0",
-    reusePort: true,
-  }, async () => {
-    log(`serving on port ${port}`);
-    
-    // Initialize encounter recovery quarantine state (Phase 5 Task 4)
-    try {
-      const { encounterRecovery } = await import('./services/encounterRecovery.js');
-      await encounterRecovery.loadQuarantineState();
-    } catch (error) {
-      log(`Failed to load quarantine state: ${error}`);
-    }
-    
-    // Start nightly policy update scheduler
-    setupPolicyUpdateScheduler();
-  });
+  await new Promise<void>((resolve, reject) => {
+    const handleError = (error: Error) => {
+      if (typeof (server as any).off === "function") {
+        (server as any).off("error", handleError);
+      } else {
+        server.removeListener("error", handleError);
+      }
 
-  // Simple scheduler for nightly policy updates
-  function setupPolicyUpdateScheduler() {
-    const scheduleNextUpdate = () => {
-      const now = new Date();
-      const tomorrow = new Date(now);
-      tomorrow.setDate(now.getDate() + 1);
-      tomorrow.setHours(2, 0, 0, 0); // Run at 2:00 AM
-
-      const msUntilNextRun = tomorrow.getTime() - now.getTime();
-      
-      log(`Next policy update scheduled for: ${tomorrow.toISOString()}`);
-      
-      setTimeout(async () => {
-        try {
-          log('Starting scheduled policy update...');
-          await scheduledPolicyUpdate();
-          log('Scheduled policy update completed successfully');
-        } catch (error) {
-          log(`Scheduled policy update failed: ${error}`);
-        }
-        
-        // Schedule the next update
-        scheduleNextUpdate();
-      }, msUntilNextRun);
+      reject(error);
     };
 
-    // Start the scheduler
-    scheduleNextUpdate();
-  }
+    server.on("error", handleError);
+
+    server.listen(
+      {
+        port,
+        host: "0.0.0.0",
+        reusePort: true,
+      },
+      async () => {
+        if (typeof (server as any).off === "function") {
+          (server as any).off("error", handleError);
+        } else {
+          server.removeListener("error", handleError);
+        }
+
+        await handleServerStarted(port);
+
+        resolve();
+      },
+    );
+  });
+
+  return server;
 })();
+
+void serverReady;
