@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import Sidebar from "@/components/layout/sidebar";
 import Header from "@/components/layout/header";
@@ -23,6 +23,43 @@ import {
   TrendingUp,
   Database
 } from "lucide-react";
+
+interface EligibilityTelemetrySummary {
+  policyFallbacks: {
+    total: number;
+    byType: Record<string, number>;
+    byMacRegion: Record<string, number>;
+    depthHistogram: Record<string, number>;
+    consideredHistogram: Record<string, number>;
+    lastHour: number;
+    last24Hours: number;
+  };
+  unmatchedDiagnoses: {
+    total: number;
+    bySource: Record<string, number>;
+    byFormat: Record<string, number>;
+    descriptionLengthHistogram: Record<string, number>;
+    lastHour: number;
+    last24Hours: number;
+  };
+}
+
+interface HealthStatusResponse {
+  status: "healthy" | "degraded" | "unhealthy";
+  timestamp: string;
+  uptime: number;
+  issues: string[];
+  metrics: {
+    database: Record<string, unknown>;
+    encryption: Record<string, unknown>;
+    system: {
+      uptimeMinutes: number;
+      memoryUsageMB: number;
+      memoryTotalMB: number;
+    };
+    eligibility?: EligibilityTelemetrySummary;
+  };
+}
 
 interface ValidationResult {
   testType: string;
@@ -79,6 +116,12 @@ export default function Validation() {
   }, [isAuthenticated, isLoading, toast]);
 
   const currentTenant = user?.tenants?.[0];
+
+  const { data: healthStatus } = useQuery<HealthStatusResponse>({
+    queryKey: ["/api/health"],
+    enabled: isAuthenticated && !isLoading,
+    retry: false,
+  });
 
   // Comprehensive validation mutation
   const comprehensiveValidationMutation = useMutation({
@@ -189,7 +232,7 @@ export default function Validation() {
     if (!validationResults?.overallHealth) return null;
 
     const { systemOperational, recommendations } = validationResults.overallHealth;
-    
+
     return (
       <Card data-testid="card-system-health">
         <CardHeader>
@@ -212,7 +255,7 @@ export default function Validation() {
                 {systemOperational ? "Operational" : "Needs Attention"}
               </Badge>
             </div>
-            
+
             {recommendations.length > 0 && (
               <div>
                 <h4 className="font-medium mb-2">Recommendations:</h4>
@@ -226,6 +269,99 @@ export default function Validation() {
                 </ul>
               </div>
             )}
+          </div>
+        </CardContent>
+      </Card>
+    );
+  };
+
+  const renderEligibilityTelemetry = () => {
+    const telemetry = healthStatus?.metrics?.eligibility;
+    if (!telemetry) return null;
+
+    const topFallbackType = Object.entries(telemetry.policyFallbacks.byType)
+      .sort((a, b) => b[1] - a[1])[0]?.[0] || "none";
+    const topFallbackRegion = Object.entries(telemetry.policyFallbacks.byMacRegion)
+      .sort((a, b) => b[1] - a[1])[0]?.[0] || "UNKNOWN";
+
+    const fallbackAlert = telemetry.policyFallbacks.lastHour > 3;
+    const unmatchedAlert = telemetry.unmatchedDiagnoses.lastHour > 5;
+
+    return (
+      <Card data-testid="card-eligibility-telemetry">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Brain className="w-5 h-5 text-primary" />
+            Eligibility Telemetry
+          </CardTitle>
+          <CardDescription>
+            Real-time monitoring for fallback policy usage and diagnosis validation quality
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <h4 className="font-medium text-foreground">Policy Fallbacks</h4>
+                <Badge variant={fallbackAlert ? "destructive" : "outline"} data-testid="badge-fallback-alert">
+                  {fallbackAlert ? "Investigate" : "Stable"}
+                </Badge>
+              </div>
+              <div className="grid grid-cols-2 gap-3 text-sm">
+                <div className="p-3 rounded-md border border-border">
+                  <p className="text-muted-foreground">Total</p>
+                  <p className="text-2xl font-semibold" data-testid="text-fallback-total">{telemetry.policyFallbacks.total}</p>
+                </div>
+                <div className="p-3 rounded-md border border-border">
+                  <p className="text-muted-foreground">Last Hour</p>
+                  <p className="text-2xl font-semibold" data-testid="text-fallback-hour">{telemetry.policyFallbacks.lastHour}</p>
+                </div>
+                <div className="p-3 rounded-md border border-border">
+                  <p className="text-muted-foreground">Last 24h</p>
+                  <p className="text-2xl font-semibold" data-testid="text-fallback-day">{telemetry.policyFallbacks.last24Hours}</p>
+                </div>
+                <div className="p-3 rounded-md border border-border">
+                  <p className="text-muted-foreground">Top Type</p>
+                  <p className="text-base font-medium" data-testid="text-fallback-top-type">{topFallbackType}</p>
+                </div>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Highest activity MAC region: <span className="font-medium">{topFallbackRegion}</span>
+              </p>
+            </div>
+
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <h4 className="font-medium text-foreground">Unmatched Diagnoses</h4>
+                <Badge variant={unmatchedAlert ? "destructive" : "outline"} data-testid="badge-diagnosis-alert">
+                  {unmatchedAlert ? "Investigate" : "Stable"}
+                </Badge>
+              </div>
+              <div className="grid grid-cols-2 gap-3 text-sm">
+                <div className="p-3 rounded-md border border-border">
+                  <p className="text-muted-foreground">Total</p>
+                  <p className="text-2xl font-semibold" data-testid="text-unmatched-total">{telemetry.unmatchedDiagnoses.total}</p>
+                </div>
+                <div className="p-3 rounded-md border border-border">
+                  <p className="text-muted-foreground">Last Hour</p>
+                  <p className="text-2xl font-semibold" data-testid="text-unmatched-hour">{telemetry.unmatchedDiagnoses.lastHour}</p>
+                </div>
+                <div className="p-3 rounded-md border border-border">
+                  <p className="text-muted-foreground">Last 24h</p>
+                  <p className="text-2xl font-semibold" data-testid="text-unmatched-day">{telemetry.unmatchedDiagnoses.last24Hours}</p>
+                </div>
+                <div className="p-3 rounded-md border border-border">
+                  <p className="text-muted-foreground">Primary vs Secondary</p>
+                  <p className="text-base font-medium" data-testid="text-unmatched-breakdown">
+                    {telemetry.unmatchedDiagnoses.bySource.primary}/{telemetry.unmatchedDiagnoses.bySource.secondary}
+                  </p>
+                </div>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Most common format issue: {Object.entries(telemetry.unmatchedDiagnoses.byFormat)
+                  .sort((a, b) => b[1] - a[1])[0]?.[0] || 'text_description'}
+              </p>
+            </div>
           </div>
         </CardContent>
       </Card>
@@ -490,6 +626,9 @@ export default function Validation() {
 
             {/* System Health Status */}
             {renderHealthStatus()}
+
+            {/* Eligibility Telemetry */}
+            {renderEligibilityTelemetry()}
 
             {/* Test Results */}
             {renderTestResults()}

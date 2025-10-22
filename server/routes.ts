@@ -92,6 +92,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Get overall health status
       const healthStatus = healthMonitor.getSimpleHealthCheck();
       const detailedMetrics = healthMonitor.getHealthStatus();
+      const eligibilitySummary = healthMonitor.getEligibilityTelemetrySummary();
       
       // Update total patient count for accurate corruption rate
       try {
@@ -124,7 +125,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
             uptimeMinutes: Math.round(detailedMetrics.system.uptime / 60),
             memoryUsageMB: Math.round(detailedMetrics.system.memoryUsage.heapUsed / 1024 / 1024),
             memoryTotalMB: Math.round(detailedMetrics.system.memoryUsage.heapTotal / 1024 / 1024)
-          }
+          },
+          eligibility: eligibilitySummary
         }
       });
     } catch (error) {

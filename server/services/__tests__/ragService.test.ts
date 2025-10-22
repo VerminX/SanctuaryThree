@@ -22,29 +22,41 @@ import { healthMonitor } from '../healthMonitoring';
 const mockStorage = storage as jest.Mocked<typeof storage>;
 
 // Test data - comprehensive policy scenarios
-const createMockPolicy = (overrides: Partial<PolicySource> = {}): PolicySource => ({
-  id: `policy-${Math.random().toString(36).substr(2, 9)}`,
-  lcdId: `LCD${Math.random().toString(36).substr(2, 6).toUpperCase()}`,
-  title: 'Default Policy Title',
-  content: 'Default policy content',
-  mac: 'J',
-  effectiveDate: new Date('2024-01-01'),
-  effectiveThrough: null,
-  postponedDate: null,
-  proposedDate: null,
-  supersededBy: null,
-  versionNumber: null,
-  sourceHash: null,
-  lastVerified: null,
-  changeHistory: null,
-  policyType: 'final',
-  status: 'current',
-  url: 'https://example.com/policy',
-  embeddedVector: null,
-  createdAt: new Date(),
-  updatedAt: new Date(),
-  ...overrides
-});
+const LONG_POLICY_CONTENT = 'This LCD section contains detailed coverage criteria, coding requirements, and Medicare references for clinical services. ';
+
+const createMockPolicy = (overrides: Partial<PolicySource> = {}): PolicySource => {
+  const baseContent = overrides.content ?? 'Default policy content';
+  const shouldPreserveLength = typeof overrides.content === 'string'
+    && overrides.content.length < 1000
+    && overrides.content.toLowerCase().includes('short');
+  const normalizedContent = shouldPreserveLength
+    ? baseContent
+    : `${baseContent} ${LONG_POLICY_CONTENT.repeat(20)}`;
+
+  return {
+    id: `policy-${Math.random().toString(36).substr(2, 9)}`,
+    lcdId: `LCD${Math.random().toString(36).substr(2, 6).toUpperCase()}`,
+    title: 'Default Policy Title',
+    mac: 'J',
+    effectiveDate: new Date('2024-01-01'),
+    effectiveThrough: null,
+    postponedDate: null,
+    proposedDate: null,
+    supersededBy: null,
+    versionNumber: null,
+    sourceHash: null,
+    lastVerified: null,
+    changeHistory: null,
+    policyType: 'final',
+    status: 'current',
+    url: 'https://example.com/policy',
+    embeddedVector: null,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+    ...overrides,
+    content: normalizedContent
+  };
+};
 
 describe('selectBestPolicy', () => {
   beforeEach(() => {
@@ -355,6 +367,10 @@ describe('selectBestPolicy', () => {
       expect(
         Object.values(eligibilityMetrics.policyFallbacks.depthHistogram).reduce((sum, value) => sum + value, 0)
       ).toBe(1);
+
+      const summary = healthMonitor.getEligibilityTelemetrySummary();
+      expect(summary.policyFallbacks.total).toBe(1);
+      expect(summary.policyFallbacks.lastHour).toBe(1);
     });
 
     test('should return null when no wound-care relevant policies found', async () => {

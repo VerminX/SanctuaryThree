@@ -32,6 +32,26 @@ interface EligibilityMetrics {
   unmatchedDiagnoses: UnmatchedDiagnosisMetrics;
 }
 
+export interface EligibilityTelemetrySummary {
+  policyFallbacks: {
+    total: number;
+    byType: Record<string, number>;
+    byMacRegion: Record<string, number>;
+    depthHistogram: Record<FallbackDepthBucket, number>;
+    consideredHistogram: Record<FallbackConsideredBucket, number>;
+    lastHour: number;
+    last24Hours: number;
+  };
+  unmatchedDiagnoses: {
+    total: number;
+    bySource: Record<DiagnosisSource, number>;
+    byFormat: Record<'text_description' | 'invalid_format' | 'icd10_like', number>;
+    descriptionLengthHistogram: Record<DescriptionLengthBucket, number>;
+    lastHour: number;
+    last24Hours: number;
+  };
+}
+
 interface HealthMetrics {
   database: {
     isConnected: boolean;
@@ -266,6 +286,35 @@ class HealthMonitoringService {
     this.updateSystemMetrics();
     this.updateDatabaseMetrics();
     return { ...this.metrics };
+  }
+
+  getEligibilityTelemetrySummary(): EligibilityTelemetrySummary {
+    const fallbackMetrics = this.metrics.eligibility.policyFallbacks;
+    const unmatchedMetrics = this.metrics.eligibility.unmatchedDiagnoses;
+
+    const policyFallbacks = {
+      total: fallbackMetrics.total,
+      byType: { ...fallbackMetrics.byType },
+      byMacRegion: { ...fallbackMetrics.byMacRegion },
+      depthHistogram: { ...fallbackMetrics.depthHistogram },
+      consideredHistogram: { ...fallbackMetrics.consideredHistogram },
+      lastHour: this.countRecent(fallbackMetrics.recentTimestamps, 60 * 60 * 1000),
+      last24Hours: this.countRecent(fallbackMetrics.recentTimestamps, 24 * 60 * 60 * 1000)
+    };
+
+    const unmatchedDiagnoses = {
+      total: unmatchedMetrics.total,
+      bySource: { ...unmatchedMetrics.bySource },
+      byFormat: { ...unmatchedMetrics.byFormat },
+      descriptionLengthHistogram: { ...unmatchedMetrics.descriptionLengthHistogram },
+      lastHour: this.countRecent(unmatchedMetrics.recentTimestamps, 60 * 60 * 1000),
+      last24Hours: this.countRecent(unmatchedMetrics.recentTimestamps, 24 * 60 * 60 * 1000)
+    };
+
+    return {
+      policyFallbacks,
+      unmatchedDiagnoses
+    };
   }
 
   /**
