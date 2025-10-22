@@ -1,5 +1,6 @@
 import { storage } from '../storage';
 import { PolicySource } from '@shared/schema';
+import { getICD10WoundMappings, getLCDSpecificTerms, getWoundTypeSynonyms } from '@shared/config/rules';
 
 // Configurable scoring weights for easy tuning
 const SCORING_WEIGHTS = {
@@ -25,59 +26,7 @@ const SCORING_WEIGHTS = {
   SUPERSEDED_PENALTY: -100
 } as const;
 
-// Comprehensive wound type synonym mapping
-const WOUND_TYPE_SYNONYMS: Record<string, string[]> = {
-  'diabetic_foot_ulcer': [
-    'diabetic foot ulcer', 'dfu', 'diabetic wound', 'diabetic foot',
-    'neuropathic ulcer', 'wagner', 'diabetic ulceration', 'diabetic lower extremity',
-    'diabetic limb', 'diabetes-related ulcer', 'diabetic foot wound'
-  ],
-  'venous_leg_ulcer': [
-    'venous leg ulcer', 'vlu', 'venous stasis ulcer', 'venous insufficiency',
-    'venous wound', 'stasis ulcer', 'venous ulceration', 'chronic venous ulcer',
-    'varicose ulcer', 'venous hypertension ulcer'
-  ],
-  'pressure_ulcer': [
-    'pressure ulcer', 'pu', 'pressure injury', 'decubitus ulcer', 'bedsore',
-    'pressure sore', 'stage 3 pressure', 'stage 4 pressure', 'unstageable pressure'
-  ],
-  'arterial_ulcer': [
-    'arterial ulcer', 'ischemic ulcer', 'arterial insufficiency ulcer',
-    'peripheral arterial disease ulcer', 'pad ulcer', 'arterial wound'
-  ],
-  'chronic_ulcer': [
-    'chronic ulcer', 'non-healing wound', 'chronic wound', 'complex wound',
-    'recalcitrant wound', 'refractory wound'
-  ],
-  'leg_ulcer': [
-    'leg ulcer', 'lower extremity ulcer', 'lower limb ulcer', 'extremity wound'
-  ],
-  'full-thickness ulceration': [
-    'full thickness wound', 'full thickness ulcer', 'deep wound', 'stage 3',
-    'stage 4', 'complex ulceration'
-  ]
-};
-
-// LCD-specific terms that indicate wound care policies
-const LCD_SPECIFIC_TERMS = [
-  'skin substitute', 'ctp', 'cellular tissue product', 'cellular and tissue',
-  'acellular', 'biologic', 'graft', 'matrix', 'collagen', 'amniotic',
-  'wound management', 'wound care', 'wound healing', 'advanced wound',
-  'debridement', 'hyperbaric oxygen', 'hbot', 'negative pressure'
-];
-
-// ICD-10 to wound type mapping
-const ICD10_WOUND_MAPPINGS: Record<string, string> = {
-  'E10.6': 'diabetic_foot_ulcer',  // Type 1 diabetes with foot complications
-  'E11.6': 'diabetic_foot_ulcer',  // Type 2 diabetes with foot complications
-  'E13.6': 'diabetic_foot_ulcer',  // Other diabetes with foot complications
-  'L89': 'pressure_ulcer',         // Pressure ulcers
-  'L97': 'leg_ulcer',              // Non-pressure lower limb ulcers
-  'I83.0': 'venous_leg_ulcer',     // Varicose veins with ulcer
-  'I83.2': 'venous_leg_ulcer',     // Varicose veins with ulcer and inflammation
-  'I87.0': 'venous_leg_ulcer',     // Post-thrombotic syndrome with ulcer
-  'I70.2': 'arterial_ulcer'        // Atherosclerosis of arteries with ulceration
-};
+// Wound care rules are sourced from shared/config/rules JSON datasets.
 
 interface RAGContext {
   content: string;
@@ -154,18 +103,19 @@ function isPlaceholder(policy: PolicySource): boolean {
  */
 function getWoundTypeSearchTerms(woundType: string): string[] {
   const terms: Set<string> = new Set();
-  
+  const synonymsByType = getWoundTypeSynonyms();
+
   // Add the wound type itself
   terms.add(woundType.toLowerCase());
-  
+
   // Add synonyms if available
   const normalizedType = woundType.toLowerCase().replace(/[\s-_]/g, '_');
-  if (WOUND_TYPE_SYNONYMS[normalizedType]) {
-    WOUND_TYPE_SYNONYMS[normalizedType].forEach(synonym => terms.add(synonym.toLowerCase()));
+  if (synonymsByType[normalizedType]) {
+    synonymsByType[normalizedType].forEach(synonym => terms.add(synonym.toLowerCase()));
   }
-  
+
   // Check if any synonym group contains this wound type
-  Object.entries(WOUND_TYPE_SYNONYMS).forEach(([key, synonyms]) => {
+  Object.entries(synonymsByType).forEach(([, synonyms]) => {
     if (synonyms.some(syn => syn.toLowerCase() === woundType.toLowerCase())) {
       synonyms.forEach(synonym => terms.add(synonym.toLowerCase()));
     }
@@ -179,21 +129,23 @@ function getWoundTypeSearchTerms(woundType: string): string[] {
  */
 function mapICD10ToWoundTypes(icd10Codes?: string[]): string[] {
   if (!icd10Codes || icd10Codes.length === 0) return [];
-  
+
   const woundTypes: Set<string> = new Set();
-  
+  const mappings = getICD10WoundMappings();
+  const mappingEntries = Object.entries(mappings);
+
   icd10Codes.forEach(code => {
     // Try exact match
-    if (ICD10_WOUND_MAPPINGS[code]) {
-      woundTypes.add(ICD10_WOUND_MAPPINGS[code]);
+    if (mappings[code]) {
+      woundTypes.add(mappings[code]);
     }
-    
+
     // Try prefix matches (3 and 4 characters)
     const prefix3 = code.substring(0, 3);
     const prefix4 = code.substring(0, 4);
-    
-    Object.entries(ICD10_WOUND_MAPPINGS).forEach(([mapCode, woundType]) => {
-      if (mapCode === prefix3 || mapCode === prefix4 || 
+
+    mappingEntries.forEach(([mapCode, woundType]) => {
+      if (mapCode === prefix3 || mapCode === prefix4 ||
           code.startsWith(mapCode) || mapCode.startsWith(code.substring(0, 4))) {
         woundTypes.add(woundType);
       }
@@ -233,9 +185,9 @@ function isWoundCareRelevant(
   }
   
   const woundCareKeywords: Set<string> = new Set();
-  
+
   // Add LCD-specific terms
-  LCD_SPECIFIC_TERMS.forEach(term => woundCareKeywords.add(term.toLowerCase()));
+  getLCDSpecificTerms().forEach(term => woundCareKeywords.add(term.toLowerCase()));
   
   // Add wound type and its synonyms
   const woundTypeTerms = getWoundTypeSearchTerms(woundType);
@@ -284,6 +236,7 @@ export async function selectBestPolicy(params: SelectBestPolicyParams): Promise<
   const currentDate = new Date();
   const filtersApplied: string[] = [];
   const scoredPolicies: PolicyScore[] = [];
+  const lcdTerms = getLCDSpecificTerms().map(term => term.toLowerCase());
   
   try {
     // 1. Retrieve policies using storage.getCurrentAndFuturePoliciesByMAC(macRegion, 90)
@@ -412,7 +365,7 @@ export async function selectBestPolicy(params: SelectBestPolicyParams): Promise<
       }
       
       // LCD-specific terms bonus
-      const hasLCDTerms = LCD_SPECIFIC_TERMS.some(term => 
+      const hasLCDTerms = lcdTerms.some(term =>
         policy.title.toLowerCase().includes(term) || policy.content.toLowerCase().includes(term)
       );
       if (hasLCDTerms) {
@@ -544,7 +497,7 @@ export async function selectBestPolicy(params: SelectBestPolicyParams): Promise<
                 const lowerContent = p.content.toLowerCase();
                 // Look for any general wound care terms and exclude placeholders
                 return !isPlaceholder(p) && (
-                  LCD_SPECIFIC_TERMS.some(term => 
+                  lcdTerms.some(term =>
                     lowerTitle.includes(term) || lowerContent.includes(term)
                   ) || ['wound', 'ulcer', 'skin'].some(term =>
                     lowerTitle.includes(term) || lowerContent.includes(term)

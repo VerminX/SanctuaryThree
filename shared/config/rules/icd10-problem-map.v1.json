@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "mappings": {
+    "ulcer of left foot due to type 2 diabetes": "E11.621",
+    "ulcer of right foot due to type 2 diabetes": "E11.621",
+    "ulcer of foot due to type 2 diabetes": "E11.621",
+    "diabetic foot ulcer": "E11.621",
+    "diabetic ulcer": "E11.621",
+    "dfu": "E11.621",
+    "routine diabetic foot care": "E11.621",
+    "venous stasis ulcer": "I87.33",
+    "venous ulcer": "I87.33",
+    "stasis ulcer": "I87.33",
+    "venous insufficiency ulcer": "I87.33",
+    "vlu": "I87.33",
+    "pressure ulcer": "L89.9",
+    "pressure sore": "L89.9",
+    "decubitus ulcer": "L89.9",
+    "bedsore": "L89.9",
+    "chronic ulcer of lower limb": "L97.909",
+    "non-healing wound": "L97.909",
+    "chronic wound": "L97.909",
+    "wound care": "L97.909",
+    "wound healing": "L97.909",
+    "open wound": "L97.909"
+  }
+}

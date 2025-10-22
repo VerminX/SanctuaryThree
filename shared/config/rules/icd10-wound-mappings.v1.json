@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "mappings": {
+    "E10.6": "diabetic_foot_ulcer",
+    "E11.6": "diabetic_foot_ulcer",
+    "E13.6": "diabetic_foot_ulcer",
+    "L89": "pressure_ulcer",
+    "L97": "leg_ulcer",
+    "I83.0": "venous_leg_ulcer",
+    "I83.2": "venous_leg_ulcer",
+    "I87.0": "venous_leg_ulcer",
+    "I70.2": "arterial_ulcer"
+  }
+}

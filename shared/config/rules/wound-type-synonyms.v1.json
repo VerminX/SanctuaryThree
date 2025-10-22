@@ -1,0 +1,71 @@
+{
+  "version": 1,
+  "synonyms": {
+    "diabetic_foot_ulcer": [
+      "diabetic foot ulcer",
+      "dfu",
+      "diabetic wound",
+      "diabetic foot",
+      "neuropathic ulcer",
+      "wagner",
+      "diabetic ulceration",
+      "diabetic lower extremity",
+      "diabetic limb",
+      "diabetes-related ulcer",
+      "diabetic foot wound"
+    ],
+    "venous_leg_ulcer": [
+      "venous leg ulcer",
+      "vlu",
+      "venous stasis ulcer",
+      "venous insufficiency",
+      "venous wound",
+      "stasis ulcer",
+      "venous ulceration",
+      "chronic venous ulcer",
+      "varicose ulcer",
+      "venous hypertension ulcer"
+    ],
+    "pressure_ulcer": [
+      "pressure ulcer",
+      "pu",
+      "pressure injury",
+      "decubitus ulcer",
+      "bedsore",
+      "pressure sore",
+      "stage 3 pressure",
+      "stage 4 pressure",
+      "unstageable pressure"
+    ],
+    "arterial_ulcer": [
+      "arterial ulcer",
+      "ischemic ulcer",
+      "arterial insufficiency ulcer",
+      "peripheral arterial disease ulcer",
+      "pad ulcer",
+      "arterial wound"
+    ],
+    "chronic_ulcer": [
+      "chronic ulcer",
+      "non-healing wound",
+      "chronic wound",
+      "complex wound",
+      "recalcitrant wound",
+      "refractory wound"
+    ],
+    "leg_ulcer": [
+      "leg ulcer",
+      "lower extremity ulcer",
+      "lower limb ulcer",
+      "extremity wound"
+    ],
+    "full-thickness ulceration": [
+      "full thickness wound",
+      "full thickness ulcer",
+      "deep wound",
+      "stage 3",
+      "stage 4",
+      "complex ulceration"
+    ]
+  }
+}

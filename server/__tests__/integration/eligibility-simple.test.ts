@@ -206,13 +206,45 @@ describe('Single LCD Selection System - Integration Tests', () => {
       if (result.policy && result.audit.scored.length > 0) {
         const scoredPolicies = result.audit.scored.sort((a, b) => b.score - a.score);
         const topPolicy = scoredPolicies[0];
-        
+
         // Verify scoring components
         expect(topPolicy.components).toHaveProperty('status');
         expect(topPolicy.components).toHaveProperty('recency');
         expect(topPolicy.components).toHaveProperty('applicability');
         expect(topPolicy.components.applicability).toBeGreaterThan(0);
       }
+    });
+
+    it('returns identical scoring for canonical wound types and synonyms', async () => {
+      const canonical = await selectBestPolicy({
+        macRegion: 'Palmetto GBA',
+        woundType: 'diabetic_foot_ulcer',
+        woundLocation: 'left foot',
+        icd10Codes: ['E11.621'],
+        patientCharacteristics: { isDiabetic: true }
+      });
+
+      const synonym = await selectBestPolicy({
+        macRegion: 'Palmetto GBA',
+        woundType: 'dfu',
+        woundLocation: 'left foot',
+        icd10Codes: ['E11.621'],
+        patientCharacteristics: { isDiabetic: true }
+      });
+
+      expect(canonical.policy).toBeTruthy();
+      expect(synonym.policy).toBeTruthy();
+
+      if (canonical.policy && synonym.policy) {
+        expect(synonym.policy.lcdId).toBe(canonical.policy.lcdId);
+      }
+
+      expect(synonym.audit.scored.length).toBe(canonical.audit.scored.length);
+      synonym.audit.scored.forEach((score, index) => {
+        const canonicalScore = canonical.audit.scored[index];
+        expect(score.lcdId).toBe(canonicalScore.lcdId);
+        expect(score.score).toBeCloseTo(canonicalScore.score, 6);
+      });
     });
   });
 
