@@ -24,6 +24,10 @@ describe('eligibility telemetry instrumentation', () => {
     expect(
       Object.values(metrics.unmatchedDiagnoses.descriptionLengthHistogram).reduce((sum, value) => sum + value, 0)
     ).toBe(1);
+
+    const summary = healthMonitor.getEligibilityTelemetrySummary();
+    expect(summary.unmatchedDiagnoses.total).toBe(1);
+    expect(summary.unmatchedDiagnoses.lastHour).toBe(1);
   });
 
   test('records metrics for invalid secondary diagnosis format', () => {
@@ -35,5 +39,9 @@ describe('eligibility telemetry instrumentation', () => {
     expect(metrics.unmatchedDiagnoses.total).toBe(1);
     expect(metrics.unmatchedDiagnoses.bySource.secondary).toBe(1);
     expect(metrics.unmatchedDiagnoses.byFormat.invalid_format).toBe(1);
+
+    const summary = healthMonitor.getEligibilityTelemetrySummary();
+    expect(summary.unmatchedDiagnoses.bySource.secondary).toBe(1);
+    expect(summary.unmatchedDiagnoses.lastHour).toBe(1);
   });
 });
